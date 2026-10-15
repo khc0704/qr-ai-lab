@@ -1,6 +1,37 @@
-# 本地開發與單機部署的基礎服務。前端 / 後端 / scheduler 的 service 會在 backend 建立後加入（見 docs/ARCHITECTURE.md §13）。
-# 使用：cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml up -d
+# 本地開發與單機部署。基礎服務（mariadb、redis）永遠啟動；backend / scheduler 在 profile `app`。
+#   基礎服務：cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
+#   全部：    docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d
+# trainer image 另外建置：docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
+# frontend / nginx：前端接上 backend 後加入（docs/ARCHITECTURE.md §13）。
 name: qr-ai-lab
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-prod}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  DATABASE_URL: mariadb+asyncmy://${MARIADB_USER:-qr}:${MARIADB_PASSWORD:?set in infra/.env}@mariadb:3306/${MARIADB_DATABASE:-qr_ai_lab}
+  REDIS_URL: redis://redis:6379/0
+  DATA_ROOT: /data
+  DATA_ROOT_HOST: ${DATA_ROOT_HOST:?host path of the data dir, set in infra/.env}
+  MODEL_ZOO_ROOT: /data/model_zoo
+  AUTH_MODE: ${AUTH_MODE:-local}
+  AUTH_SECRET: ${AUTH_SECRET:?set in infra/.env}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin1234}
+  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-user1234}
+  KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-}
+  KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-}
+  DATASET_SECRET_KEY: ${DATASET_SECRET_KEY:-}
+  JOB_TOKEN_SECRET: ${JOB_TOKEN_SECRET:?set in infra/.env}
+  JOB_RUNNER: docker
+  TRAINER_IMAGE: ${TRAINER_IMAGE:-qr-ai-lab/trainer:dev}
+  JOB_NETWORK: qr-ai-lab_jobs
+  INTERNAL_BACKEND_URL: http://backend:8000
+  SCHEDULER_INTERVAL_S: ${SCHEDULER_INTERVAL_S:-3}
+  UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-2048}
+  UPLOAD_TTL_MINUTES: ${UPLOAD_TTL_MINUTES:-60}
+  LOG_MAX_MB: ${LOG_MAX_MB:-50}
+  DEFAULT_JOB_TIMEOUT_MINUTES: ${DEFAULT_JOB_TIMEOUT_MINUTES:-240}
 
 services:
   mariadb:
@@ -39,7 +70,40 @@ services:
       retries: 10
     networks: [internal]
 
-  # backend / scheduler / frontend / nginx：backend 建立後加入。
+  backend:
+    profiles: [app]
+    build:
+      context: ../backend
+      dockerfile: ../infra/backend/Dockerfile
+    image: qr-ai-lab/backend:dev
+    restart: unless-stopped
+    environment: *backend-env
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ${DATA_ROOT_HOST:?}:/data
+    depends_on:
+      mariadb: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [internal, jobs]   # jobs: trainer containers reach /api/v1/internal here
+
+  scheduler:
+    profiles: [app]
+    image: qr-ai-lab/backend:dev
+    restart: unless-stopped
+    command: ["python", "-m", "app.scheduler"]
+    environment: *backend-env
+    volumes:
+      - ${DATA_ROOT_HOST:?}:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # only the scheduler talks to docker
+    depends_on:
+      backend: { condition: service_healthy }
+    networks: [internal]
 
 volumes:
   mariadb-data:
@@ -47,3 +111,4 @@ volumes:
 
 networks:
   internal:
+  jobs:          # trainer containers are attached here by the scheduler (JOB_NETWORK=qr-ai-lab_jobs)
