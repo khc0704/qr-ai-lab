@@ -97,6 +97,10 @@ def run(backend: Backend | None = None) -> int:
         backend.status(status="running", progress=0, stage="starting")
         if spec["kind"] == "train":
             result, output_path = _train(spec, env, ctx, backend)
+        elif spec["kind"] == "preprocess":
+            result, output_path = _preprocess(spec, env, ctx, backend)
+        elif spec["kind"] == "analysis":
+            result, output_path = _analysis(spec, env, ctx, backend)
         else:
             result, output_path = _infer(spec, env, ctx, backend)
         backend.result(result=result, output_path=output_path)
@@ -299,6 +303,122 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
         "artifacts": registered,
     }
     return result, "output/predictions.csv"
+
+
+# --- tool jobs: whole-file preprocessing and data exploration ---------------------------------------
+
+TOOL_PHASES = {"preparing": (0, 10), "processing": (10, 85), "exporting": (85, 98)}
+
+
+def _tool_input(spec: dict[str, Any], env: Env) -> Path:
+    name = spec["input"].get("file")
+    path = env.input_dir / name if name else None
+    if path is None or not path.exists():
+        candidates = [p for p in env.input_dir.iterdir() if p.is_file()] if env.input_dir.exists() else []
+        if not candidates:
+            raise RuntimeError("找不到輸入檔")
+        path = candidates[0]
+    return path
+
+
+def _preprocess(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tuple[dict[str, Any], str | None]:
+    import shutil
+    import zipfile
+
+    from qrlab_preprocess.process import run_full
+
+    reporter = Reporter(backend, TOOL_PHASES)
+    reporter.set_stage("preparing")
+    cfg = spec.get("config") or {}
+    path = _tool_input(spec, env)
+    steps = list(cfg.get("steps") or spec["input"].get("spec", {}).get("preprocess") or [])
+    fmt = spec["input"].get("format") or path.suffix.lstrip(".")
+    data_type = cfg.get("data_type") or spec["data_type"]
+    in_spec = {k: v for k, v in (spec["input"].get("spec") or {}).items() if k != "preprocess"}
+    info(f"preprocess: {data_type} {path.name} ({path.stat().st_size} bytes), {len(steps)} step(s)")
+    work = ctx.work_dir / "preprocessed"
+    reporter.set_stage("processing")
+    summary = run_full(data_type, path, fmt, steps, work, spec=in_spec, task_type=cfg.get("task_type"))
+    ctx.check()
+    reporter.set_stage("exporting")
+    out_dir = env.output_dir / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / "preprocessed.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(work.rglob("*")):
+            if p.is_file():
+                z.write(p, p.relative_to(work).as_posix())
+    shutil.rmtree(work, ignore_errors=True)
+    (out_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    for line in summary.get("steps") or []:
+        info(f"step: {line}")
+    info(
+        f"result: output/preprocessed.zip ({zip_path.stat().st_size} bytes) "
+        f"with {', '.join(summary.get('files') or [])}"
+    )
+    result = {**summary, "zip_size_bytes": zip_path.stat().st_size}
+    return result, "output/preprocessed.zip"
+
+
+def _analysis(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tuple[dict[str, Any], str | None]:
+    from trainer.analysis import image as image_analysis
+    from trainer.analysis import tabular as tabular_analysis
+
+    reporter = Reporter(backend, TOOL_PHASES)
+    reporter.set_stage("preparing")
+    cfg = spec.get("config") or {}
+    kind = cfg.get("analysis")
+    path = _tool_input(spec, env)
+    in_spec = spec["input"].get("spec") or {}
+    out_dir = env.output_dir / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    reporter.set_stage("processing")
+    if kind == "tabular_profile":
+        from qrlab_preprocess.process import _read_frame_all
+
+        df = _read_frame_all(path, spec["input"].get("format") or "csv")
+        target = cfg.get("target") or in_spec.get("target") or None
+        ids = [
+            c for c in (cfg.get("id_column") or in_spec.get("id_column"), cfg.get("id_columns")) if isinstance(c, str)
+        ]
+        info(f"tabular profile: {len(df)} rows × {df.shape[1]} columns, target={target or '-'}")
+        report = tabular_analysis.profile(
+            df, target=target, task=cfg.get("task_type"), id_columns=ids, n_jobs=ctx.cpu, progress=reporter.within
+        )
+        compact = tabular_analysis.compact(report)
+        framework = "scikit-learn"
+    elif kind == "image_quality":
+        from trainer.data.image import materialize
+
+        root = materialize(env.input_dir, ctx.work_dir)
+        info(f"image quality: scanning {root}")
+        report = image_analysis.quality_report(
+            root,
+            embedding=str(cfg.get("embedding") or "metrics"),
+            backbone=str(cfg.get("backbone") or "dinov2-small"),
+            ctx=ctx,
+            progress=reporter.within,
+        )
+        compact = report
+        framework = "numpy"
+    else:
+        raise ValueError(f"未知的分析 {kind}")
+    ctx.check()
+    reporter.set_stage("exporting")
+    (out_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    for r in report.get("recommendations") or []:
+        info(f"{r.get('level', 'info')}: {r.get('text')}")
+    registered = _register(
+        backend,
+        [ArtifactOut(name=f"analysis-{spec['job_id']}", kind="report", path="output/report.json", framework=framework)],
+        family=f"analysis.{kind}",
+    )
+    result = {"analysis": kind, **compact, "artifacts": registered}
+    return result, "output/report.json"
 
 
 def _write_rows(rows: list[dict[str, Any]], path: Path) -> None:
