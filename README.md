@@ -4,7 +4,7 @@
 
 本服務不保存使用者的資料集；只保存訓練產物、log 與指標。管理員可設定所有專案合計的總資源池、重排佇列、強制中斷 Job；每個 Job 都有 log。
 
-前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy（排程器把任務當主機子程序跑在 trainer venv，cgroup / affinity 限制、依剩餘顯存共用 GPU）；trainer 套件涵蓋 sklearn / XGBoost / YOLO / DINOv2 / 光譜與序列自編碼器 / BERT，預訓練權重只從離線模型庫載入；MariaDB、Redis（docker compose 只跑這兩個）；本機磁碟 `DATA_ROOT`；認證 dev 用本地帳號、prod 接公司 Keycloak（Auth.js），系統角色 superadmin / admin / user 可在 UI 調整；另有不需專案的資料前處理服務；單台 Ubuntu GPU 伺服器以 systemd 部署。
+前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy（排程器把任務當主機子程序跑在 trainer venv，cgroup / affinity 限制、依剩餘顯存共用 GPU）；trainer 套件涵蓋 sklearn / XGBoost / YOLO / DINOv2 / 光譜與序列自編碼器 / BERT，預訓練權重只從離線模型庫載入；MariaDB、Redis（docker compose 只跑這兩個）；本機磁碟 `DATA_ROOT`；認證 dev 用本地帳號、prod 接公司 Keycloak（Auth.js），系統角色 superadmin / admin / user 可在 UI 調整；另有不需專案的資料前處理與資料分析服務（以個人工作區的任務執行）；單台 Ubuntu GPU 伺服器以 systemd 部署。
 
 ## 文件
 

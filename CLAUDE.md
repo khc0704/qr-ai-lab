@@ -85,15 +85,17 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
 - ProjectRequest（專案申請）`status`：`submitted | in_review | approved | rejected | withdrawn`；核准才建立 project
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
-- Project `status`：`active | archived`
-- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference`；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
+- Project `status`：`active | archived`；`kind`：`standard | personal`（personal = 每人一個的個人工作區 `ws-<username>`，放工具任務，配額來自管理員「工具預設」，不列在一般專案列表）
+- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是個人工作區的工具任務）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
 - Job `mode`（train）：`manual | auto`（auto = AutoML，候選模型 + Optuna 搜尋）
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
 - Artifact `kind`：`model | weights | preprocessor | report | metrics`；存 `DATA_ROOT/projects/{slug}/jobs/{job_id}/`
 - 角色：系統角色 `superadmin | admin | user`（`users.role`；Keycloak 登入時依 `KEYCLOAK_ROLE_MAP` 覆蓋，否則以 UI 設定為準）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`
 - Job 的 `requested_gpu_memory_mb`：有值 = 可與其他任務依剩餘顯存共用一張 GPU（資源池 `gpu_share`，trainer 以 `set_per_process_memory_fraction` 自限）；`null` = 獨占整張
-- 前處理工具（不需專案）：`POST /tools/uploads` → `/preview` → `/process` → `/download`，檔案只在 `DATA_ROOT/tools/<id>/`，無資料庫列，下載即刪
+- 工具（不需專案）：`POST /tools/uploads` → `/preview`（即時抽樣）→ `/process`（preprocess 任務）或 `/analyze`（analysis 任務：`tabular_profile | image_quality`，實作在 `trainer/trainer/analysis/`）；上傳只在 `DATA_ROOT/tools/<id>/`（無資料庫列），建任務時移進任務 input；前處理結果 `GET /jobs/{id}/download` 交付一次即刪
+- GPU 共用是**實測模式**：`services/gpu.py` 用 pynvml 實際用量 + 暖機期（`GPU_WARMUP_S`）的「申請 − 實測」；不要改回以申請量保留
+- 所有環境變數檔與變數清單：`docs/ENVIRONMENT.md`
 
 ## 全域工作規則
 
@@ -122,5 +124,6 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫；也是給使用者看的 SOP 底稿。
 - `docs/USE_CASES.md`：半導體 / 電子製造的機台資料 → 模型 → 推論目的（OCD 光譜鑑別器、TEM few-shot bin code、PatchCore、FDC、WAT…）。
 - `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/e2e/`：實際串接 backend 的端到端截圖（`captions.json` 有每張說明）；`docs/manuals/`：使用者手冊（DOCX / PDF，由 `scripts/build_manual.js` 產生）與串接測試報告 PDF。
+- `docs/ENVIRONMENT.md`：五個環境變數檔（backend/.env、frontend/.env.local、infra/.env、/etc/qr-ai-lab/qrlab.env、/etc/qr-ai-lab/frontend.env）與每個變數的意義。
 - `docs/ROADMAP.md`：已知缺口與改善方向（審視清單）。
 - `.claude/rules/frontend.md`、`backend.md`、`database.md`：動到對應路徑時自動載入的細部慣例。

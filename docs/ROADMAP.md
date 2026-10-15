@@ -64,7 +64,8 @@
 - GPU：任務可填「每張 GPU 需要的顯存」，排程器依 pynvml 剩餘顯存 best-fit 讓多個任務共用一張（資源池 `gpu_share` 開關；trainer `set_per_process_memory_fraction`）；superadmin 可在 Dashboard 強制釋放顯存（中斷本系統任務 / kill 所有程序 / `GPU_RESET_COMMAND`）。
 - 使用率歷史：`resource_samples` + `GET /admin/usage` + `/admin/usage` 頁（1h–30d、分母切換：專案配額 / 資源池 / 系統總量、各專案時間加權占用與實測 CPU / 記憶體）。
 - 資料前處理服務（`/tools/preprocess`）：不需專案，上傳 → 預覽 → 整檔執行 → 下載 zip（processed.* + pipeline.json + summary.json），檔案只在 `DATA_ROOT/tools/<id>/`，下載 / 逾時即刪。
-- 待辦：Keycloak 群組 → 專案成員的自動對應；GPU 共用時的顯存實測（目前以申請量保留）；使用率歷史匯出 CSV；前處理服務改為背景任務以支援超大檔。
+- 第二輪：GPU 改為**實測模式**（驅動程式實際用量 + 暖機期的「尚未分配」量；每個任務的實測顯存顯示在 GPU 卡片與使用率歷史）；前處理改為**任務**（個人工作區、佇列、配額、log、下載一次即刪、逾期清理），預覽維持即時；新增**資料分析**任務（表格探勘、影像品質飄移 / embedding）；`docs/ENVIRONMENT.md` 列出所有環境變數檔。
+- 待辦：Keycloak 群組 → 專案成員的自動對應；使用率歷史匯出 CSV；分析報告 PDF 匯出；從專案內直接對資料來源啟動分析。
 
 ## F. 這一輪（任務不進容器 + 離線部署）新增的能力
 

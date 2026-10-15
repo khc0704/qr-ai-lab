@@ -151,7 +151,9 @@ sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo 
 ### 4.7 使用率歷史與資料前處理服務
 
 - **管理 → 使用率歷史**（`/admin/usage`）：排程器每 30 秒（`USAGE_SAMPLE_INTERVAL_S`）寫一筆 `resource_samples`；頁面可切 1h / 6h / 24h / 7d / 30d，分母可切「專案配額 / 資源池 / 系統總量」；下方表格是各專案在該區間的時間加權配置（相對分母的百分比）與實測 CPU / 記憶體。保留 `USAGE_RETENTION_DAYS`（預設 90 天）。
-- **資料前處理**（`/tools/preprocess`，所有登入者）：不需要專案；選資料類型 → 上傳 → 挑步驟 → 抽樣預覽 → 整檔執行 → 下載 zip（`processed.*`、`pipeline.json`、`summary.json`）。檔案只在 `DATA_ROOT/tools/<id>/`，沒有資料庫列，下載 / 刪除 / 逾時（`UPLOAD_TTL_MINUTES`）即刪；整檔執行上限 `TOOL_PROCESS_TIMEOUT_S`（預設 600 秒）。
+- **資料前處理**（`/tools/preprocess`，所有登入者）：不需要專案；選資料類型 → 上傳 → 挑步驟 → 抽樣預覽（即時，只取樣）→ 「建立前處理任務」。整檔處理是個人工作區裡的任務（全域佇列、CPU / 記憶體配額、即時 log），完成後在任務頁下載 zip（`processed.*`、`pipeline.json`、`summary.json`）；下載一次就刪，沒下載的在「工具預設」的保留時間（預設 24 小時）後刪。
+- **資料分析**（`/tools/analyze`）：表格資料探勘（相關性、VIF 共線性、對目標的解釋力、建議）與影像品質分析（zip 子資料夾 = 機台 / 條件；最會飄的 IQA 指標、embedding 相似度與散佈、離群影像）。同樣是任務，報告在任務頁。
+- 個人工作區：第一次用工具時自動建立（`ws-<帳號>`），配額由 Dashboard 的「工具預設」決定，管理員可在專案配額頁個別調整。
 
 ### 4.8 使用手冊（DOCX / PDF）
 
@@ -205,6 +207,8 @@ cd frontend && npm run lint && npm run typecheck && python3 ../scripts/design_li
 cd backend && uv run ruff check . && uv run pytest
 cd trainer && uv run ruff check . && uv run pytest
 ```
+
+環境變數檔案的完整清單與每個變數的意義見 `docs/ENVIRONMENT.md`。
 
 ## 7. WSL 與 Ubuntu：完整的 dev / prod 啟動
 

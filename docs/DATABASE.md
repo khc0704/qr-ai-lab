@@ -117,6 +117,7 @@ system_settings（key / value，資源池等）
 | data_type | VARCHAR(32) NOT NULL | |
 | task_type | VARCHAR(32) NOT NULL | |
 | status | VARCHAR(32) NOT NULL DEFAULT 'active' | `active \| archived` |
+| kind | VARCHAR(16) NOT NULL DEFAULT 'standard' | `standard \| personal`；personal = 使用者的個人工作區（工具任務），不列在一般專案列表，配額來自「工具預設」 |
 | owner_id | BIGINT UNSIGNED NOT NULL FK users | |
 | request_id | BIGINT UNSIGNED NULL FK project_requests | 來源申請；`uq_projects_request_id` |
 | gpu_limit | SMALLINT UNSIGNED NOT NULL DEFAULT 0 | 本專案同時可用 GPU 數 |
@@ -193,7 +194,7 @@ system_settings（key / value，資源池等）
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
 | project_id | BIGINT UNSIGNED NOT NULL FK projects | |
-| kind | VARCHAR(32) NOT NULL | `train \| inference` |
+| kind | VARCHAR(32) NOT NULL | `train \| inference \| preprocess \| analysis`（後兩者 = 個人工作區的工具任務，`input.tool = true`） |
 | name | VARCHAR(120) NOT NULL | |
 | status | VARCHAR(32) NOT NULL DEFAULT 'queued' | `queued \| scheduled \| running \| succeeded \| failed \| cancelled` |
 | queue_rank | BIGINT NOT NULL | 佇列順序，小的先跑；新 Job = max + 1000；admin 重排會重新編號 |
@@ -285,7 +286,7 @@ system_settings（key / value，資源池等）
 
 ## 遷移注意事項
 
-`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
+`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
 
 ## 初始化
 

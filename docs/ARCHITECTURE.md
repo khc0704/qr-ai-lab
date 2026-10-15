@@ -188,8 +188,9 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 隔離等級：任務與排程器是同一個 OS 使用者（`qrlab`），彼此可讀對方的產物目錄；使用者只提交資料與設定、不提交程式碼，因此先以 cgroup 限資源為主。要升級隔離時改用 system 層的 `systemd-run`（`DynamicUser=`、`ProtectSystem=strict`、`ReadWritePaths=`），介面不變。
 - 前處理：`input.spec.preprocess` 的步驟由共用套件 `libs/preprocess`（`qrlab_preprocess`）定義；backend 用它做上傳抽樣預覽與驗證，trainer 在訓練時 fit 並把狀態存成 `model/preprocess.json` + 產物 metadata，推論時 replay。
 
-### 6.5 GPU 配置（依剩餘顯存共用）
-- 任務可填 `requested_gpu_memory_mb`（精靈「每張 GPU 需要的顯存」）。排程器每個 tick 以 pynvml 讀每張資源池 GPU 的已用顯存，加上本系統任務的保留量（Σ `requested_gpu_memory_mb`），`total − max(已用, 保留) − GPU_RESERVE_MB ≥ 需要量` 的卡才候選，best-fit（剩最少的先用）讓任務集中；沒填的任務要整張空卡（沒有任何任務、已用顯存 < `GPU_BUSY_THRESHOLD`）。資源池的 `gpu_share=false` 關閉共用，一律獨占。沒有 NVIDIA driver 時退化成按張數（共用任務平均分散）。
+### 6.5 GPU 配置（依實測剩餘顯存共用）
+- 任務可填 `requested_gpu_memory_mb`（精靈「每張 GPU 需要的顯存」，預設 8192）。排程器每個 tick 以 pynvml 讀每張資源池 GPU **實際已用的顯存**（所有程序），再用驅動程式的程序清單把顯存對應到本系統每個任務的程序樹（`services/gpu.measured_by_job`）。可用量 = `total − 實測已用 − 尚未分配 − GPU_RESERVE_MB`；「尚未分配」只計入啟動不到 `GPU_WARMUP_S`（預設 120 秒）且實測還沒達到申請量的任務（申請量 − 實測），避免兩個連續啟動的任務都看到「還很空」而擠在同一張卡；暖機期過後完全以實測為準。符合的卡用 best-fit（剩最少的先用）讓任務集中；沒填的任務要整張空卡（沒有任何任務、已用顯存 < `GPU_BUSY_THRESHOLD`）。資源池的 `gpu_share=false` 關閉共用，一律獨占。沒有 NVIDIA driver 時退化成按張數（共用任務平均分散）。
+- Dashboard 的 GPU 卡片顯示驅動程式實測、每個任務「實測 / 申請」；使用率歷史每筆取樣記下各專案實測顯存（`gpu_mem_actual_mb`）。
 - 子程序拿到 `JOB_GPU_MEMORY_MB`，trainer `limits.py` 以 `torch.cuda.set_per_process_memory_fraction` 自限；Dashboard 的 GPU 卡片顯示驅動程式讀數、保留量、放在上面的任務與程序數。
 - `POST /admin/gpus/{index}/reset`（superadmin）：`jobs` 強制中斷本系統放在那張卡的任務；`all` 再 SIGKILL 驅動程式看到的所有程序；`device` 再執行 `GPU_RESET_COMMAND`（如 `sudo -n nvidia-smi --gpu-reset -i {index}`）。都寫稽核紀錄。
 
@@ -197,6 +198,11 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 外層：systemd scope（`AllowedCPUs` / `CPUQuota` / `MemoryMax`）或 `sched_setaffinity` + 記憶體 watchdog。
 - 子程序環境：`OMP / MKL / OPENBLAS / BLIS / VECLIB / NUMEXPR / TBB / NUMBA / RAYON / POLARS / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS` 全部 = ceil(cpu)，`JOB_CPU_LIMIT`、`JOB_CPU_CORES`、`JOB_MEMORY_MB`、`JOB_GPU_MEMORY_MB`。
 - 程序內：`trainer/limits.py` 在讀完 spec 後 `threadpoolctl.threadpool_limits(cpu)`（已載入的 BLAS / OpenMP）、`torch.set_num_threads(cpu)`、`set_num_interop_threads(1)`，並把實際 affinity、各執行緒池大小、torch threads 印進 job log（`limits: cpu=1 affinity=1 cores [3] threadpools[openmp/openmp=1, blas/openblas=1] torch_threads=1`）。sklearn 的 `n_jobs` 一律取 `ctx.cpu`。
+
+### 6.6b 工具任務（kind = preprocess | analysis）
+- 「資料前處理」與「資料分析」服務不需要專案，但重活一律是任務：每位使用者第一次使用時自動建立一個 **個人工作區**（`projects.kind = personal`，slug `ws-<username>`，配額來自管理員的「工具預設」，之後可在專案配額頁個別調整；不出現在一般專案列表）。工具上傳（`DATA_ROOT/tools/<id>/`，無資料庫列）在建立任務時移進任務的 input（任務結束即刪）。
+- `preprocess`：trainer 以 `qrlab_preprocess.process.run_full` 處理整個檔案，輸出 `output/preprocessed.zip`（processed.* + pipeline.json + summary.json）；`GET /jobs/{id}/download` 交付一次後刪除檔案並在 `result.downloaded_at` 記錄，沒下載的在「工具預設」的 `result_ttl_hours` 後由排程器清理。抽樣預覽（`POST /tools/uploads/{id}/preview`）仍是即時的，只讀取有限樣本。
+- `analysis`：`config.analysis = tabular_profile | image_quality`（`trainer/analysis/`）。表格：欄位概況、Pearson 相關矩陣與高相關對、VIF、對目標的互資訊 / 相關性 / 隨機森林置換重要度與保留集分數、疑似洩漏、建議（補值、共線、離群、模型家族）。影像品質：以 zip 子資料夾為群組，每張影像 17 個 IQA 指標、各群組中位數 / IQR、每個指標的飄移比（群組中位數差 ÷ 群內 IQR）與 Kruskal–Wallis p 值、embedding（IQA 指標向量，或模型庫有 dinov2 且工作區有 GPU 時用 DINOv2）的 PCA 散佈、群組 centroid cosine 相似度、silhouette、偏離群組的影像、建議。報告寫到 `output/report.json` 並登記為 report 產物；`job.result` 放精簡版供任務頁繪圖。
 
 ### 6.7 使用率歷史
 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`：節點（CPU%、記憶體、每張 GPU 的使用率與顯存）、資源池（已配置的 GPU / CPU / 記憶體、執行中任務數、池總量）、各專案（配置量，以及用 psutil 量到任務程序樹的實際 CPU 核數與 PSS 記憶體）。`GET /admin/usage?range=` 分桶平均並算各專案的時間加權占用；保留 `USAGE_RETENTION_DAYS`。
@@ -299,7 +305,7 @@ GET    /healthz  GET /readyz
 - `DELETE /projects/{slug}`（superadmin）、`DELETE /issues/{id}`（admin 以上）、`POST /admin/jobs/{id}/restart`（admin 以上，回 202 新任務）
 - `PATCH /users/{id}`（superadmin；role `superadmin|admin|user`、`is_active`）
 - `POST /admin/gpus/{index}/reset`（superadmin）、`GET /admin/usage?range=1h|6h|24h|7d|30d`（admin 以上）
-- `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`、`POST /tools/uploads/{id}/process`、`GET /tools/uploads/{id}/download`、`DELETE /tools/uploads/{id}`（所有登入者；資料前處理服務）
+- `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`（即時）、`POST /tools/uploads/{id}/process`（→ 202 preprocess 任務）、`POST /tools/uploads/{id}/analyze`（→ 202 analysis 任務）、`DELETE /tools/uploads/{id}`、`GET /tools/workspace`、`GET /tools/jobs`（所有登入者）；`GET /projects?include_personal=true`；`GET/PUT /admin/settings/tool-defaults`（superadmin）；`GET /jobs/{id}/download` 對前處理結果交付一次即刪
 - 資源池多了 `gpu_share`；Job 多了 `requested_gpu_memory_mb`；`/admin/node` 的 GPU 多了 `job_ids`、`reserved_mb`、`processes`
 
 ## 13. 部署（公司 Ubuntu GPU 伺服器，不連外網）
