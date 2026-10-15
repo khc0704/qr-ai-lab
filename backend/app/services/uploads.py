@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import shutil
@@ -18,6 +19,7 @@ from qrlab_preprocess.preview import run_preview
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.errors import bad_request, conflict, not_found
 from app.db.base import utcnow
 from app.models import Job, Project, Upload, User
@@ -110,6 +112,7 @@ async def create_from_upload(
     target = target_dir / f"data{ext or ''}"
     limit = defaults.upload_max_mb * 1024 * 1024
     size = 0
+    digest = hashlib.sha256()  # fingerprint: the file is deleted after the job, the hash stays in job.input
     async with aiofiles.open(target, "wb") as out:
         while chunk := await file.read(1 << 20):
             size += len(chunk)
@@ -118,10 +121,11 @@ async def create_from_upload(
                 shutil.rmtree(target_dir, ignore_errors=True)
                 await session.rollback()
                 raise bad_request("UPLOAD_TOO_LARGE", f"超過上限 {defaults.upload_max_mb} MB")
+            digest.update(chunk)
             await out.write(chunk)
     up.path = storage.rel(target)
     up.size_bytes = size
-    up.detected_spec = detect_spec(target, fmt)
+    up.detected_spec = {**detect_spec(target, fmt), "sha256": digest.hexdigest()}
     await session.commit()
     return up
 
@@ -188,17 +192,23 @@ async def preview(
     if up.status != "pending":
         raise conflict("UPLOAD_NOT_AVAILABLE", "此上傳已綁定任務或已過期")
     path = get_storage().abs(up.path)
+    timeout = get_settings().preview_timeout_s
     try:
-        return await asyncio.to_thread(
-            run_preview,
-            project.data_type,
-            path,
-            up.format,
-            steps,
-            sample=sample,
-            spec={**(up.detected_spec or {}), **(spec or {})},
-            task_type=task_type or project.task_type,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                run_preview,
+                project.data_type,
+                path,
+                up.format,
+                steps,
+                sample=sample,
+                spec={**(up.detected_spec or {}), **(spec or {})},
+                task_type=task_type or project.task_type,
+            ),
+            timeout=timeout,
         )
+    except TimeoutError as e:
+        raise bad_request("PREVIEW_TIMEOUT", f"預覽超過 {timeout:g} 秒，請減少取樣數或步驟") from e
     except ValueError as e:
         raise bad_request("PREPROCESS_INVALID", str(e)) from e
     except Exception as e:  # unreadable sample, bad image …

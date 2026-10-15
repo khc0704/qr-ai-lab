@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     scheduler_interval_s: float = 3.0
     job_network: str = "qr-ai-lab_jobs"
     upload_max_mb: int = 2048
+    preview_timeout_s: float = 30.0  # preprocessing preview runs in a worker thread of the API process
     upload_ttl_minutes: int = 60
     log_max_mb: int = 50
     default_job_timeout_minutes: int = 240

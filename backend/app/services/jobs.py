@@ -34,6 +34,28 @@ async def get(session: AsyncSession, job_id: int) -> Job:
     return job
 
 
+async def list_recent(
+    session: AsyncSession,
+    *,
+    project_ids: list[int] | None,
+    statuses: list[str] | None = None,
+    kind: str | None = None,
+    limit: int = 20,
+) -> list[Job]:
+    """Newest jobs across projects (project_ids=None → all projects, admin only)."""
+    stmt = select(Job)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        stmt = stmt.where(Job.project_id.in_(project_ids))
+    if statuses:
+        stmt = stmt.where(Job.status.in_(statuses))
+    if kind:
+        stmt = stmt.where(Job.kind == kind)
+    rows = (await session.execute(stmt.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit))).scalars().all()
+    return list(rows)
+
+
 async def list_jobs(
     session: AsyncSession,
     *,
@@ -234,13 +256,21 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
     if body.input.kind == "upload":
         up = await uploads_svc.get(session, project, body.input.upload_id)  # type: ignore[arg-type]
         dst = uploads_svc.claim(up, job)
+        detected = dict(up.detected_spec or {})
+        sha256 = detected.pop("sha256", None)
         input_doc = {
             **input_doc,
             "format": body.input.format or up.format,
             "original_filename": up.original_filename,
             "size_bytes": up.size_bytes,
             "file": dst.name,
-            "spec": {**(up.detected_spec or {}), **body.input.spec},
+            "spec": {**detected, **body.input.spec},
+            # reproducibility: the upload is deleted when the job ends, the fingerprint is kept
+            "fingerprint": {
+                "sha256": sha256,
+                "size_bytes": up.size_bytes,
+                **{k: detected[k] for k in ("row_count", "image_count") if k in detected},
+            },
         }
         job.input = input_doc
     storage.ensure(storage.job_dir(project.slug, job.id) / "logs")

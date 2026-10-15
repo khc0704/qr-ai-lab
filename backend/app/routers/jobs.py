@@ -16,6 +16,7 @@ from app.schemas.artifact import ArtifactRead
 from app.schemas.job import JobRead, LogLinesRead
 from app.services import artifacts as artifacts_svc
 from app.services import jobs as jobs_svc
+from app.services import projects as projects_svc
 from app.storage.local import get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -30,6 +31,22 @@ async def _job_access(
 
 
 JobView = Annotated[tuple[Job, ProjectAccess], Depends(_job_access)]
+
+
+@router.get("", response_model=list[JobRead], summary="我有權限的專案的最近任務（首頁 / 專案列表用）")
+async def recent_jobs(
+    session: DbSession,
+    user: CurrentUser,
+    status: str | None = Query(None, description="逗號分隔"),
+    kind: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+) -> list[JobRead]:
+    project_ids = None
+    if not user.is_admin:
+        project_ids = [p.id for p in await projects_svc.list_for_user(session, user, include_archived=True)]
+    statuses = [x.strip() for x in status.split(",") if x.strip()] if status else None
+    rows = await jobs_svc.list_recent(session, project_ids=project_ids, statuses=statuses, kind=kind, limit=limit)
+    return await ser.jobs(session, rows)
 
 
 @router.get("/{job_id}", response_model=JobRead)

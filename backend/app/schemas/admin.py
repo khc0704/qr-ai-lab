@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
 from app.schemas.job import JobRead
+from app.schemas.settings import ResourcePool
 from app.schemas.user import UserRead
 
 
@@ -43,6 +44,11 @@ class NodeStatus(BaseModel):
     memory_used_mb: int
     disk_total_gb: int
     disk_free_gb: int
+    allocated: Allocated
+
+
+class CapacityRead(BaseModel):
+    pool: ResourcePool
     allocated: Allocated
 
 

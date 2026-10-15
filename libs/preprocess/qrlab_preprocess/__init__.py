@@ -10,6 +10,8 @@ training data by the trainer and replayed unchanged at inference.
 
 from __future__ import annotations
 
+import json
+
 from typing import Any
 
 from qrlab_preprocess import image, sequence, tabular, text  # noqa: F401  (registers the ops)
@@ -118,4 +120,4 @@ class Pipeline:
         return [jsonable(op.to_json()) for op in self.ops]
 
     def describe(self) -> list[str]:
-        return [f"{op.label}" + (f" {op.p}" if op.p else "") for op in self.ops]
+        return [f"{op.label}" + (f" {json.dumps(op.p, ensure_ascii=False)}" if op.p else "") for op in self.ops]
