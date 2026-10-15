@@ -200,6 +200,7 @@ system_settings（key / value，資源池等）
 | requested_memory_mb | INT UNSIGNED NOT NULL DEFAULT 2048 | |
 | timeout_minutes | INT UNSIGNED NOT NULL | 建立時從專案或 job_defaults 決定 |
 | assigned_gpus | JSON NULL | 例 `[0]` |
+| assigned_cpus | JSON NULL | 排程器配給的邏輯 CPU 編號，例 `[0, 1]`（affinity / cgroup cpuset） |
 | container_id | VARCHAR(64) NULL | |
 | progress | DECIMAL(5,2) NOT NULL DEFAULT 0 | 0–100 |
 | current_stage | VARCHAR(64) NULL | `fetching \| preparing \| training \| evaluating \| exporting \| predicting` |

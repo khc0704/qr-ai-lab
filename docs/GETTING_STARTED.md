@@ -73,6 +73,7 @@ uv run uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
 - `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立兩個帳號：`admin / admin1234`、`user / user1234`（`SEED_*` 可改）。
+- `.env.example` 預設 `SCHEDULER_EMBEDDED=true`：排程器迴圈跑在這個程序裡，不用 Redis、不用第二個終端，任務頁的即時 log 照常。要測兩個程序的正式拓樸再照 §4.2 分開跑。
 - 登入拿 token，之後所有 API 帶 `Authorization: Bearer <token>`：
 
 ```bash
@@ -85,29 +86,30 @@ curl -s localhost:8000/api/v1/admin/model-zoo -H "Authorization: Bearer $TOKEN"
 
 - 流程：`user` 送出專案申請（`POST /project-requests`）→ `admin` 核准（`POST /project-requests/{id}/approve`，給 slug 與配額）→ 專案內上傳檔案（`POST /projects/{slug}/uploads`）→ 建 Job（`POST /projects/{slug}/jobs`，回 202）→ 排程器執行 → `GET /jobs/{id}`、`/logs`、`/events`（SSE）、`/artifacts`。`/docs` 有完整清單。
 
-### 4.2 排程器（跑 Job 的那個程式）
+### 4.2 排程器與任務執行方式（沒有容器）
 
 ```bash
 cd trainer && uv sync && cd ../backend        # 第一次：建立 trainer 的 venv（CPU 家族：sklearn / XGBoost / Optuna）
-uv run python -m app.scheduler                # 另一個終端；每 3 秒：回收已結束的 Job → 依佇列與資源池啟動新 Job
+# 分開跑（正式拓樸）：backend 與排程器各一個程序，兩邊都設 REDIS_URL 讓即時事件互通
+REDIS_URL=redis://localhost:6379/0 SCHEDULER_EMBEDDED=false uv run uvicorn app.main:app --reload
+REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
 ```
 
-- 開發機預設 `JOB_RUNNER=subprocess`：直接用 `../trainer/.venv` 執行 `python -m trainer run`（無隔離，只適合 CPU 家族）。
-- GPU 伺服器用 `JOB_RUNNER=docker`：先建 image `docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .`（context 是 repo 根目錄，因為會一起裝 `libs/preprocess`），排程器以硬化容器（唯讀 rootfs、cap_drop ALL、只掛該 Job 的目錄）啟動，並用 `CUDA_VISIBLE_DEVICES` 指定 GPU。
-- 資源池預設 = 偵測到的 GPU / CPU / 記憶體；管理員可在 `PUT /admin/settings/resource-pool` 調整（或 UI 管理員頁）。
-- 深度學習家族在開發機測試：`cd trainer && uv sync --extra dl`（會抓 CUDA 版 torch，很大）；或只裝 CPU torch：`uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu` 再 `uv pip install --python .venv/bin/python transformers pillow`。
+- 每個任務 = `trainer/.venv/bin/python -m trainer run` 的主機子程序，環境變數帶 `JOB_*`、`CUDA_VISIBLE_DEVICES` 與離線旗標（`HF_HUB_OFFLINE=1`、`YOLO_OFFLINE=1`…）。
+- `JOB_RUNNER=auto`（預設）：啟動時試跑 `systemd-run --user --scope`，成功就用 **systemd**（cgroup 強制 MemoryMax / CPUQuota / AllowedCPUs，`systemctl stop` 殺整棵程序樹，排程器重啟後靠 unit 名接回）；失敗就用 **subprocess**（process group、`cpu_affinity` 釘核心、執行緒數上限，記憶體由排程器每 3 秒的 watchdog 監看，超過申請量就停止並寫明原因）。管理員 Dashboard 的「任務執行方式」會顯示實際偵測結果。
+- systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
+- GPU：`CUDA_VISIBLE_DEVICES` 指定；啟動前用 pynvml 檢查那顆 GPU 顯存是否被別的程序占用（`GPU_BUSY_THRESHOLD`），忙就先等。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
+- 深度學習家族：`cd trainer && uv sync --extra dl`（CUDA 版 torch，走公司 PyPI 鏡像：`UV_INDEX_URL=https://mirror.example.com/pypi/simple`）；開發機只想裝 CPU torch 見 §7。
 
-### 4.3 模型庫（預訓練權重；伺服器不連網）
+### 4.3 模型庫（預訓練權重；伺服器不連外）
 
-```bash
-pip install pyyaml huggingface_hub                       # 在「有網路」的機器
-python3 scripts/fetch_model_zoo.py --dest ./model_zoo    # 下載 yaml 列出的全部權重並產生 manifest.json
-python3 scripts/fetch_model_zoo.py --dest ./model_zoo --only yolo11s dinov2-small
-# 複製 model_zoo/ 到伺服器的 MODEL_ZOO_ROOT（預設 DATA_ROOT/model_zoo），然後驗證：
-cd backend && uv run python -m app.cli model-zoo --verify
-```
-
-sklearn / XGBoost 家族不需要權重；YOLO `pretrained=false` 也不需要。缺權重的 Job 會失敗並在 log 說明缺哪個檔。
+- 管理員登入後到 **管理 → 模型庫**（`/admin/model-zoo`）：每個權重都可以用三種方式帶進來，匯入時比對目錄登記的 sha256、記進 `MODEL_ZOO_ROOT/manifest.json` 與稽核紀錄：
+  1. 瀏覽器上傳（單檔權重如 YOLO `.pt` 直接傳；Hugging Face 類型傳整個 snapshot 資料夾的 zip）。
+  2. 伺服器路徑：先把檔案放到 `MODEL_ZOO_IMPORT_ROOT`（NAS、USB 掛載點），頁面填相對路徑。
+  3. 內網 URL：公司鏡像 / 檔案伺服器，主機要在 `MODEL_ZOO_ALLOWED_HOSTS`。
+- 有網路的機器可以先用 `python3 scripts/fetch_model_zoo.py --dest ./model_zoo` 把全部抓好、整個資料夾放到傳輸資料夾再逐一匯入，或直接複製到 `MODEL_ZOO_ROOT`（manifest 相容）。
+- 權重缺少時：精靈的模型卡片會標「缺權重」，建立任務會被拒絕（`WEIGHTS_MISSING`）；AutoML 會自動跳過缺權重的候選。sklearn / XGBoost / 影像品質 / 光譜 MAE 家族不需要權重。
+- 命令列檢查：`cd backend && uv run python -m app.cli model-zoo --verify`。
 
 ### 4.4 MariaDB（正式環境）
 
@@ -130,34 +132,20 @@ QR_TEST_ZOO=/path/to/zoo uv run pytest tests/test_yolo_cpu.py                   
 uv run python -m trainer check                                                              # 這個環境能跑哪些家族
 ```
 
-### 4.6 docker compose 一次全起（伺服器）
+### 4.6 正式安裝（Ubuntu GPU 伺服器，不連外、有 PyPI / npm / image 鏡像）
 
 ```bash
-cp infra/.env.example infra/.env   # 填密碼、DATA_ROOT_HOST、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY
-docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .
-docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app build
-docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app run --rm backend alembic upgrade head
-docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app run --rm backend python -m app.cli seed
-docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d
+sudo mkdir -p /opt && sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
+cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # mariadb、redis
+PIP_INDEX_URL=https://mirror.example.com/pypi/simple NPM_REGISTRY=https://mirror.example.com/npm ./infra/install.sh
+sudo nano /etc/qr-ai-lab/qrlab.env     # DATABASE_URL、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、MODEL_ZOO_*、PUBLIC_URL
+./infra/install.sh                     # 第二次：migration、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
+sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -s reload
 ```
 
-- compose 目前只有 mariadb、redis、backend、scheduler；前端在伺服器上先用 `npm run build && BACKEND_URL=http://backend:8000 npm run start`（或 pm2 / systemd）跑在 3000，再由 nginx 反代。
-
-### 4.8 端到端串接測試（真的 backend + 排程器 + trainer，會截圖）
-
-```bash
-# 終端 1～3：backend（§4.1）、排程器（§4.2，JOB_RUNNER=subprocess）、前端（npm run build && npm run start）。
-# 兩個程序之間的即時事件（log 串流）需要 Redis：docker compose 起 redis，或本機 redis-server，然後兩邊都設 REDIS_URL。
-# 想從乾淨狀態開始：停掉 backend 與排程器，刪掉 dev.db 與 DATA_ROOT 後再啟動。
-cd frontend
-DATA_DIR=/path/to/sample-datasets npm run screenshots          # 預設 BASE_URL=http://localhost:3000、API_URL=http://localhost:8000/api/v1
-PHASES=train,infer npm run screenshots                           # 只跑部分階段（request,approve,project,train,infer,iqa,spectrum,discussion,admin,visual,logout）
-npm run screenshots:report                                       # docs/screenshots/e2e/index.html + docs/manuals/QR-AI-Lab-串接測試報告.pdf
-```
-
-- 腳本 `frontend/scripts/e2e-walkthrough.mjs` 用 Playwright 以 `user` 與 `admin` 兩個身分走完整流程：申請 → 審核 → 成員 / 資料來源 → 上傳 + 前處理預覽 → AutoML 訓練（看即時 log）→ 推論 → 影像品質比對 → 光譜 MAE → 討論區 → 管理員佇列 / 強制中斷 / 稽核 → light mode / 手機版 → 登出，每一步截圖到 `docs/screenshots/e2e/NN-*.png`，說明寫在 `captions.json`。
-- `DATA_DIR` 要有 `wat_yield.csv`、`sem_golden_tool.zip`、`sem_tuned_tool.zip`、`ocd_spectra.csv`：`python3 docs/screenshots/e2e/gen_data.py <DATA_DIR>` 會產生這些合成資料（需要 numpy、Pillow，trainer 的 venv 就有）；URL 資料來源那一步會連 `http://127.0.0.1:8099/wat_yield.csv`，可在資料夾裡 `python3 -m http.server 8099` 提供。
-- 瀏覽器：`npx playwright install chromium`，或設 `CHROMIUM_PATH=/path/to/chrome`。
+- `install.sh` 做的事：建 `qrlab` 使用者並 `enable-linger`、建 `/srv/qr-ai-lab/{data,transfer}`、backend / trainer 的 venv（`uv sync --frozen`，走鏡像）、`next build`、`alembic upgrade head` + `app.cli seed`、安裝三個 systemd service。`--update` 在 `git pull` 後重跑全部並重啟服務；執行中的任務不受影響（systemd scope 不是排程器的子程序）。
+- 沒有 TLS 憑證前要在 `qrlab-frontend.service` 加 `Environment=COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
+- 上線後第一件事：Dashboard 看「任務執行方式」是不是 systemd 且記憶體 / CPU 都是 cgroup；`app.cli set-password` 改掉兩個預設密碼；在資源池勾選可用的 GPU。
 
 ### 4.7 使用手冊（DOCX / PDF）
 
@@ -175,9 +163,9 @@ soffice --headless --convert-to pdf --outdir docs/manuals "docs/manuals/QR-AI-La
 ```bash
 git pull
 cd frontend && npm ci && npm run dev          # 終端 1：前端（BACKEND_URL 預設 http://localhost:8000）
-cd backend && uv sync && uv run uvicorn app.main:app --reload   # 終端 2：後端（SQLite）
-cd backend && uv run python -m app.scheduler  # 終端 3：排程器（subprocess runner；要看即時 log 串流請兩邊都設 REDIS_URL）
-docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # 需要 MariaDB / Redis 時
+cd backend && uv sync && uv run uvicorn app.main:app --reload   # 終端 2：後端（SQLite + 內嵌排程器，任務直接用 trainer/.venv 跑）
+# 要測正式拓樸（分開的排程器 + Redis）才需要終端 3：REDIS_URL=… uv run python -m app.scheduler
+docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # 需要 MariaDB / Redis 時（開發機通常不用）
 # 改完 UI
 cd frontend && npm run lint && npm run typecheck && python3 ../scripts/design_lint.py src
 # 改完後端 / trainer
@@ -193,7 +181,10 @@ cd trainer && uv run ruff check . && uv run pytest
 - **`npm ci` 失敗提到 lock 不一致**：確認用的是 npm 10 以上，且沒有用 pnpm / yarn 動過 `node_modules`。
 - **Playwright 找不到瀏覽器**：`cd frontend && npx playwright install chromium`；或設 `CHROMIUM_PATH=/path/to/chrome` 再跑 `npm run screenshots`。
 - **登入後被導回 `/login?reason=expired`**：backend 沒啟動、`BACKEND_URL` 不對，或 token 已過期（`ACCESS_TOKEN_MINUTES`，預設 12 小時）。
-- **任務頁看不到即時 log，重新整理才有**：backend 與排程器是兩個程序，沒有 `REDIS_URL` 時事件只在各自記憶體裡；設 `REDIS_URL=redis://localhost:6379/0` 給兩邊。
+- **任務頁看不到即時 log，重新整理才有**：backend 與排程器分開跑時沒有 `REDIS_URL`，事件只在各自記憶體裡；設 `REDIS_URL=redis://localhost:6379/0` 給兩邊，或用 `SCHEDULER_EMBEDDED=true` 讓排程器跑在 backend 內。
+- **Dashboard 顯示 runner 是 subprocess 而不是 systemd**：`systemd-run --user --scope -p MemoryMax=64M -- /bin/true` 手動跑看錯誤；常見原因是沒有 `loginctl enable-linger`、`XDG_RUNTIME_DIR` 沒指到該使用者、或 WSL 沒開 systemd。subprocess 模式仍會釘核心並由 watchdog 管記憶體。
+- **任務因「memory limit exceeded」失敗**：申請的記憶體不夠；在精靈的資源步驟調高，或請管理員調整專案配額。
+- **開發機只想裝 CPU torch**：`cd trainer && uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu && uv pip install --python .venv/bin/python transformers pillow ultralytics`。
 - **上傳預覽逾時（`PREVIEW_TIMEOUT`）**：預覽在 API 程序內以執行緒計算，預設 30 秒（`PREVIEW_TIMEOUT_S`）；縮小取樣數或先用較小的檔案試步驟。
 - **MariaDB 一直不 healthy**：第一次初始化要 20–40 秒；看 `docker compose -f infra/docker-compose.yml logs mariadb`。
 - **Windows**：建議在 WSL2 內操作（Docker Desktop + WSL 整合），避免路徑與換行問題。

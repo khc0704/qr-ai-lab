@@ -20,13 +20,13 @@
 |---|---|
 | Frontend | Next.js 16（App Router、Turbopack、`proxy.ts`）+ React 19 + TypeScript strict + Tailwind CSS v4 + shadcn/ui + next-themes + Auth.js（next-auth v5，Keycloak provider）+ npm |
 | Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + uv + Ruff + pytest；過渡期本地帳號（argon2 + HS256，`AUTH_MODE=local`），Keycloak 之後接 |
-| Scheduler | 與 backend 同一套件（`app/scheduler`）：Redis（事件 / log stream）+ Docker SDK 啟動 Job 容器並套用 GPU / CPU / Memory 限制；容量上限 = 管理員設定的總資源池 |
-| Trainer | 獨立套件 `trainer/` 打成 CUDA Docker image：scikit-learn、XGBoost、PyTorch、ultralytics、transformers、Optuna；自行從使用者的 MinIO / URL 抓資料；**容器離線，預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入** |
+| Scheduler | 與 backend 同一套件（`app/scheduler`）：Job 是主機子程序（trainer venv），`JOB_RUNNER=auto` 優先用 `systemd-run --scope`（cgroup 限 Memory / CPU / 核心），否則 subprocess + affinity + 記憶體 watchdog；GPU 以 `CUDA_VISIBLE_DEVICES` 分配並用 pynvml 預檢；事件走 Redis（兩個程序）或記憶體（`SCHEDULER_EMBEDDED=true` 單程序）；容量上限 = 管理員設定的總資源池 |
+| Trainer | 獨立套件 `trainer/`，裝在主機的 `trainer/.venv`（torch CUDA wheel、ultralytics、transformers、Optuna、scikit-learn、XGBoost）：自行從使用者的 MinIO / URL 抓資料；**離線執行（runner 設 HF_HUB_OFFLINE 等），預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入**，由管理員經「模型庫」頁上傳 / 路徑匯入 / 內網 URL 帶進來 |
 | DB | MariaDB 11（Docker）、utf8mb4、InnoDB |
 | Storage | 本機磁碟 `DATA_ROOT`（產物、log、暫存輸入）；`backend/app/storage/` 抽象成介面，未來可換自有 MinIO |
 | 外部資料來源 | 使用者的 MinIO / S3 相容服務、HTTP(S) URL；憑證 Fernet 加密存 DB，只在 Job 容器內解密使用 |
 | Auth | 目前：本地帳號 `admin` / `user`（`POST /auth/login`）；目標：外部 Keycloak（OIDC），只存 `users`（id、角色）與專案 / 成員等業務表 |
-| Infra | docker compose、nginx、NVIDIA Container Toolkit |
+| Infra | docker compose 只跑 MariaDB / Redis（image 來自公司鏡像）；backend / scheduler / frontend 是 systemd 服務（`infra/systemd/`）；nginx 原生；伺服器不連外，套件來自 PyPI / npm 鏡像 |
 
 ## Monorepo 結構
 
@@ -42,7 +42,7 @@ qr-ai-lab/
 ├─ frontend/           Next.js 16（src/app、src/components/{ui,layout,features}、src/lib、src/proxy.ts）
 ├─ backend/            FastAPI：app/{core,db,events,models,schemas,routers,services,scheduler,storage,catalog}、alembic/、tests/
 ├─ trainer/            訓練 / 推論 runtime：trainer/{runtime,automl,dataset,fetch,metrics}.py、trainer/{data,models}/、tests/
-└─ infra/              docker-compose.yml（mariadb、redis、backend、scheduler）、backend/Dockerfile、trainer/Dockerfile、mariadb/
+└─ infra/              docker-compose.yml（mariadb、redis）、systemd/（三個 service + qrlab.env.example）、nginx/、install.sh、mariadb/
 ```
 
 frontend（已接 backend：`src/lib/api` 為 server-only fetch 層、`src/lib/actions.ts` 為 Server Actions、`src/app/api/*` 代理上傳 / SSE / 下載）、backend、trainer、infra 都已建立。不要自創頂層目錄。
@@ -60,7 +60,7 @@ npm run screenshots && npm run screenshots:report  # 端到端串接測試 + 截
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
 uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
 uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head   # MariaDB
-uv run python -m app.scheduler                    # 排程器：JOB_RUNNER=subprocess（開發）或 docker（伺服器）
+uv run python -m app.scheduler                    # 排程器（或 SCHEDULER_EMBEDDED=true 讓 backend 內嵌，開發時不用 Redis）；JOB_RUNNER=auto|systemd|subprocess
 uv run python -m app.cli seed|create-user|set-password|model-zoo [--verify]
 # trainer
 cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
@@ -69,9 +69,8 @@ node scripts/build_manual.js                      # 使用手冊 DOCX（再用 s
 # model zoo（在有網路的機器）
 python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
-docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis
-docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d   # + backend、scheduler
-docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .   # context = repo 根目錄
+docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis（只有這兩個跑在 docker）
+./infra/install.sh            # 伺服器：venv（走 PyPI 鏡像）、前端 build、migration、systemd 服務；--update 升級
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ```
@@ -107,7 +106,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
-13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，容器設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記並更新 `scripts/fetch_model_zoo.py` 能處理的 `kind`。
+13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 14. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
 ## 文件地圖

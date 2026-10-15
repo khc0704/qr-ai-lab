@@ -7,10 +7,10 @@
 
 1. ✅ **前端接 backend**：登入 → httpOnly cookie → `src/lib/api`（fetch）+ Server Actions + Route Handler 代理（上傳 / SSE / 下載）；沙盒以 SQLite + Redis + subprocess runner 走完整流程並截圖（`docs/screenshots/e2e/`、`docs/manuals/QR-AI-Lab-串接測試報告.pdf`）。待補：列表頁自動刷新（目前 RSC 需重新整理）、表單的樂觀更新。
 2. **Keycloak**：目前本地帳號；切換時 `AUTH_MODE=keycloak`，前端 Auth.js 也要接上。本地帳號的密碼政策、鎖定、到期都沒有，不要長期使用。
-3. **HTTPS / nginx / 對外介面**：compose 還沒有 nginx 與 frontend service；token 走明文 HTTP 不能上線。
+3. **HTTPS / nginx / 對外介面**：✅ `infra/nginx/qr-ai-lab.conf` 與 systemd 的 frontend service 已就位；憑證用公司 CA。沒有 TLS 時 `COOKIE_SECURE=0`。
 4. **備份與還原演練**：`DATA_ROOT`（產物、模型庫）與 MariaDB 的備份排程寫在文件裡但沒有腳本；至少要有 `mariadb-dump` + rsync 的 cron 與一次還原演練。
-5. **資源池與真實 GPU 的對應**：`detect_gpus` 用 pynvml；多張 GPU 時記憶體不均、MIG、或 GPU 被外部程序占用時排程器不會知道，建議排程前再查一次 `nvidia-smi` 的實際可用記憶體。
-6. **安全審視**：scheduler 持有 docker socket；trainer 容器雖然硬化，但 `data_source` 任務需要對外網路抓資料（NO_PROXY 行為、egress 白名單）；上傳 zip 已防 path traversal，但 parquet / npy 由第三方套件解析，建議限制大小並隔離在 trainer 內而非 backend。✅ 前處理預覽已加逾時（`PREVIEW_TIMEOUT_S`，預設 30 秒）與取樣上限，仍在 API 程序內執行。
+5. **資源池與真實 GPU 的對應**：✅ 排程前用 pynvml 檢查分到的 GPU 顯存是否被別的程序占用（`GPU_BUSY_THRESHOLD`），忙就等。MIG 與顯存不均仍未處理。
+6. **安全審視**：任務改為主機子程序後沒有容器隔離：任務與排程器同一個 OS 使用者（`qrlab`），彼此可讀對方的產物；使用者不提交程式碼所以先接受，要升級時改走 system 層 `systemd-run`（`DynamicUser=`、`ProtectSystem=strict`、`ReadWritePaths=`），runner 介面不變。`data_source` 任務需要內網抓資料（NO_PROXY 行為）；上傳 zip 已防 path traversal，但 parquet / npy 由第三方套件解析，建議限制大小並隔離在 trainer 內而非 backend。✅ 前處理預覽已加逾時（`PREVIEW_TIMEOUT_S`，預設 30 秒）與取樣上限，仍在 API 程序內執行。
 7. **Alembic migration**：`0001_initial_schema` 以 `create_all` 產生，之後的 schema 變更要用 autogenerate 並在 MariaDB 上實際跑過；SQLite 與 MariaDB 的型別差異（JSON、DATETIME(6)）要在 CI 以 MariaDB 容器驗證一次。
 
 ## B. 讓使用者更好用
@@ -26,14 +26,14 @@
 
 ## C. 架構上要留意
 
-1. **單一 scheduler 程序**：排程迴圈是單點；重啟時會把執行中的任務標 failed（docker runner 有 `find` 可接回容器，subprocess 不行）。建議 docker runner 真的接回、並有 systemd / compose restart。
+1. **單一 scheduler 程序**：✅ 排程器重啟後以 pid + create_time（subprocess）或 systemd unit 名接回執行中的任務並重新 tail log；systemd service `Restart=always`。
 2. **SQLite 僅限開發**：資料庫在單檔；沒有 `REDIS_URL` 時 event bus 在各程序的記憶體裡，backend 與排程器分開跑時 SSE 看不到 log 事件（沙盒串接測試即用本機 redis-server 解決）；正式環境一定要 Redis + MariaDB。
 3. **大型產物與下載**：目錄產物即時打包 zip 會占記憶體與時間，大模型（YOLO m、BERT）建議 nginx `X-Accel-Redirect` 或預先打包。
 4. **配額計算**：`storage_used_bytes` 以遞迴 stat 計算，專案產物多時每次任務結束都算一次會慢；可改為增量或背景計算。
-5. **trainer image 大小與 CUDA 版本**：PyPI torch 綁定 CUDA 13，伺服器驅動版本要對得上；若不行要改 PyTorch index 並放棄 `--frozen`。
+5. **CUDA 版本**：trainer venv 用 PyPI 的 torch wheel（自帶 CUDA 函式庫），伺服器只要 driver 版本對得上；不行就在鏡像上放對應的 `+cu12x` wheel 並改 `uv.lock`。
 6. **前處理在 backend 內執行**：預覽直接在 API 程序讀檔與運算（pandas / PIL），大檔或惡意檔會拖慢 API；已限制取樣大小並加 30 秒逾時（✅），但逾時只是放棄等待、執行緒仍會跑完，長期應搬到獨立 worker。
 7. **AutoML 單容器循序**：候選含深度學習家族時一個任務可能跑很久；可加「每個 trial 的 epoch 上限」與「先用小資料子集篩家族再全量」兩段式。
-8. **測試覆蓋**：Docker runner、MariaDB、Keycloak、多 GPU 都沒有自動化測試；至少做一條在 GPU 伺服器上跑的 smoke test（docker runner + yolo11n 微調 1 epoch）。
+8. **測試覆蓋**：systemd runner 只以假的 `systemd-run` 測參數組合，真正的 cgroup 強制要在伺服器上驗一次（建議：建一個申請 512 MB 的任務故意吃 1 GB，看是否被 OOM kill）；MariaDB、Keycloak、多 GPU 仍無自動化測試。
 
 ## D. 模型與方法
 
@@ -55,3 +55,11 @@
 - 序列 / 光譜預覽的統計是單一物件而非逐欄陣列，前端只處理了陣列：`PreviewSide.stats` 改為聯合型別並各自渲染。
 - 前處理描述用 Python dict 顯示參數（`{'strategy': 'median'}`）：`Pipeline.describe()` 改輸出 JSON。
 - Route Handler 不能用 `export const dynamic`（Cache Components 下 build 會失敗）：移除。
+
+## F. 這一輪（任務不進容器 + 離線部署）新增的能力
+
+- `JOB_RUNNER=auto | systemd | subprocess`：任務是主機子程序；systemd cgroup scope 強制記憶體 / CPU / 核心，subprocess 退路有 affinity + 記憶體 watchdog；兩者都能在排程器重啟後接回；GPU 啟動前預檢。
+- `SCHEDULER_EMBEDDED=true`：排程器跑在 backend 程序內，開發機與小型部署不需要 Redis。
+- 管理員「模型庫」頁：瀏覽器上傳、伺服器路徑匯入、內網 URL 下載，sha256 驗證、manifest、稽核；目錄回傳 `weights_ready`，精靈標示缺權重，建立任務時拒絕。
+- Dashboard 顯示「任務執行方式」（runner、哪些限制由 cgroup 強制、trainer python 路徑）；任務頁顯示分到的 CPU 核心。
+- infra：compose 只剩 MariaDB / Redis；`infra/systemd/*.service`、`infra/nginx/qr-ai-lab.conf`、`infra/install.sh`（走 PyPI / npm 鏡像）。

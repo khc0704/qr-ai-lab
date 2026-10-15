@@ -15,7 +15,7 @@ paths:
 - `models/`：SQLAlchemy ORM（`Mapped[]` 註記 + `mapped_column`），每個聚合一個檔案；所有表繼承 `Base`（含 `id`、`created_at`、`updated_at`）。
 - `schemas/`：Pydantic v2，命名 `XxxCreate | XxxUpdate | XxxRead | XxxList`；`model_config = ConfigDict(from_attributes=True)`。
 - `core/`：`config.py`（pydantic-settings，只從環境變數讀）、`security.py`（Keycloak JWT 驗證，PyJWT + JWKS 快取；per-job token）、`deps.py`（`get_db`、`get_current_user`、`require_admin`、`require_project_role`）。
-- `scheduler/`：佇列迴圈（`queue_rank`）、總資源池與配額檢查、GPU 分配、Docker 啟動 / 監看 / 強制中斷、log 檔與 Redis stream 寫入、清理任務；不被 routers import。
+- `scheduler/`：佇列迴圈（`queue_rank`）、總資源池與配額檢查、GPU / CPU 核心分配、以主機子程序啟動（`runner.py`：systemd cgroup scope 或 subprocess + affinity）/ 監看（watchdog）/ 強制中斷 / 重啟後接回、tail log 檔推事件、清理任務；不被 routers import。
 - `storage/`：`base.py` 定義 `Storage` 介面，`local.py` 實作本機 `DATA_ROOT`（上傳串流寫檔、產物 stat / 讀取 / 刪除、目錄用量、Job 目錄準備）；所有路徑以相對 `DATA_ROOT` 儲存，絕不把使用者檔名當路徑。
 - `catalog/`：`model_catalog.yaml`（資料類型 × 任務 × 模型 × 搜尋空間）與載入器。
 - `utils/`：純函式，無 I/O。
@@ -33,20 +33,20 @@ paths:
 
 ## 程式風格
 
-- Python 3.12、全面 async（`AsyncSession`、`httpx.AsyncClient`；檔案 I/O 與 docker SDK 的同步呼叫用 `asyncio.to_thread`）。
+- Python 3.12、全面 async（`AsyncSession`、`httpx.AsyncClient`；檔案 I/O、psutil、sha256 等同步呼叫用 `asyncio.to_thread`）。
 - Ruff lint + format（line-length 120）、完整型別註記、`from __future__ import annotations`。
 - 不用 `print`；用 `structlog`，log 不含 token、密碼、使用者憑證。
 - 設定只透過 `Settings`；測試（`tests/conftest.py`）用 SQLite 暫存檔 + 記憶體事件 bus + tmp `DATA_ROOT`，排程器用假 runner；`tests/test_e2e_subprocess.py` 以 subprocess runner 跑真的 trainer（`-m e2e`）。
-- 使用者資料來源憑證以 Fernet（`DATASET_SECRET_KEY`）加密存 `data_sources.credentials_enc`，只在 scheduler 組裝 Job 容器環境變數時解密；API 回應只回 `has_credentials`。
+- 使用者資料來源憑證以 Fernet（`DATASET_SECRET_KEY`）加密存 `data_sources.credentials_enc`，只在 scheduler 組裝 Job 子程序環境變數時解密；API 回應只回 `has_credentials`。
 - 不留存政策是硬規則：任何寫入使用者資料的程式碼只能落在 `uploads/` 或 `jobs/{id}/input/`，而且必須有對應的刪除路徑（Job 終態、過期清理）。
 - 改 DB 結構請同時遵守 `.claude/rules/database.md`。
 
 ## Trainer
 
 - 每個 model family 實作 `BaseTrainer`（`prepare / fit / evaluate / export`）與 `BaseInferencer`（`load / predict`），註冊到 `trainer/models/registry.py`；id 必須與 `backend/app/catalog/model_catalog.yaml` 一致（CI 測試比對）。
-- 輸入在 `/job/input`：upload 已就緒（唯讀）；data_source 由 trainer 以 `minio` SDK / `httpx` 自行下載到 `/job/input`（可寫；stage `fetching`，回報進度）。暫存只能寫 `/job/output/_work`（結束自刪）。輸出寫 `/job/output/{model|preprocessor|report|metrics|output}/`，再呼叫 `/internal/jobs/{id}/artifacts` 登記（path 可為目錄）；trainer 不直接連 DB，不持有任何伺服器端憑證。
-- 預訓練權重只透過 `ctx.weight(id)` 從 `/job/zoo`（`MODEL_ZOO_ROOT`）取得；容器設 `HF_HUB_OFFLINE=1` 等離線變數，任何 `from_pretrained` / `YOLO(...)` 都必須指向本地路徑（`local_files_only=True`），絕不自行下載。
+- 輸入在 `JOB_INPUT_DIR`：upload 已就緒；data_source 由 trainer 以 `minio` SDK / `httpx` 自行下載到那裡（stage `fetching`，回報進度）。暫存只能寫 `JOB_OUTPUT_DIR/_work`（結束自刪）。輸出寫 `JOB_OUTPUT_DIR/{model|preprocessor|report|metrics|output}/`，再呼叫 `/internal/jobs/{id}/artifacts` 登記（path 可為目錄）；trainer 不直接連 DB，不持有任何伺服器端憑證。log 直接印到 stdout（`trainer/log.py` 加時間戳），排程器把 stdout 導到 log 檔。
+- 預訓練權重只透過 `ctx.weight(id)` 從 `MODEL_ZOO_ROOT` 取得；runner 設 `HF_HUB_OFFLINE=1` 等離線變數，任何 `from_pretrained` / `YOLO(...)` 都必須指向本地路徑（`local_files_only=True`），絕不自行下載。
 - 一律把有意義的進度印到 stdout（每 epoch / trial 一行，含指標），因為 stdout 就是使用者看到的 log；不要印憑證或完整環境變數。
 - 尊重資源限制：GPU 由 scheduler 用 `CUDA_VISIBLE_DEVICES` 指定；DataLoader workers ≤ cpu_limit；batch size 由搜尋空間決定但要有 OOM 回退（減半重試一次）。
-- AutoML：Optuna 單容器循序 trial，`MedianPruner`，受 `max_trials` 與 `time_budget_minutes` 限制；每個 trial 回報一筆 leaderboard row。
+- AutoML：Optuna 單程序循序 trial，`MedianPruner`，受 `max_trials` 與 `time_budget_minutes` 限制；每個 trial 回報一筆 leaderboard row。
 - 收到 SIGTERM（取消 / 強制中斷）時在 10 秒內結束：寫出目前 checkpoint 的指標到 stdout 後退出非 0。
