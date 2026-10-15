@@ -1,12 +1,16 @@
-"""GPU placement by free VRAM (several jobs per GPU) and the admin's force-reset.
+"""GPU placement by *measured* free VRAM (several jobs per GPU) and the admin's force-reset.
 
 Placement rules (``plan``):
 * a job without ``requested_gpu_memory_mb`` wants whole GPUs: only GPUs no job is placed on, and whose driver-reported
   memory use is under ``gpu_busy_threshold`` (another user's process), qualify;
-* a job with ``requested_gpu_memory_mb`` may share a GPU that is not held exclusively, when
-  ``total - max(driver used, Σ reserved) - gpu_reserve_mb >= requested``; best fit (least free VRAM left) packs jobs;
+* a job with ``requested_gpu_memory_mb`` may share a GPU that is not held exclusively when
+  ``total − used(driver, every process) − pending − gpu_reserve_mb >= requested``. ``pending`` covers jobs that
+  started less than ``gpu_warmup_s`` ago and have not yet allocated what they asked for (requested − measured), so
+  two jobs launched back to back cannot both be placed on memory that is still free only because the first one has
+  not loaded its model yet. After the warm-up the driver reading is the truth. Best fit (least free VRAM left) packs
+  jobs; the trainer caps itself with ``set_per_process_memory_fraction``;
 * without pynvml readings (no NVIDIA driver, tests) sharing degrades to counting: a GPU hosts at most one exclusive job
-  or any number of sharing jobs whose reservations fit the total reported by the pool entry (unknown → unlimited).
+  or any number of sharing jobs (spread by job count).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import os
 import signal
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import psutil
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import bad_request, not_found
 from app.core.logging import get_logger
+from app.db.base import utcnow
 from app.models import Job, User
 from app.schemas.admin import GpuResetResult, NodeGpu
 from app.services import audit
@@ -36,19 +42,32 @@ log = get_logger("gpu")
 class GpuSlot:
     index: int
     total_mb: int | None  # None = unknown (no pynvml)
-    used_mb: int = 0  # driver reading (all processes)
+    used_mb: int = 0  # driver reading, every process on the device
     exclusive: bool = False  # a whole-GPU job is placed here
-    reserved_mb: int = 0  # Σ requested_gpu_memory_mb of sharing jobs placed here
+    reserved_mb: int = 0  # Σ requested_gpu_memory_mb of sharing jobs placed here (what they asked for)
+    measured_mb: int = 0  # Σ VRAM the driver attributes to our jobs' processes
+    pending_mb: int = 0  # Σ (requested − measured) of jobs still warming up: counted as used until they allocate
     jobs: list[int] = field(default_factory=list)
 
     def free_mb(self, reserve_mb: int) -> int | None:
         if self.total_mb is None:
             return None
-        return self.total_mb - max(self.used_mb, self.reserved_mb) - reserve_mb
+        return self.total_mb - self.used_mb - self.pending_mb - reserve_mb
 
 
-def slots_from(pool_indices: list[int], running: list[Job], readings: list[NodeGpu]) -> dict[int, GpuSlot]:
+def slots_from(
+    pool_indices: list[int],
+    running: list[Job],
+    readings: list[NodeGpu],
+    *,
+    measured: dict[int, int] | None = None,
+    now: datetime | None = None,
+    warmup_s: int = 120,
+) -> dict[int, GpuSlot]:
+    """``measured``: job id → MB the driver attributes to that job's processes (see ``measured_by_job``)."""
     by_index = {g.index: g for g in readings}
+    measured = measured or {}
+    now = now or utcnow()
     slots: dict[int, GpuSlot] = {}
     for i in pool_indices:
         r = by_index.get(i)
@@ -61,8 +80,13 @@ def slots_from(pool_indices: list[int], running: list[Job], readings: list[NodeG
             s.jobs.append(j.id)
             if j.requested_gpu_memory_mb is None:
                 s.exclusive = True
-            else:
-                s.reserved_mb += j.requested_gpu_memory_mb
+                continue
+            m = int(measured.get(j.id, 0))
+            s.reserved_mb += j.requested_gpu_memory_mb
+            s.measured_mb += m
+            started = j.started_at or now
+            if (now - started).total_seconds() < warmup_s:
+                s.pending_mb += max(0, j.requested_gpu_memory_mb - m)
     return slots
 
 
@@ -95,6 +119,7 @@ def plan(job: Job, slots: dict[int, GpuSlot], *, share: bool, busy_threshold: fl
 
 
 def place(job: Job, gpus: list[int], slots: dict[int, GpuSlot]) -> None:
+    """Account for a job launched in this tick: until measured it is pending for its whole request."""
     for g in gpus:
         s = slots[g]
         s.jobs.append(job.id)
@@ -102,6 +127,21 @@ def place(job: Job, gpus: list[int], slots: dict[int, GpuSlot]) -> None:
             s.exclusive = True
         else:
             s.reserved_mb += job.requested_gpu_memory_mb
+            s.pending_mb += job.requested_gpu_memory_mb
+
+
+def measured_by_job(indices: list[int], pids_by_job: dict[int, set[int]]) -> dict[int, int]:
+    """job id → MB the driver attributes to its process tree, summed over the given GPUs."""
+    if not pids_by_job:
+        return {}
+    owner: dict[int, int] = {pid: jid for jid, pids in pids_by_job.items() for pid in pids}
+    out: dict[int, int] = {}
+    for i in indices:
+        for pid, mb in gpu_processes(i):
+            jid = owner.get(pid)
+            if jid is not None:
+                out[jid] = out.get(jid, 0) + mb
+    return out
 
 
 # --- reset ---------------------------------------------------------------------------------------

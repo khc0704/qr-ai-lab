@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.catalog import loader
 from app.core.config import get_settings
 from app.models import Job
-from app.schemas.admin import Allocated, ModelZooEntry, NodeGpu, NodeStatus, RunnerInfo
+from app.schemas.admin import Allocated, GpuJobUsage, ModelZooEntry, NodeGpu, NodeStatus, RunnerInfo
 
 
 def physical_cpu_cores() -> int:
@@ -136,6 +136,23 @@ async def gpu_jobs_map(session: AsyncSession) -> dict[int, list[Job]]:
     return out
 
 
+def job_pids(job: Job) -> set[int]:
+    """Process tree of a running job from its handle (pid:<pid>:<ct> / scope:<unit>:<pid>:<ct>); empty when gone."""
+    handle = job.container_id or ""
+    parts = handle.split(":")
+    try:
+        pid = int(parts[1]) if parts[0] == "pid" else int(parts[2]) if parts[0] == "scope" else None
+    except (IndexError, ValueError):
+        pid = None
+    if pid is None:
+        return set()
+    try:
+        root = psutil.Process(pid)
+        return {root.pid, *(c.pid for c in root.children(recursive=True))}
+    except psutil.Error:
+        return set()
+
+
 async def pool_indices(session: AsyncSession) -> list[int]:
     from app.services import settings as settings_svc
 
@@ -146,10 +163,21 @@ async def node_status(session: AsyncSession) -> NodeStatus:
     s = get_settings()
     gpus = detect_gpus()
     gmap = await gpu_jobs_map(session)
+    all_jobs = {j.id: j for jobs in gmap.values() for j in jobs}
+    measured: dict[int, int] = {}
+    if gpus and all_jobs:
+        from app.services.gpu import measured_by_job
+
+        measured = measured_by_job([g.index for g in gpus], {jid: job_pids(j) for jid, j in all_jobs.items()})
     for g in gpus:
         jobs = gmap.get(g.index, [])
         g.job_id = jobs[0].id if jobs else None
         g.job_ids = [j.id for j in jobs]
+        g.jobs = [
+            GpuJobUsage(job_id=j.id, requested_mb=j.requested_gpu_memory_mb, measured_mb=measured.get(j.id, 0))
+            for j in jobs
+        ]
+        g.measured_mb = sum(x.measured_mb for x in g.jobs) if jobs else None
         g.reserved_mb = (
             None
             if any(j.requested_gpu_memory_mb is None for j in jobs)

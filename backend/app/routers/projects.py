@@ -40,8 +40,13 @@ ProjectDeleter = Annotated[User, Depends(require_perm("projects.delete"))]
 
 
 @router.get("", response_model=list[ProjectRead], summary="我有權限的專案")
-async def list_projects(session: DbSession, user: CurrentUser, include_archived: bool = False) -> list[ProjectRead]:
-    return await ser.projects(session, await projects_svc.list_for_user(session, user, include_archived))
+async def list_projects(
+    session: DbSession, user: CurrentUser, include_archived: bool = False, include_personal: bool = False
+) -> list[ProjectRead]:
+    """include_personal=true 也列出個人工作區（工具任務的專案；管理員調配額時需要）。"""
+    return await ser.projects(
+        session, await projects_svc.list_for_user(session, user, include_archived, include_personal)
+    )
 
 
 @router.get("/{slug}", response_model=ProjectRead)

@@ -1,23 +1,38 @@
-"""Standalone data tools (no project needed): preprocess a file and download the result. Nothing is kept."""
+"""Standalone data tools (no project needed). Preview is real time on a sample; the heavy work is a job in the
+user's personal workspace so it goes through the queue, resource limits, logs and cleanup like any job."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, File, Form, UploadFile
 
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, DbSession
+from app.routers import _serialize as ser
 from app.schemas.common import Ok
-from app.schemas.tools import ToolPreviewBody, ToolProcessBody, ToolProcessResult, ToolUploadRead
+from app.schemas.job import JobRead
+from app.schemas.project import ProjectRead
+from app.schemas.tools import ToolAnalyzeBody, ToolPreviewBody, ToolProcessBody, ToolUploadRead
+from app.services import projects as projects_svc
 from app.services import tools as tools_svc
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 
-@router.post("/uploads", response_model=ToolUploadRead, status_code=201, summary="前處理工具：上傳檔案（暫存，不留存）")
+@router.get("/workspace", response_model=ProjectRead, summary="我的個人工作區（工具任務所在的專案）")
+async def workspace(session: DbSession, user: CurrentUser) -> ProjectRead:
+    return await ser.project(session, await projects_svc.personal(session, user))
+
+
+@router.get("/jobs", response_model=list[JobRead], summary="我的工具任務（前處理 / 分析）")
+async def my_jobs(session: DbSession, user: CurrentUser) -> list[JobRead]:
+    return await ser.jobs(session, await tools_svc.my_jobs(session, user))
+
+
+@router.post("/uploads", response_model=ToolUploadRead, status_code=201, summary="工具上傳（暫存，不留存）")
 async def upload(
     user: CurrentUser, file: UploadFile = File(...), data_type: str = Form(...), format: str | None = Form(None)
 ) -> ToolUploadRead:
-    """檔案只存在 DATA_ROOT/tools/ 的暫存資料夾，沒有資料庫紀錄；下載結果、按刪除或逾時（UPLOAD_TTL）即刪。"""
+    """檔案只存在 DATA_ROOT/tools/ 的暫存資料夾，沒有資料庫紀錄；建立任務時移進任務的 input（任務結束即刪），
+    或逾時（UPLOAD_TTL）即刪。"""
     return await tools_svc.create(user, file, data_type, format)
 
 
@@ -26,25 +41,31 @@ async def get_upload(upload_id: str, user: CurrentUser) -> ToolUploadRead:
     return tools_svc.get(upload_id, user)
 
 
-@router.post("/uploads/{upload_id}/preview", summary="抽樣套用步驟，回傳前後對照")
+@router.post("/uploads/{upload_id}/preview", summary="抽樣套用步驟，即時回傳前後對照")
 async def preview(upload_id: str, body: ToolPreviewBody, user: CurrentUser) -> dict:
     return await tools_svc.preview(
         upload_id, user, body.steps, sample=body.sample, spec=body.spec, task_type=body.task_type
     )
 
 
-@router.post("/uploads/{upload_id}/process", response_model=ToolProcessResult, summary="對整個檔案執行步驟並打包")
-async def process(upload_id: str, body: ToolProcessBody, user: CurrentUser) -> ToolProcessResult:
-    """同步執行（受 TOOL_PROCESS_TIMEOUT_S 限制），完成後回傳摘要與下載路徑；zip 內含處理後資料、
-    pipeline.json（可重播的步驟與狀態）與 summary.json。"""
-    return await tools_svc.process(upload_id, user, body.steps, spec=body.spec, task_type=body.task_type)
+@router.post("/uploads/{upload_id}/process", response_model=JobRead, status_code=202, summary="整檔前處理 → 任務")
+async def process(upload_id: str, body: ToolProcessBody, session: DbSession, user: CurrentUser) -> JobRead:
+    """建立 kind=preprocess 的任務（個人工作區、全域佇列）。完成後在任務頁下載 zip
+    （processed.* + pipeline.json + summary.json）；下載一次即刪，或到期（工具預設的 result_ttl_hours）自動刪。"""
+    job = await tools_svc.start_preprocess_job(
+        session, upload_id, user, steps=body.steps, spec=body.spec, task_type=body.task_type, name=body.name
+    )
+    return await ser.job(session, job)
 
 
-@router.get("/uploads/{upload_id}/download", summary="下載結果 zip（下載後即刪除整個暫存資料夾）")
-async def download(upload_id: str, user: CurrentUser, background: BackgroundTasks) -> FileResponse:
-    zip_path, filename = tools_svc.result_file(upload_id, user)
-    background.add_task(tools_svc.remove, upload_id)
-    return FileResponse(zip_path, media_type="application/zip", filename=filename)
+@router.post("/uploads/{upload_id}/analyze", response_model=JobRead, status_code=202, summary="資料分析 → 任務")
+async def analyze(upload_id: str, body: ToolAnalyzeBody, session: DbSession, user: CurrentUser) -> JobRead:
+    """kind=analysis：tabular_profile（相關性、共線性 VIF、對目標的解釋力、建議）或 image_quality
+    （各群組的 IQA 指標、最會飄的指標、embedding 相似度）。報告存在任務結果，不保留原始資料。"""
+    job = await tools_svc.start_analysis_job(
+        session, upload_id, user, analysis=body.analysis, params=body.params, name=body.name
+    )
+    return await ser.job(session, job)
 
 
 @router.delete("/uploads/{upload_id}", response_model=Ok, summary="立即刪除暫存檔")

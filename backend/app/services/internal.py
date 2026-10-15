@@ -53,7 +53,7 @@ async def job_spec(session: AsyncSession, job: Job) -> JobSpec:
         job_id=job.id,
         kind=job.kind,
         project_slug=project.slug,
-        data_type=project.data_type,
+        data_type=(job.input or {}).get("data_type") or project.data_type,
         task_type=job.task_type,
         mode=job.mode,
         model_family=job.model_family,

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -83,16 +84,23 @@ async def download_logs(jv: JobView) -> FileResponse:
     return FileResponse(path, media_type="text/plain", filename=f"job-{jv[0].id}.log")
 
 
-@router.get("/{job_id}/download", summary="推論輸出下載")
-async def download_output(jv: JobView) -> FileResponse:
+@router.get("/{job_id}/download", summary="推論輸出 / 前處理結果下載（前處理結果下載後即刪除）")
+async def download_output(jv: JobView, background: BackgroundTasks) -> FileResponse:
     job = jv[0]
     rel = (job.result or {}).get("output_path")
     if not rel:
         raise not_found("OUTPUT_NOT_FOUND", "此任務沒有可下載的輸出")
     path = get_storage().abs(rel)
     if not path.is_file():
-        raise not_found("OUTPUT_NOT_FOUND", "輸出檔不存在")
-    return FileResponse(path, filename=path.name)
+        gone = (job.result or {}).get("downloaded_at") or (job.result or {}).get("expired_at")
+        raise not_found("OUTPUT_NOT_FOUND", "輸出檔已下載並刪除" if gone else "輸出檔不存在")
+    if job.kind == "preprocess" and (job.input or {}).get("tool"):
+        background.add_task(jobs_svc.mark_output_downloaded, job.id)
+    filename = path.name
+    if job.kind == "preprocess":
+        stem = Path(str((job.input or {}).get("original_filename") or "data")).stem or "data"
+        filename = f"{stem}-preprocessed.zip"
+    return FileResponse(path, filename=filename)
 
 
 @router.get("/{job_id}/events", summary="SSE：status / progress / metric / log / end")

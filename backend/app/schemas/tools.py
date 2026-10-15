@@ -26,14 +26,17 @@ class ToolProcessBody(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     spec: dict[str, Any] = Field(default_factory=dict)
     task_type: str | None = None
+    name: str | None = Field(default=None, max_length=120)
 
 
 class ToolPreviewBody(ToolProcessBody):
     sample: int = Field(default=5, ge=1, le=50)
 
 
-class ToolProcessResult(BaseModel):
-    id: str
-    summary: dict[str, Any]
-    zip_size_bytes: int
-    download_path: str  # /tools/uploads/{id}/download — the file is deleted right after the download
+class ToolAnalyzeBody(BaseModel):
+    """Start an analysis job on a tool upload. tabular_profile: correlations, collinearity (VIF), relevance to the
+    target, recommendations. image_quality: IQA metrics per image, drift across groups (folders), embeddings."""
+
+    analysis: Literal["tabular_profile", "image_quality"]
+    params: dict[str, Any] = Field(default_factory=dict)
+    name: str | None = Field(default=None, max_length=120)

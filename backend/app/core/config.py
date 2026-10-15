@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     memory_watchdog: bool = True  # kill a job that exceeds its memory grant when the runner cannot enforce it
     gpu_busy_threshold: float = 0.10  # exclusive jobs: do not start on a GPU whose memory is already >10% used
     gpu_reserve_mb: int = 512  # VRAM kept free per GPU when packing shared jobs (driver / context overhead)
+    gpu_warmup_s: int = 120  # a freshly started job counts as using its requested VRAM until measured, this long
     gpu_reset_command: str | None = None  # e.g. "sudo -n nvidia-smi --gpu-reset -i {index}" (needs sudoers entry)
     usage_sample_interval_s: int = 30
     usage_retention_days: int = 90

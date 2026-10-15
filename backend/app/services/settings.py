@@ -8,11 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import SystemSetting
-from app.schemas.settings import JobDefaults, ResourcePool
+from app.schemas.settings import JobDefaults, ResourcePool, ToolDefaults
 from app.services import audit
 
 RESOURCE_POOL = "resource_pool"
 JOB_DEFAULTS = "job_defaults"
+TOOL_DEFAULTS = "tool_defaults"
 _cache: dict[str, tuple[float, dict]] = {}
 CACHE_TTL = 10.0
 
@@ -87,6 +88,23 @@ async def get_job_defaults(session: AsyncSession) -> JobDefaults:
 async def set_job_defaults(session: AsyncSession, d: JobDefaults, actor_id: int) -> JobDefaults:
     await _set(session, JOB_DEFAULTS, d.model_dump(), actor_id)
     await audit.record(session, actor_id, "settings.job_defaults.update", "settings", None, d.model_dump())
+    await session.commit()
+    return d
+
+
+async def get_tool_defaults(session: AsyncSession) -> ToolDefaults:
+    v = await _get(session, TOOL_DEFAULTS)
+    if v is None:
+        d = ToolDefaults()
+        await _set(session, TOOL_DEFAULTS, d.model_dump(), None)
+        await session.commit()
+        return d
+    return ToolDefaults.model_validate(v)
+
+
+async def set_tool_defaults(session: AsyncSession, d: ToolDefaults, actor_id: int) -> ToolDefaults:
+    await _set(session, TOOL_DEFAULTS, d.model_dump(), actor_id)
+    await audit.record(session, actor_id, "settings.tool_defaults.update", "settings", None, d.model_dump())
     await session.commit()
     return d
 

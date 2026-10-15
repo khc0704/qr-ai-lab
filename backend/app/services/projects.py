@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy import update as sql_update
@@ -10,8 +12,55 @@ from app.db.base import utcnow
 from app.models import Artifact, DataSource, Issue, Job, Project, ProjectMember, ProjectRequest, Upload, User
 from app.schemas.project import MemberAdd, MemberUpdate, ProjectUpdate, ProjectUsage, QuotaUpdate
 from app.services import audit
+from app.services import settings as settings_svc
 from app.services import users as users_svc
 from app.storage.local import get_storage
+
+PERSONAL_PREFIX = "ws-"
+
+
+def personal_slug(username: str) -> str:
+    base = re.sub(r"[^a-z0-9-]+", "-", username.lower()).strip("-") or "user"
+    return (PERSONAL_PREFIX + base)[:60]
+
+
+async def personal(session: AsyncSession, user: User) -> Project:
+    """The user's personal workspace: created on first use with the admin's ToolDefaults quota. It hosts the
+    preprocessing / analysis tool jobs so they go through the same queue, limits, logs and cleanup as any job."""
+    p = (
+        await session.execute(select(Project).where(Project.owner_id == user.id, Project.kind == "personal"))
+    ).scalar_one_or_none()
+    if p is not None:
+        return p
+    d = await settings_svc.get_tool_defaults(session)
+    slug = personal_slug(user.username)
+    if (await session.execute(select(Project).where(Project.slug == slug))).scalar_one_or_none():
+        slug = f"{slug}-{user.id}"
+    p = Project(
+        slug=slug,
+        name=f"個人工作區（{user.display_name or user.username}）",
+        description="資料前處理與資料分析服務的任務在這裡排隊執行；配額由管理員的「工具預設」決定，可在專案配額頁調整。",
+        data_type="TABULAR",
+        task_type="classification",
+        kind="personal",
+        owner_id=user.id,
+        gpu_limit=d.gpu_limit,
+        cpu_limit=d.cpu_limit,
+        memory_limit_mb=d.memory_limit_mb,
+        storage_quota_mb=d.storage_quota_mb,
+        max_concurrent_jobs=d.max_concurrent_jobs,
+        approved_at=utcnow(),
+    )
+    session.add(p)
+    await session.flush()
+    session.add(ProjectMember(project_id=p.id, user_id=user.id, role="owner", added_by_id=user.id))
+    get_storage().ensure(get_storage().project_dir(p.slug))
+    await audit.record(session, user.id, "project.personal.create", "project", p.id, {"slug": p.slug})
+    await session.commit()
+    # commit expired the instance: reload it with its eager relationships (members, owner) for the serializer
+    return (
+        await session.execute(select(Project).where(Project.id == p.id).execution_options(populate_existing=True))
+    ).scalar_one()
 
 
 async def get_by_slug(session: AsyncSession, slug: str) -> Project:
@@ -28,12 +77,16 @@ async def get(session: AsyncSession, project_id: int) -> Project:
     return p
 
 
-async def list_for_user(session: AsyncSession, user: User, include_archived: bool = False) -> list[Project]:
+async def list_for_user(
+    session: AsyncSession, user: User, include_archived: bool = False, include_personal: bool = False
+) -> list[Project]:
     stmt = select(Project)
     if not user.is_admin:
         stmt = stmt.join(ProjectMember, ProjectMember.project_id == Project.id).where(ProjectMember.user_id == user.id)
     if not include_archived:
         stmt = stmt.where(Project.status == "active")
+    if not include_personal:
+        stmt = stmt.where(Project.kind == "standard")
     rows = (await session.execute(stmt.order_by(Project.created_at.desc()))).scalars().unique().all()
     return list(rows)
 

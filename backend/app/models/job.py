@@ -25,7 +25,7 @@ class Job(IdMixin, TimestampMixin, Base):
     )
 
     project_id: Mapped[int] = mapped_column(BigInt, ForeignKey("projects.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # train | inference
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # train | inference | preprocess | analysis
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
     queue_rank: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

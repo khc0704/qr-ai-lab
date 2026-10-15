@@ -13,6 +13,18 @@ class ResourcePool(BaseModel):
     gpu_share: bool = True
 
 
+class ToolDefaults(BaseModel):
+    """Quota of every user's personal workspace (the project that hosts preprocessing / analysis tool jobs) and
+    how long a finished preprocessing result stays downloadable."""
+
+    gpu_limit: int = Field(default=0, ge=0, le=64)
+    cpu_limit: float = Field(default=2, ge=0.5)
+    memory_limit_mb: int = Field(default=4096, ge=256)
+    storage_quota_mb: int = Field(default=2048, ge=64)
+    max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
+    result_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
+
+
 class JobDefaults(BaseModel):
     timeout_minutes: int = Field(default=240, ge=1)
     upload_max_mb: int = Field(default=2048, ge=1)

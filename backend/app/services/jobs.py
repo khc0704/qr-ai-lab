@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -292,6 +293,130 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
     await session.commit()
     await get_bus().publish(job.id, "status", {"status": "queued", "queue_rank": job.queue_rank})
     return await get(session, job.id)
+
+
+TOOL_KINDS = ("preprocess", "analysis")
+
+
+async def create_tool_job(
+    session: AsyncSession,
+    actor: User,
+    project: Project,
+    *,
+    kind: str,
+    name: str,
+    data_type: str,
+    src_file: Path,
+    original_filename: str,
+    fmt: str,
+    spec: dict[str, Any],
+    config: dict[str, Any],
+    requested_gpu: int = 0,
+    requested_cpu: float | None = None,
+    requested_memory_mb: int | None = None,
+    requested_gpu_memory_mb: int | None = None,
+    timeout_minutes: int | None = None,
+) -> Job:
+    """A preprocessing / analysis job in the user's personal workspace. The uploaded file is moved into the job's
+    input dir (deleted when the job ends, like every upload); resources default to the workspace quota."""
+    if kind not in TOOL_KINDS:
+        raise bad_request("BAD_JOB_KIND", f"未知的工具任務 {kind}")
+    if project.status != "active":
+        raise conflict("PROJECT_ARCHIVED", "個人工作區已封存")
+    defaults = await settings_svc.get_job_defaults(session)
+    cpu = min(float(project.cpu_limit), requested_cpu or min(2.0, float(project.cpu_limit)))
+    mem = min(project.memory_limit_mb, requested_memory_mb or min(4096, project.memory_limit_mb))
+    gpu = min(project.gpu_limit, requested_gpu)
+    job = Job(
+        project_id=project.id,
+        kind=kind,
+        name=name[:120],
+        status="queued",
+        queue_rank=await _next_rank(session),
+        requested_gpu=gpu,
+        requested_cpu=cpu,
+        requested_memory_mb=mem,
+        requested_gpu_memory_mb=requested_gpu_memory_mb if gpu > 0 else None,
+        timeout_minutes=timeout_minutes or project.default_job_timeout_minutes or defaults.timeout_minutes,
+        task_type=None,
+        mode=None,
+        model_family=None,
+        input={"kind": "upload", "format": fmt, "spec": spec, "data_type": data_type, "tool": True},
+        config=config or None,
+        created_by_id=actor.id,
+    )
+    session.add(job)
+    await session.flush()
+    storage = get_storage()
+    job.output_path = f"projects/{project.slug}/jobs/{job.id}"
+    job.log_path = f"{job.output_path}/logs/job.log"
+    dst_dir = storage.ensure(storage.job_input_dir(job.id))
+    dst = dst_dir / f"data{src_file.suffix.lower()}"
+    shutil.move(str(src_file), str(dst))
+    job.input = {
+        **job.input,
+        "original_filename": original_filename[:255],
+        "size_bytes": dst.stat().st_size,
+        "file": dst.name,
+    }
+    storage.ensure(storage.job_dir(project.slug, job.id) / "logs")
+    await session.commit()
+    await get_bus().publish(job.id, "status", {"status": "queued", "queue_rank": job.queue_rank})
+    return await get(session, job.id)
+
+
+def output_file(job: Job) -> Path | None:
+    rel = (job.result or {}).get("output_path")
+    if not rel:
+        return None
+    p = get_storage().abs(rel)
+    return p if p.is_file() else None
+
+
+async def mark_output_downloaded(job_id: int) -> None:
+    """Tool results are handed over once: after the download the file is removed and the job remembers it."""
+    from app.db.session import get_sessionmaker
+
+    async with get_sessionmaker()() as session:
+        job = await session.get(Job, job_id)
+        if job is None:
+            return
+        p = output_file(job)
+        if p is not None:
+            p.unlink(missing_ok=True)
+        job.result = {**(job.result or {}), "downloaded_at": utcnow().isoformat()}
+        await projects_svc.recompute_storage(session, job.project)
+        await session.commit()
+
+
+async def expire_tool_outputs(session: AsyncSession, ttl_hours: int) -> int:
+    """Preprocessing results nobody downloaded are deleted after ttl_hours (the job row and log stay)."""
+    cutoff = utcnow() - timedelta(hours=ttl_hours)
+    rows = (
+        (
+            await session.execute(
+                select(Job).where(
+                    Job.kind == "preprocess",
+                    Job.status.in_(("succeeded", "failed", "cancelled")),
+                    Job.finished_at < cutoff,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    n = 0
+    for job in rows:
+        p = output_file(job)
+        if p is None or (job.result or {}).get("expired_at"):
+            continue
+        p.unlink(missing_ok=True)
+        job.result = {**(job.result or {}), "expired_at": utcnow().isoformat()}
+        await projects_svc.recompute_storage(session, job.project)
+        n += 1
+    if n:
+        await session.commit()
+    return n
 
 
 async def cancel(

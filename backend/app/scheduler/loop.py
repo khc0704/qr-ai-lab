@@ -300,7 +300,13 @@ class Scheduler:
             return
         running_jobs = [j for jobs in (await node_svc.gpu_jobs_map(session)).values() for j in jobs]
         readings = node_svc.detect_gpus() if pool.gpu_indices else []
-        gpu_slots = gpu_svc.slots_from(pool.gpu_indices, running_jobs, readings)
+        measured: dict[int, int] = {}
+        if readings and running_jobs:
+            pids_by_job = {jid: set(self.runner.pids(a.handle)) for jid, a in self.active.items()}
+            measured = gpu_svc.measured_by_job(pool.gpu_indices, pids_by_job)
+        gpu_slots = gpu_svc.slots_from(
+            pool.gpu_indices, running_jobs, readings, measured=measured, warmup_s=self.settings.gpu_warmup_s
+        )
         used_cpus = await node_svc.cpu_core_map(session)
         free_cores = [c for c in pool_cores(pool.cpu_cores) if c not in used_cpus]
         free_cpu = pool.cpu_cores - alloc.cpu
@@ -375,7 +381,8 @@ class Scheduler:
             + (
                 "exclusive job"
                 if s.exclusive
-                else f"{s.used_mb}/{s.total_mb} MB used, {s.reserved_mb} MB reserved by {len(s.jobs)} job(s)"
+                else f"{s.used_mb}/{s.total_mb} MB in use (ours {s.measured_mb} MB measured, "
+                f"{s.pending_mb} MB still warming up) by {len(s.jobs)} job(s)"
                 if s.total_mb
                 else f"{len(s.jobs)} job(s)"
             )
@@ -482,11 +489,14 @@ class Scheduler:
                     removed += 1
         purged_samples = await usage_svc.purge(session, self.settings.usage_retention_days)
         purged_tools = tools_svc.purge_expired()
-        if purged or removed or purged_samples or purged_tools:
+        ttl = (await settings_svc.get_tool_defaults(session)).result_ttl_hours
+        expired_results = await jobs_svc.expire_tool_outputs(session, ttl)
+        if purged or removed or purged_samples or purged_tools or expired_results:
             log.info(
                 "cleanup",
                 purged_uploads=purged,
                 removed_input_dirs=removed,
                 purged_samples=purged_samples,
                 purged_tool_uploads=purged_tools,
+                expired_tool_results=expired_results,
             )

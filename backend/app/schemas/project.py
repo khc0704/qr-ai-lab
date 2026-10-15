@@ -32,6 +32,7 @@ class ProjectRead(ORMModel):
     data_type: str
     task_type: str
     status: str
+    kind: str = "standard"
     owner: UserRead
     gpu_limit: int
     cpu_limit: float

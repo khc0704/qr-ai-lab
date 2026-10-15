@@ -1,7 +1,8 @@
-"""Standalone preprocessing tool: upload → preview → process whole file → download a zip. Nothing persists.
+"""Standalone data tools (no project needed): upload → preview on a sample (real time) → run the heavy part as a
+job in the user's personal workspace (queue, limits, log, cleanup like every other job).
 
-Files live under DATA_ROOT/tools/<id>/ (data.<ext>, meta.json, out/, result.zip) with no database row; the folder is
-removed after the download, on an explicit delete, or by the scheduler's cleanup once it expires.
+Uploads live under DATA_ROOT/tools/<id>/ (data.<ext> + meta.json) with no database row until a job claims the
+file (moved into the job's input dir, deleted when the job ends) or the upload expires.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ import asyncio
 import json
 import secrets
 import shutil
-import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,14 +18,16 @@ from typing import Any
 import aiofiles
 from fastapi import UploadFile
 from qrlab_preprocess.preview import run_preview
-from qrlab_preprocess.process import run_full
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import bad_request, not_found
 from app.core.logging import get_logger
 from app.db.base import utcnow
-from app.models import User
-from app.schemas.tools import ToolProcessResult, ToolUploadRead
+from app.models import Job, User
+from app.schemas.tools import ToolUploadRead
+from app.services import jobs as jobs_svc
+from app.services import projects as projects_svc
 from app.services.uploads import EXT_FORMAT, detect_spec
 from app.storage.local import get_storage
 
@@ -39,6 +41,7 @@ FORMATS_BY_TYPE: dict[str, tuple[str, ...]] = {
     "IMAGE": ("image_folder", "image"),
 }
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
+ANALYSES: dict[str, tuple[str, ...]] = {"tabular_profile": ("TABULAR",), "image_quality": ("IMAGE",)}
 
 
 def _dir(upload_id: str) -> Path:
@@ -54,7 +57,7 @@ def _meta_path(upload_id: str) -> Path:
 def _read(upload_id: str, user: User) -> tuple[dict[str, Any], Path]:
     mp = _meta_path(upload_id)
     if not mp.exists():
-        raise not_found("TOOL_UPLOAD_NOT_FOUND", "找不到上傳（可能已下載或過期而刪除）")
+        raise not_found("TOOL_UPLOAD_NOT_FOUND", "找不到上傳（可能已建立任務或過期而刪除）")
     meta = json.loads(mp.read_text(encoding="utf-8"))
     if meta.get("owner_id") != user.id and not user.is_admin:
         raise not_found("TOOL_UPLOAD_NOT_FOUND", "找不到上傳")
@@ -118,9 +121,7 @@ async def create(user: User, file: UploadFile, data_type: str, fmt: str | None) 
         "file": target.name,
         "size_bytes": size,
         "format": fmt,
-        "detected_spec": detect_spec(target, fmt if fmt != "image" else "csv")
-        if fmt != "image"
-        else {"image_count": 1},
+        "detected_spec": detect_spec(target, fmt) if fmt != "image" else {"image_count": 1},
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=s.upload_ttl_minutes)).isoformat(),
     }
@@ -136,6 +137,7 @@ def get(upload_id: str, user: User) -> ToolUploadRead:
 async def preview(
     upload_id: str, user: User, steps: list[dict[str, Any]], *, sample: int, spec: dict[str, Any], task_type: str | None
 ) -> dict[str, Any]:
+    """Real-time preview on a bounded sample (the full run is a job)."""
     meta, path = _read(upload_id, user)
     timeout = get_settings().preview_timeout_s
     try:
@@ -160,65 +162,91 @@ async def preview(
         raise bad_request("PREVIEW_FAILED", f"無法預覽：{type(e).__name__}: {e}"[:500]) from e
 
 
-async def process(
-    upload_id: str, user: User, steps: list[dict[str, Any]], *, spec: dict[str, Any], task_type: str | None
-) -> ToolProcessResult:
+async def start_preprocess_job(
+    session: AsyncSession,
+    upload_id: str,
+    user: User,
+    *,
+    steps: list[dict[str, Any]],
+    spec: dict[str, Any],
+    task_type: str | None,
+    name: str | None,
+) -> Job:
+    """Whole-file preprocessing as a job in the personal workspace; the upload folder is consumed."""
+    import qrlab_preprocess
+
     meta, path = _read(upload_id, user)
-    s = get_settings()
-    out_dir = path.parent / "out"
-    shutil.rmtree(out_dir, ignore_errors=True)
     try:
-        summary = await asyncio.wait_for(
-            asyncio.to_thread(
-                run_full,
-                meta["data_type"],
-                path,
-                meta["format"],
-                steps,
-                out_dir,
-                spec={**(meta.get("detected_spec") or {}), **spec},
-                task_type=task_type,
-            ),
-            timeout=s.tool_process_timeout_s,
-        )
-    except TimeoutError as e:
-        raise bad_request("PROCESS_TIMEOUT", f"處理超過 {s.tool_process_timeout_s:g} 秒；請縮小資料或減少步驟") from e
+        qrlab_preprocess.validate(meta["data_type"], task_type, steps)
     except ValueError as e:
         raise bad_request("PREPROCESS_INVALID", str(e)) from e
-    except Exception as e:
-        raise bad_request("PROCESS_FAILED", f"處理失敗：{type(e).__name__}: {e}"[:500]) from e
-    zip_path = path.parent / "result.zip"
-    await asyncio.to_thread(_zip_dir, out_dir, zip_path)
-    shutil.rmtree(out_dir, ignore_errors=True)
-    meta["result"] = {"zip": zip_path.name, "summary": summary, "size_bytes": zip_path.stat().st_size}
-    _meta_path(upload_id).write_text(json.dumps(meta, ensure_ascii=False, default=str), encoding="utf-8")
-    log.info("tool processed", upload_id=upload_id, data_type=meta["data_type"], steps=len(steps), user=user.username)
-    return ToolProcessResult(
-        id=upload_id,
-        summary=summary,
-        zip_size_bytes=zip_path.stat().st_size,
-        download_path=f"/tools/uploads/{upload_id}/download",
+    project = await projects_svc.personal(session, user)
+    full_spec = {**(meta.get("detected_spec") or {}), **spec, "preprocess": steps}
+    job = await jobs_svc.create_tool_job(
+        session,
+        user,
+        project,
+        kind="preprocess",
+        name=name or f"前處理：{meta['original_filename']}",
+        data_type=meta["data_type"],
+        src_file=path,
+        original_filename=meta["original_filename"],
+        fmt=meta["format"],
+        spec=full_spec,
+        config={"steps": steps, "task_type": task_type, "data_type": meta["data_type"]},
     )
+    remove(upload_id)
+    log.info("tool preprocess job", job_id=job.id, data_type=meta["data_type"], steps=len(steps), user=user.username)
+    return job
 
 
-def _zip_dir(src: Path, zip_path: Path) -> None:
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for p in sorted(src.rglob("*")):
-            if p.is_file():
-                z.write(p, p.relative_to(src).as_posix())
+async def start_analysis_job(
+    session: AsyncSession, upload_id: str, user: User, *, analysis: str, params: dict[str, Any], name: str | None
+) -> Job:
+    meta, path = _read(upload_id, user)
+    allowed = ANALYSES.get(analysis)
+    if not allowed:
+        raise bad_request("BAD_ANALYSIS", f"未知的分析 {analysis}")
+    if meta["data_type"] not in allowed:
+        raise bad_request(
+            "ANALYSIS_DATA_TYPE", f"{analysis} 只適用於 {', '.join(allowed)}，這個檔案是 {meta['data_type']}"
+        )
+    project = await projects_svc.personal(session, user)
+    config: dict[str, Any] = {"analysis": analysis, "data_type": meta["data_type"], **params}
+    requested_gpu = 0
+    if analysis == "image_quality" and params.get("embedding") == "dino":
+        if project.gpu_limit > 0:
+            requested_gpu = 1
+        else:
+            config["embedding"] = "metrics"
+            config["note"] = "個人工作區沒有 GPU 配額，embedding 改用 IQA 指標向量"
+    job = await jobs_svc.create_tool_job(
+        session,
+        user,
+        project,
+        kind="analysis",
+        name=name or f"分析：{meta['original_filename']}",
+        data_type=meta["data_type"],
+        src_file=path,
+        original_filename=meta["original_filename"],
+        fmt=meta["format"],
+        spec={
+            **(meta.get("detected_spec") or {}),
+            **{k: v for k, v in params.items() if isinstance(v, (str, int, float))},
+        },
+        config=config,
+        requested_gpu=requested_gpu,
+        requested_gpu_memory_mb=4096 if requested_gpu else None,
+    )
+    remove(upload_id)
+    log.info("tool analysis job", job_id=job.id, analysis=analysis, user=user.username)
+    return job
 
 
-def result_file(upload_id: str, user: User) -> tuple[Path, str]:
-    """(zip path, download filename). The caller removes the folder once the response is sent."""
-    meta, _ = _read(upload_id, user)
-    res = meta.get("result")
-    if not res:
-        raise not_found("TOOL_RESULT_NOT_FOUND", "尚未處理")
-    zip_path = _dir(upload_id) / res["zip"]
-    if not zip_path.exists():
-        raise not_found("TOOL_RESULT_NOT_FOUND", "結果已下載並刪除")
-    stem = Path(meta["original_filename"]).stem or "data"
-    return zip_path, f"{stem}-preprocessed.zip"
+async def my_jobs(session: AsyncSession, user: User, limit: int = 50) -> list[Job]:
+    project = await projects_svc.personal(session, user)
+    rows, _ = await jobs_svc.list_jobs(session, project_id=project.id, page=1, page_size=limit)
+    return rows
 
 
 def purge_expired() -> int:

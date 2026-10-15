@@ -19,6 +19,8 @@ class Project(IdMixin, TimestampMixin, Base):
     data_type: Mapped[str] = mapped_column(String(32), nullable=False)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)  # active | archived
+    # standard = approved through a request; personal = one per user, hosts the preprocessing / analysis tool jobs
+    kind: Mapped[str] = mapped_column(String(16), default="standard", nullable=False)
     owner_id: Mapped[int] = mapped_column(BigInt, ForeignKey("users.id"), nullable=False, index=True)
     request_id: Mapped[int | None] = mapped_column(BigInt, ForeignKey("project_requests.id"), unique=True)
     gpu_limit: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)

@@ -147,3 +147,66 @@ async def test_train_and_infer_through_real_trainer(client, admin, user, superad
     finally:
         server.should_exit = True
         await serve_task
+
+
+async def test_tool_jobs_through_real_trainer(client, user, superadmin):
+    """Preprocessing and tabular exploration as jobs in the personal workspace, run by the real trainer."""
+    settings = get_settings()
+    trainer_dir = settings.trainer_dir.resolve()
+    if not (trainer_dir / "trainer" / "runtime.py").exists():
+        pytest.skip("trainer checkout not found")
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="warning"))
+    serve_task = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.05)
+        settings = settings.model_copy(update={"internal_backend_url": f"http://127.0.0.1:{port}"})
+        sched = Scheduler(runner=SubprocessRunner(trainer_dir), settings=settings)
+        sched.sampling = False
+        up = await client.post(
+            "/api/v1/tools/uploads",
+            files={"file": ("yield.csv", _csv(), "text/csv")},
+            data={"data_type": "TABULAR"},
+            headers=user,
+        )
+        assert up.status_code == 201, up.text
+        r = await client.post(
+            f"/api/v1/tools/uploads/{up.json()['id']}/process",
+            json={
+                "steps": [{"op": "tabular.impute", "params": {"strategy": "median"}}, {"op": "tabular.standardize"}],
+                "spec": {"target": "yield_pct"},
+            },
+            headers=user,
+        )
+        assert r.status_code == 202, r.text
+        pre = await _wait_terminal(client, r.json()["id"], user, sched)
+        assert pre["status"] == "succeeded", pre.get("error_message")
+        assert pre["result"]["output_path"].endswith("preprocessed.zip") and pre["result"]["after"]["rows"] == 300
+        logs = (await client.get(f"/api/v1/jobs/{pre['id']}/logs", headers=user)).json()["lines"]
+        assert any("limits: cpu=" in line for line in logs), logs[:20]
+        dl = await client.get(f"/api/v1/jobs/{pre['id']}/download", headers=user)
+        assert dl.status_code == 200 and dl.content[:2] == b"PK"
+
+        up = await client.post(
+            "/api/v1/tools/uploads",
+            files={"file": ("yield.csv", _csv(), "text/csv")},
+            data={"data_type": "TABULAR"},
+            headers=user,
+        )
+        r = await client.post(
+            f"/api/v1/tools/uploads/{up.json()['id']}/analyze",
+            json={"analysis": "tabular_profile", "params": {"target": "yield_pct"}},
+            headers=user,
+        )
+        assert r.status_code == 202, r.text
+        ana = await _wait_terminal(client, r.json()["id"], user, sched)
+        assert ana["status"] == "succeeded", ana.get("error_message")
+        res = ana["result"]
+        assert res["analysis"] == "tabular_profile" and res["relevance"]["features"][0]["name"] in ("x1", "x2")
+        assert res["relevance"]["model"]["holdout_score"] > 0.8 and res["recommendations"]
+        arts = (await client.get(f"/api/v1/jobs/{ana['id']}/artifacts", headers=user)).json()
+        assert [a["kind"] for a in arts] == ["report"]
+    finally:
+        server.should_exit = True
+        await serve_task

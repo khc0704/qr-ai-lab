@@ -65,15 +65,29 @@ async def sample(session: AsyncSession, job_pids: dict[int, list[int]] | None = 
     }
     running = (await session.execute(select(Job).where(Job.status.in_(("scheduled", "running"))))).scalars().all()
     projects: dict[str, dict[str, float]] = {}
+    vram: dict[int, int] = {}
+    if job_pids and gpus:
+        from app.services.gpu import measured_by_job
+
+        vram = measured_by_job([g.index for g in pool_gpus], {jid: set(p) for jid, p in job_pids.items()})
     for j in running:
         p = projects.setdefault(
             str(j.project_id),
-            {"gpu": 0, "cpu": 0.0, "memory_mb": 0, "running_jobs": 0, "cpu_actual": 0.0, "mem_actual_mb": 0},
+            {
+                "gpu": 0,
+                "cpu": 0.0,
+                "memory_mb": 0,
+                "running_jobs": 0,
+                "cpu_actual": 0.0,
+                "mem_actual_mb": 0,
+                "gpu_mem_actual_mb": 0,
+            },
         )
         p["gpu"] += j.requested_gpu
         p["cpu"] += float(j.requested_cpu)
         p["memory_mb"] += j.requested_memory_mb
         p["running_jobs"] += 1
+        p["gpu_mem_actual_mb"] += vram.get(j.id, 0)
         if job_pids and j.id in job_pids:
             c, m = _proc_usage(job_pids[j.id])
             p["cpu_actual"] += c
@@ -208,6 +222,7 @@ async def history(session: AsyncSession, range_: str, sample_interval_s: int) ->
             out[f"{metric}_of_node"] = round(avg / totals[node_key] * 100, 1) if totals[node_key] else 0.0
         out["cpu_actual_avg"] = round(acc.get("cpu_actual", 0.0) / window_s, 3)
         out["mem_actual_avg_mb"] = round(acc.get("mem_actual_mb", 0.0) / window_s, 1)
+        out["gpu_mem_actual_avg_mb"] = round(acc.get("gpu_mem_actual_mb", 0.0) / window_s, 1)
         out["job_seconds"] = round(acc.get("running_jobs", 0.0), 0)
         project_share[pid] = out
     return UsageHistory(

@@ -21,7 +21,7 @@ from app.schemas.admin import (
 )
 from app.schemas.common import Ok, Page
 from app.schemas.job import JobRead, MoveBody, OrderBody, StopBody
-from app.schemas.settings import JobDefaults, ResourcePool
+from app.schemas.settings import JobDefaults, ResourcePool, ToolDefaults
 from app.services import (
     audit as audit_svc,
 )
@@ -125,6 +125,17 @@ async def get_job_defaults(session: DbSession, _: AdminUser) -> JobDefaults:
 @router.put("/settings/job-defaults", response_model=JobDefaults, summary="Job 預設值（superadmin）")
 async def put_job_defaults(body: JobDefaults, session: DbSession, admin: PoolManager) -> JobDefaults:
     return await settings_svc.set_job_defaults(session, body, admin.id)
+
+
+@router.get("/settings/tool-defaults", response_model=ToolDefaults, summary="個人工作區（工具任務）的預設配額")
+async def get_tool_defaults(session: DbSession, _: AdminUser) -> ToolDefaults:
+    return await settings_svc.get_tool_defaults(session)
+
+
+@router.put("/settings/tool-defaults", response_model=ToolDefaults, summary="個人工作區預設配額（superadmin）")
+async def put_tool_defaults(body: ToolDefaults, session: DbSession, admin: PoolManager) -> ToolDefaults:
+    """影響之後建立的個人工作區；已存在的工作區在專案配額頁個別調整。"""
+    return await settings_svc.set_tool_defaults(session, body, admin.id)
 
 
 @router.get("/queue", response_model=QueueRead, summary="執行中 + 等待中（含等待原因）")

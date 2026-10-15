@@ -31,21 +31,44 @@ def test_plan_exclusive_skips_busy_and_occupied_gpus():
     assert gpu_svc.plan(_job(1, 2, None), slots, share=True, busy_threshold=0.1, reserve_mb=512) == []
 
 
-def test_plan_shares_by_free_vram_best_fit():
-    running = [Job(id=9, requested_gpu=1, requested_gpu_memory_mb=8000, assigned_gpus=[0])]
-    slots = gpu_svc.slots_from([0, 1], running, _readings(3000, 0))
-    # GPU 0: 24000 - max(3000, 8000) - 512 = 15488 free; GPU 1: 23488 free → best fit picks GPU 0 for 10000 MB
+def test_plan_uses_measured_vram_with_a_warm_up_for_fresh_jobs():
+    from datetime import timedelta
+
+    from app.db.base import utcnow
+
+    now = utcnow()
+    fresh = Job(id=9, requested_gpu=1, requested_gpu_memory_mb=8000, assigned_gpus=[0], started_at=now)
+    # GPU 0: driver sees 3000 MB (someone else + the fresh job's first allocations); the fresh job measured 1000 MB
+    slots = gpu_svc.slots_from([0, 1], [fresh], _readings(3000, 0), measured={9: 1000}, now=now, warmup_s=120)
+    s0 = slots[0]
+    assert s0.measured_mb == 1000 and s0.pending_mb == 7000 and s0.reserved_mb == 8000
+    # free on GPU 0 = 24000 − 3000 − 7000 − 512 = 13488 → a 10000 MB job fits there (best fit), 20000 goes to GPU 1
     assert gpu_svc.plan(_job(1, 1, 10000), slots, share=True, busy_threshold=0.1, reserve_mb=512) == [0]
-    # 20000 MB only fits GPU 1
     assert gpu_svc.plan(_job(2, 1, 20000), slots, share=True, busy_threshold=0.1, reserve_mb=512) == [1]
-    # an exclusive job cannot take GPU 0 (shared job there) but GPU 1 is empty
+    # after the warm-up only the driver reading counts: the job settled at 2500 MB, so GPU 0 has 20488 MB free
+    old = Job(
+        id=9, requested_gpu=1, requested_gpu_memory_mb=8000, assigned_gpus=[0], started_at=now - timedelta(minutes=10)
+    )
+    slots = gpu_svc.slots_from([0, 1], [old], _readings(3000, 0), measured={9: 2500}, now=now)
+    assert slots[0].pending_mb == 0 and slots[0].free_mb(512) == 20488
+    assert gpu_svc.plan(_job(2, 1, 20000), slots, share=True, busy_threshold=0.1, reserve_mb=512) == [0]
+    # an exclusive job cannot take GPU 0 (a job is there) but GPU 1 is empty
     assert gpu_svc.plan(_job(3, 1, None), slots, share=True, busy_threshold=0.1, reserve_mb=512) == [1]
     # sharing disabled → a sharing request behaves like exclusive
     assert gpu_svc.plan(_job(4, 1, 1000), slots, share=False, busy_threshold=0.1, reserve_mb=512) == [1]
-    # placing updates reservations: after a 20000 job on GPU 1 nothing else fits there
+    # placing in this tick counts the whole request as pending until it is measured
     gpu_svc.place(_job(2, 1, 20000), [1], slots)
+    assert slots[1].pending_mb == 20000 and slots[1].jobs == [2]
     assert gpu_svc.plan(_job(5, 1, 5000), slots, share=True, busy_threshold=0.1, reserve_mb=512) == [0]
-    assert slots[1].reserved_mb == 20000 and slots[1].jobs == [2]
+
+
+def test_measured_by_job_maps_driver_processes_to_jobs(monkeypatch):
+    monkeypatch.setattr(
+        gpu_svc, "gpu_processes", lambda index: [(100, 1500), (200, 300), (999, 7000)] if index == 0 else [(100, 50)]
+    )
+    out = gpu_svc.measured_by_job([0, 1], {1: {100, 101}, 2: {200}})
+    assert out == {1: 1550, 2: 300}  # pid 999 belongs to someone else
+    assert gpu_svc.measured_by_job([0], {}) == {}
 
 
 def test_plan_without_readings_spreads_sharing_jobs():

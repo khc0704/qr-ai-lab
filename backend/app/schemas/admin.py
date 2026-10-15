@@ -20,15 +20,23 @@ class AdminOverview(BaseModel):
     pool_utilization: int
 
 
+class GpuJobUsage(BaseModel):
+    job_id: int
+    requested_mb: int | None = None  # None = exclusive
+    measured_mb: int = 0  # what the driver attributes to the job's processes right now
+
+
 class NodeGpu(BaseModel):
     index: int
     name: str
     memory_total_mb: int
-    memory_used_mb: int
+    memory_used_mb: int  # driver reading, every process
     utilization: int
     job_id: int | None = None  # first job on this GPU (compat)
     job_ids: list[int] = []  # every job the scheduler placed on this GPU
+    jobs: list[GpuJobUsage] = []
     reserved_mb: int | None = None  # Σ requested_gpu_memory_mb of those jobs; None = one of them holds it exclusively
+    measured_mb: int | None = None  # Σ measured over our jobs (None when no job is placed here)
     processes: int | None = None  # compute processes seen by the driver (any user)
 
 
