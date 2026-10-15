@@ -45,7 +45,7 @@ qr-ai-lab/
 └─ infra/              docker-compose.yml（mariadb、redis、backend、scheduler）、backend/Dockerfile、trainer/Dockerfile、mariadb/
 ```
 
-frontend（第一版頁面，假資料，`src/lib/api` 為資料層，尚未接 backend）、backend、trainer、infra 都已建立。不要自創頂層目錄。
+frontend（已接 backend：`src/lib/api` 為 server-only fetch 層、`src/lib/actions.ts` 為 Server Actions、`src/app/api/*` 代理上傳 / SSE / 下載）、backend、trainer、infra 都已建立。不要自創頂層目錄。
 
 ## 常用指令
 
@@ -54,7 +54,8 @@ frontend（第一版頁面，假資料，`src/lib/api` 為資料層，尚未接 
 cd frontend && npm install && npm run dev        # http://localhost:3000
 npm run lint && npm run typecheck && npm test     # 提交前
 npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts（backend 建立後）
-npm run build && npm run start                    # 正式建置；npm run screenshots 需要已啟動的 server
+npm run build && npm run start                    # 正式建置（BACKEND_URL 預設 http://localhost:8000）
+npm run screenshots && npm run screenshots:report  # 端到端串接測試 + 截圖 + PDF 報告（需要 backend、排程器、前端、Redis 都在跑）
 # backend（dev：SQLite 自動建表並建立 admin/admin1234、user/user1234）
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
 uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
@@ -116,6 +117,6 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - `docs/DATABASE.md`：資料表定義、索引、狀態機。
 - `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫；也是給使用者看的 SOP 底稿。
 - `docs/USE_CASES.md`：半導體 / 電子製造的機台資料 → 模型 → 推論目的（OCD 光譜鑑別器、TEM few-shot bin code、PatchCore、FDC、WAT…）。
-- `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/`：各頁截圖；`docs/manuals/`：使用者手冊（DOCX / PDF，由 `scripts/build_manual.js` 產生）。
+- `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/e2e/`：實際串接 backend 的端到端截圖（`captions.json` 有每張說明）；`docs/manuals/`：使用者手冊（DOCX / PDF，由 `scripts/build_manual.js` 產生）與串接測試報告 PDF。
 - `docs/ROADMAP.md`：已知缺口與改善方向（審視清單）。
 - `.claude/rules/frontend.md`、`backend.md`、`database.md`：動到對應路徑時自動載入的細部慣例。

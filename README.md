@@ -29,7 +29,7 @@
 
 ## 狀態
 
-- 前端第一版頁面已完成（Next.js 16、假資料；見 `docs/screenshots/`），尚未接 backend。
+- 前端已實際串接 backend（登入、申請審核、資料來源、上傳 + 前處理預覽、訓練 / 推論精靈、即時 log、管理員佇列 / 強制中斷 / 稽核）；端到端截圖見 `docs/screenshots/e2e/`，報告見 `docs/manuals/QR-AI-Lab-串接測試報告.pdf`。
 - backend 已完成：本地帳號 `admin` / `user`、專案申請與審批、討論區、資料來源（憑證加密）、一次性上傳、Job 佇列與資源池、管理員 API（資源池、重排、強制中斷、稽核、模型庫）、SSE 事件、log；排程器（Docker / subprocess runner）。
 - trainer 已完成 12 個模型家族（含影像品質基準 / 機台比對）與 AutoML、推論模式；sklearn、PyTorch（CPU、小型權重）與 YOLO（CPU，從 yaml 與從 yolo11n.pt 微調）皆有測試。
 - 資料前處理：`libs/preprocess` 共用套件，上傳後抽樣預覽、訓練時 fit、推論自動沿用。

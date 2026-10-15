@@ -1,6 +1,6 @@
 # 從零啟動（本地開發 SOP）
 
-從 `git pull` 到前端、基礎服務、（未來的）後端全部跑起來。每一節都可以獨立執行；前端目前用假資料，不需要後端就能看完整 UI；後端用 SQLite 與內建帳號就能跑完整流程。
+從 `git pull` 到前端、基礎服務、後端全部跑起來。前端已實際串接 backend（登入、申請、任務、即時 log 都打真的 API），所以要看完整 UI 需要先把後端跑起來（§4.1 用 SQLite 與內建帳號即可，不需要 MariaDB）。
 
 ## 0. 前置需求
 
@@ -31,7 +31,8 @@ npm ci                        # 依 package-lock.json 安裝（第一次或 lock
 npm run dev                   # http://localhost:3000，Turbopack，熱更新
 ```
 
-- 預設登入身分是假資料的管理員「王小明」，所有頁面（含管理員區）都看得到；Keycloak 接上後才會有真正的登入。
+- 前端透過 `BACKEND_URL`（預設 `http://localhost:8000`，可放在 `frontend/.env.local`）呼叫 backend；先照 §4.1 啟動後端，再用內建帳號登入：`admin / admin1234`（管理員，看得到管理員區）或 `user / user1234`（一般使用者）。
+- 登入後 token 存在 httpOnly cookie `qr_token`（瀏覽器拿不到），所有資料都由 Server Component / Server Action 在伺服器端帶 `Authorization` 去打 backend；上傳、SSE、下載走 `src/app/api/*` 的 Route Handler 代理。
 - 常用指令：
 
 | 指令 | 用途 |
@@ -40,7 +41,8 @@ npm run dev                   # http://localhost:3000，Turbopack，熱更新
 | `npm run typecheck` | 產生路由型別並做 TypeScript 檢查 |
 | `npm run format` | Prettier（含 Tailwind class 排序） |
 | `npm run build && npm run start` | 正式建置與啟動（http://localhost:3000） |
-| `npm run screenshots` | 對所有主要頁面截圖到 `docs/screenshots/`（需先啟動 dev 或 start，並已安裝 Playwright Chromium） |
+| `npm run screenshots` | 端到端串接測試 + 截圖（見 §4.8；需要 backend、排程器、前端都已啟動） |
+| `npm run screenshots:report` | 把截圖整理成 `docs/manuals/QR-AI-Lab-串接測試報告.pdf` |
 | `python3 ../scripts/design_lint.py src` | 設計 token 檢查（從 repo 根目錄則是 `python3 scripts/design_lint.py frontend/src`） |
 
 - 改 UI 前先讀 `DESIGN.md`；Claude Code 使用者會自動載入 `.claude/rules/frontend.md`，而且 `.claude/settings.json` 的 hook 會在每次寫檔後跑設計檢查。
@@ -139,7 +141,23 @@ docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app r
 docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d
 ```
 
-- 前端接上後端：在 `frontend/.env.local` 設 `BACKEND_URL=http://localhost:8000`，並把 `src/lib/api/index.ts` 的假資料換成 fetch（頁面不用改）；這一步尚未完成。
+- compose 目前只有 mariadb、redis、backend、scheduler；前端在伺服器上先用 `npm run build && BACKEND_URL=http://backend:8000 npm run start`（或 pm2 / systemd）跑在 3000，再由 nginx 反代。
+
+### 4.8 端到端串接測試（真的 backend + 排程器 + trainer，會截圖）
+
+```bash
+# 終端 1～3：backend（§4.1）、排程器（§4.2，JOB_RUNNER=subprocess）、前端（npm run build && npm run start）。
+# 兩個程序之間的即時事件（log 串流）需要 Redis：docker compose 起 redis，或本機 redis-server，然後兩邊都設 REDIS_URL。
+# 想從乾淨狀態開始：停掉 backend 與排程器，刪掉 dev.db 與 DATA_ROOT 後再啟動。
+cd frontend
+DATA_DIR=/path/to/sample-datasets npm run screenshots          # 預設 BASE_URL=http://localhost:3000、API_URL=http://localhost:8000/api/v1
+PHASES=train,infer npm run screenshots                           # 只跑部分階段（request,approve,project,train,infer,iqa,spectrum,discussion,admin,visual,logout）
+npm run screenshots:report                                       # docs/screenshots/e2e/index.html + docs/manuals/QR-AI-Lab-串接測試報告.pdf
+```
+
+- 腳本 `frontend/scripts/e2e-walkthrough.mjs` 用 Playwright 以 `user` 與 `admin` 兩個身分走完整流程：申請 → 審核 → 成員 / 資料來源 → 上傳 + 前處理預覽 → AutoML 訓練（看即時 log）→ 推論 → 影像品質比對 → 光譜 MAE → 討論區 → 管理員佇列 / 強制中斷 / 稽核 → light mode / 手機版 → 登出，每一步截圖到 `docs/screenshots/e2e/NN-*.png`，說明寫在 `captions.json`。
+- `DATA_DIR` 要有 `wat_yield.csv`、`sem_golden_tool.zip`、`sem_tuned_tool.zip`、`ocd_spectra.csv`：`python3 docs/screenshots/e2e/gen_data.py <DATA_DIR>` 會產生這些合成資料（需要 numpy、Pillow，trainer 的 venv 就有）；URL 資料來源那一步會連 `http://127.0.0.1:8099/wat_yield.csv`，可在資料夾裡 `python3 -m http.server 8099` 提供。
+- 瀏覽器：`npx playwright install chromium`，或設 `CHROMIUM_PATH=/path/to/chrome`。
 
 ### 4.7 使用手冊（DOCX / PDF）
 
@@ -150,15 +168,15 @@ soffice --headless --convert-to pdf --outdir docs/manuals "docs/manuals/QR-AI-La
 
 ## 5. Keycloak（外部）
 
-公司既有的 Keycloak。需要向管理 Keycloak 的人取得：realm 名稱、client id / secret（confidential client，Authorization Code + PKCE）、允許的 redirect URI `http://localhost:3000/api/auth/callback/keycloak`、realm role `admin` 與 `user`。填入 `frontend/.env.local`（`AUTH_*`）與 backend 的 `KEYCLOAK_*`。接上前所有身分都是假資料。
+公司既有的 Keycloak。需要向管理 Keycloak 的人取得：realm 名稱、client id / secret（confidential client，Authorization Code + PKCE）、允許的 redirect URI `http://localhost:3000/api/auth/callback/keycloak`、realm role `admin` 與 `user`。填入 `frontend/.env.local`（`AUTH_*`）與 backend 的 `KEYCLOAK_*`。接上前用 backend 的本地帳號（`AUTH_MODE=local`）。
 
 ## 6. 推薦的日常流程
 
 ```bash
 git pull
-cd frontend && npm ci && npm run dev          # 終端 1：前端
+cd frontend && npm ci && npm run dev          # 終端 1：前端（BACKEND_URL 預設 http://localhost:8000）
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # 終端 2：後端（SQLite）
-cd backend && uv run python -m app.scheduler  # 終端 3：排程器（subprocess runner）
+cd backend && uv run python -m app.scheduler  # 終端 3：排程器（subprocess runner；要看即時 log 串流請兩邊都設 REDIS_URL）
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # 需要 MariaDB / Redis 時
 # 改完 UI
 cd frontend && npm run lint && npm run typecheck && python3 ../scripts/design_lint.py src
@@ -174,5 +192,8 @@ cd trainer && uv run ruff check . && uv run pytest
 - **Turbopack 快取怪異**：`rm -rf frontend/.next` 後重跑。
 - **`npm ci` 失敗提到 lock 不一致**：確認用的是 npm 10 以上，且沒有用 pnpm / yarn 動過 `node_modules`。
 - **Playwright 找不到瀏覽器**：`cd frontend && npx playwright install chromium`；或設 `CHROMIUM_PATH=/path/to/chrome` 再跑 `npm run screenshots`。
+- **登入後被導回 `/login?reason=expired`**：backend 沒啟動、`BACKEND_URL` 不對，或 token 已過期（`ACCESS_TOKEN_MINUTES`，預設 12 小時）。
+- **任務頁看不到即時 log，重新整理才有**：backend 與排程器是兩個程序，沒有 `REDIS_URL` 時事件只在各自記憶體裡；設 `REDIS_URL=redis://localhost:6379/0` 給兩邊。
+- **上傳預覽逾時（`PREVIEW_TIMEOUT`）**：預覽在 API 程序內以執行緒計算，預設 30 秒（`PREVIEW_TIMEOUT_S`）；縮小取樣數或先用較小的檔案試步驟。
 - **MariaDB 一直不 healthy**：第一次初始化要 20–40 秒；看 `docker compose -f infra/docker-compose.yml logs mariadb`。
 - **Windows**：建議在 WSL2 內操作（Docker Desktop + WSL 整合），避免路徑與換行問題。

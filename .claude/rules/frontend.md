@@ -38,5 +38,6 @@ paths:
 - Cache Components 已開啟（`cacheComponents: true`），build 會驗證：讀 `params` / `searchParams` / `cookies()` / `headers()` 的 Server Component 與呼叫 `usePathname()` / `useSearchParams()` 的 Client Component 必須包在 `<Suspense>`（fallback 給 Skeleton 或無作用中狀態的同一元件）；伺服器渲染不可用 `new Date()` / `Math.random()`（放 client 元件 + `useSyncExternalStore`）；`(app)/layout.tsx` 不讀 cookie。範例見 `components/layout/breadcrumbs.tsx`、`components/features/greeting.tsx`。
 - `components/ui/**` 是從 shadcn registry 複製的，可為了 React Compiler 的 ESLint 規則做最小修改（已改：`sidebar.tsx` skeleton 寬度改用 `useId`、`hooks/use-mobile.ts` 改用 `useSyncExternalStore`）；重新用 `npx shadcn add --overwrite` 更新時要重套這兩處。
 - react-hook-form 取值用 `useWatch`，不要 `form.watch()`（React Compiler 無法記憶化）。
-- 頁面用假資料時，資料存取仍只能經過 `@/lib/api`（`server-only`），不要在頁面 import `@/lib/mock-data`；之後換成 fetch 只改那一個檔案。
-- 文件：本地啟動流程在 `docs/GETTING_STARTED.md`；截圖用 `npm run screenshots`（輸出到 `docs/screenshots/`）。
+- 讀取只經過 `@/lib/api`（`server-only` fetch，snake_case → camelCase 在 `src/lib/api/mappers.ts`），寫入只經過 `@/lib/actions.ts`（Server Actions，回傳 `ActionResult`，成功後 `revalidatePath`）；瀏覽器不直接打 backend，上傳 / SSE / 下載走 `src/app/api/*` 的 Route Handler。新 API 欄位先改 `src/types/domain.ts` 與 mapper，再改頁面。
+- 相對時間 / 耗時用 `components/features/time.tsx` 的 `RelativeTime` / `Duration`（server 不可讀時鐘）；任務即時狀態用 `JobLive`。
+- 文件：本地啟動流程在 `docs/GETTING_STARTED.md`；端到端截圖用 `npm run screenshots`（需要整套服務在跑，輸出到 `docs/screenshots/e2e/`），報告用 `npm run screenshots:report`。

@@ -44,7 +44,7 @@
 - backend `AUTH_MODE=local`：`POST /api/v1/auth/login {username, password}` 驗 `users.password_hash`（argon2），回 HS256 access token（`AUTH_SECRET`，預設 12 小時）；`GET /api/v1/me` 取目前使用者。
 - 啟動（dev / test）自動建立兩個帳號：`admin / $SEED_ADMIN_PASSWORD`（預設 `admin1234`，系統角色 admin）與 `user / $SEED_USER_PASSWORD`（預設 `user1234`）。正式環境用 `uv run python -m app.cli seed` / `create-user` / `set-password`。
 - `users.auth_provider = local | keycloak`；切到 Keycloak 只要設 `AUTH_MODE=keycloak` + `KEYCLOAK_ISSUER` / `KEYCLOAK_AUDIENCE`，`get_current_user` 改驗 Keycloak JWT 並 upsert，業務表不變。
-- 前端目前仍是假資料；接 backend 時登入頁改打 `/auth/login` 並把 token 放在 httpOnly cookie（server-only 的 `src/lib/api` 帶 `Authorization`）。
+- 前端（已實作）：登入頁的 Server Action `loginAction` 打 `/auth/login`，把 access token 放在 httpOnly cookie `qr_token`（與 `expires_in` 同步到期）；`src/proxy.ts` 只看 cookie 有無：未登入導向 `/login?next=`、已登入離開 `/login`。所有讀取走 `src/lib/api`（`server-only` fetch，帶 `Authorization`，snake_case → camelCase 在 `mappers.ts`），寫入走 `src/lib/actions.ts`（Server Actions，回傳 `{ok, data | error}` 並 `revalidatePath`）；401 / 403 由 `getCurrentUser` 清 cookie 並導向 `/login?reason=expired`。瀏覽器需要直接串流 / 傳檔的三件事由 Route Handler 代理（token 不出伺服器）：`POST /api/upload/[slug]`（multipart → backend uploads）、`GET /api/stream/jobs/[id]`（SSE 轉發，含 `Last-Event-ID`）、`GET /api/download/[...path]`（白名單：artifacts / job logs / job output）。
 
 ### 2.1 登入流程（Keycloak，目標狀態）
 1. 使用者在 frontend 點登入 → Auth.js 導向 Keycloak（Authorization Code + PKCE）。
@@ -218,7 +218,7 @@ DATA_ROOT/
 
 - Redis stream `job:{id}:events`（`MAXLEN ~ 10000`）：`{type: status | progress | metric | log, ts, data}`。
 - `GET /api/v1/jobs/{id}/events`（SSE）：先送最近 200 筆，再 `XREAD BLOCK`；支援 `Last-Event-ID` 續傳；Job 結束後送 `event: end` 關閉。
-- 前端 `LogViewer` / Job 詳情頁訂閱；列表頁與管理員佇列用 TanStack Query 每 5–10 秒 refetch。
+- 前端 Job 詳情頁的 `JobLive`（client component）用 `EventSource('/api/stream/jobs/{id}')` 訂閱：`log` 事件直接 append 到 `LogViewer`，`progress` 更新進度卡，`status` / `metric` / `end` 觸發節流的 `router.refresh()`，讓伺服器渲染的指標、leaderboard、產物跟上；Job 結束後不再開連線（log 由 `GET /jobs/{id}/logs` 一次讀完）。管理員佇列抽屜共用同一元件。列表頁為 RSC，重新整理即最新。
 
 ## 12. API 清單（v1，前綴 `/api/v1`）
 
@@ -242,6 +242,9 @@ GET    /projects/{slug}/members  POST …  PATCH …/{user_id}  DELETE …/{user
 GET    /projects/{slug}/data-sources  POST …  PATCH …/{id}  DELETE …/{id}  POST …/{id}/check
 POST   /projects/{slug}/uploads              multipart → upload_id + spec（一次性）
 GET    /projects/{slug}/jobs  POST …          建立訓練或推論 Job（202）
+GET    /jobs                                  最近任務（我參與的專案；admin：全部）
+GET    /capacity                              總資源池 + 已配置量（任何登入者；給精靈與首頁）
+POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sample、spec）；GET /catalog/preprocess?data_type=
 GET    /jobs/{id}  POST /jobs/{id}/cancel     成員取消
 GET    /jobs/{id}/events(SSE)  GET /jobs/{id}/logs  GET /jobs/{id}/logs/download  GET /jobs/{id}/download
 GET    /projects/{slug}/artifacts  PATCH /artifacts/{id}(is_default)  GET /artifacts/{id}/download  DELETE /artifacts/{id}
