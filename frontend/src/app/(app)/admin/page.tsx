@@ -65,6 +65,35 @@ export default async function AdminDashboardPage() {
           </CardContent>
         </Card>
         <aside className="space-y-4">
+          {node.runner ? (
+            <Card className="gap-3 p-5" data-testid="runner-card">
+              <div className="text-label">任務執行方式</div>
+              <div className="text-sm font-medium">
+                {node.runner.kind === "systemd" ? "systemd-run cgroup scope" : "主機子程序（subprocess）"}
+              </div>
+              <p className="text-xs text-muted-foreground">{node.runner.note}</p>
+              <ul className="grid grid-cols-3 gap-1 font-mono text-xs">
+                {(
+                  [
+                    ["記憶體", node.runner.enforces.memory, node.runner.memoryWatchdog ? "watchdog" : null],
+                    ["CPU", node.runner.enforces.cpu, "threads"],
+                    ["核心", node.runner.enforces.cpuset, null],
+                  ] as const
+                ).map(([k, on, fallback]) => (
+                  <li key={k} className="rounded-md bg-muted px-2 py-1">
+                    <span className="text-muted-foreground">{k}</span>{" "}
+                    <span className={on ? "text-success" : fallback ? "text-warning" : "text-muted-foreground"}>
+                      {on ? "cgroup" : (fallback ?? "—")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="truncate font-mono text-[11px] text-muted-foreground" title={node.runner.trainerPython}>
+                {node.runner.trainerPython}
+              </div>
+              <div className="text-[11px] text-muted-foreground">離線：HF_HUB_OFFLINE / YOLO_OFFLINE 已設定，權重只讀模型庫</div>
+            </Card>
+          ) : null}
           <Card className="gap-4 p-5">
             <div className="text-label">節點實體狀態</div>
             <ResourceMeter

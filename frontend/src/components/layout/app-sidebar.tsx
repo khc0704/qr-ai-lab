@@ -8,11 +8,12 @@ import {
   House,
   ListOrdered,
   MessagesSquare,
+  PackageSearch,
   ScrollText,
   ShieldCheck,
   SlidersHorizontal,
   Users,
-  type LucideIcon,
+  type LucideIcon
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -114,6 +115,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
     { href: "/admin/queue", label: nav.adminQueue, icon: ListOrdered, badge: counts.runningJobs },
     { href: "/admin/users", label: nav.adminUsers, icon: Users },
     { href: "/admin/quotas", label: nav.adminQuotas, icon: SlidersHorizontal },
+    { href: "/admin/model-zoo", label: nav.adminModelZoo, icon: PackageSearch },
     { href: "/admin/audit", label: nav.adminAudit, icon: ScrollText },
   ];
 

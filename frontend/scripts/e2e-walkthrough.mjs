@@ -5,7 +5,7 @@
 // Usage (all services already running — see docs/GETTING_STARTED.md):
 //   BASE_URL=http://localhost:3000 API_URL=http://localhost:8000/api/v1 DATA_DIR=/path/to/datasets \
 //   PHASES=all node scripts/e2e-walkthrough.mjs
-// PHASES: comma list of request,approve,project,train,infer,iqa,spectrum,discussion,admin,visual,logout (or all).
+// PHASES: comma list of request,approve,zoo,project,train,infer,iqa,spectrum,discussion,admin,visual,logout (or all).
 // Output: ../docs/screenshots/e2e/NN-name.png + captions.json (+ state.json with the ids created).
 import { chromium } from "playwright";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = process.env.API_URL ?? "http://localhost:8000/api/v1";
 const DATA = process.env.DATA_DIR ?? path.resolve("datasets");
+const ZOO = process.env.ZOO_DIR ?? path.join(DATA, "zoo"); // yolo11n.pt for the browser-upload demo
 const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
 const PHASES = (process.env.PHASES ?? "all").split(",");
 const want = (p) => PHASES.includes("all") || PHASES.includes(p);
@@ -278,7 +279,7 @@ try {
     await goto(page, "/admin/quotas");
     await shot(page, "admin-quotas", "管理員：各專案配額一覽（合計超過資源池時提示；排程仍以資源池為準）");
     await goto(page, "/admin");
-    await shot(page, "admin-dashboard-pool", "管理員 Dashboard：總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數）、節點狀態、佇列");
+    await shot(page, "admin-dashboard-pool", "管理員 Dashboard：總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數）、節點狀態、任務執行方式（runner）");
     await fillNumber(page, "input[name=memoryMb]", 14336);
     await fillNumber(page, "input[name=maxRunningJobs]", 2);
     await page.getByRole("button", { name: "儲存資源池" }).click();
@@ -289,6 +290,47 @@ try {
     await shot(page, "admin-pool-saved", "總資源池已更新：14 GB、最多 2 個同時任務（寫入 audit_logs）");
     await goto(page, "/admin/users");
     await shot(page, "admin-users", "管理員：使用者列表（系統角色 admin / user、啟用狀態）");
+    await page.close();
+  }
+
+
+  // =====================================================================================================
+  if (want("zoo")) {
+    phase = "zoo";
+    console.log("▶ zoo");
+    const page = await uiLogin(adminCtx, "admin", "admin1234");
+    await goto(page, "/admin/model-zoo");
+    await shot(page, "zoo-empty", "管理員模型庫：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來");
+    // 1) browser upload
+    await page.setInputFiles('[data-testid="zoo-upload-yolo11n"]', path.join(ZOO, "yolo11n.pt"));
+    await page.getByText("yolo11n 已匯入模型庫").waitFor({ timeout: 120_000 });
+    await settle(page, 1500);
+    await shot(page, "zoo-uploaded", "從瀏覽器上傳 yolo11n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」");
+    // 2) import from a folder mounted on the server (MODEL_ZOO_IMPORT_ROOT)
+    await page.locator("tr", { hasText: "yolo11s.pt" }).getByRole("button", { name: "匯入" }).click();
+    await page.getByRole("dialog").waitFor();
+    await page.getByRole("tab", { name: "伺服器路徑" }).click();
+    await page.fill("#zoo-path", "yolo11s.pt");
+    await shot(page, "zoo-import-path", "從伺服器路徑匯入（NAS / USB 掛載點，限 MODEL_ZOO_IMPORT_ROOT 底下）", { fullPage: false });
+    await page.getByRole("button", { name: "開始匯入" }).click();
+    await settle(page, 800);
+    // 3) fetch from an intranet URL (host must be in MODEL_ZOO_ALLOWED_HOSTS)
+    await page.locator("tr", { hasText: "yolo11n-cls.pt" }).getByRole("button", { name: "匯入" }).click();
+    await page.getByRole("dialog").waitFor();
+    await page.getByRole("tab", { name: "內網 URL" }).click();
+    await page.fill("#zoo-url", "http://127.0.0.1:8099/yolo11n-cls.pt");
+    await shot(page, "zoo-import-url", "從內網 URL 下載（公司鏡像 / 檔案伺服器；主機白名單）", { fullPage: false });
+    await page.getByRole("button", { name: "開始匯入" }).click();
+    for (let i = 0; i < 60; i++) {
+      const rows = await api(adminTok, "GET", "/admin/model-zoo");
+      const done = rows.filter((r) => ["yolo11s", "yolo11n-cls"].includes(r.id) && r.status === "present").length;
+      if (done === 2) break;
+      await sleep(1000);
+    }
+    await goto(page, "/admin/model-zoo?verify=1", 1500);
+    await shot(page, "zoo-verified", "三種方式匯入後重新驗證 sha256：三個 YOLO 權重已就緒，來源與時間都有記錄；DINO / BERT 仍缺");
+    await goto(page, "/admin/audit");
+    await shot(page, "zoo-audit", "稽核紀錄：模型庫的上傳 / 匯入都有操作者與來源");
     await page.close();
   }
 
@@ -380,10 +422,10 @@ try {
       await sleep(500);
     }
     await sleep(1200);
-    await shot(page, "job-running", "排程器啟動 trainer 後：running，進度卡由 SSE 即時更新");
+    await shot(page, "job-running", "排程器以主機子程序啟動 trainer（trainer venv，CPU 核心 affinity、記憶體 watchdog）：running，進度卡由 SSE 即時更新");
     await page.getByRole("tab", { name: "Log" }).click();
     await sleep(4000);
-    await shot(page, "job-log-live", "Log 分頁：trainer 的 log 透過 Redis stream → SSE 即時串流（含 [system] 行）");
+    await shot(page, "job-log-live", "Log 分頁：trainer 直接寫 log 檔，排程器 tail 後經 SSE 即時串流（[system] 行寫明 runner 與限制方式）");
     const done = await waitJob(userTok, state.trainJob);
     console.log("  train job", done.status);
     await sleep(2500);
@@ -642,7 +684,7 @@ try {
     await goto(page, "/admin/audit");
     await shot(page, "admin-audit", "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由");
     await goto(page, "/admin");
-    await shot(page, "admin-dashboard", "管理員儀表板：資源池用量、佇列、申請、近期任務");
+    await shot(page, "admin-dashboard", "管理員儀表板：資源池、節點狀態，以及「任務執行方式」（這台機器用哪種 runner、哪些限制由 cgroup 強制、哪些由 watchdog 補）");
     await page.close();
 
     const user = await uiLogin(userCtx, "user", "user1234");

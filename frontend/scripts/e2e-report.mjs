@@ -17,6 +17,7 @@ const meta = JSON.parse(await readFile(path.join(SHOTS, "run.json"), "utf8").cat
 const PHASES = {
   request: ["1. 一般使用者：登入、專案申請", "user 登入 → 填寫結構化申請（題目、資料類型 × 任務、資源需求）→ 送出 → 在討論串留言。"],
   approve: ["2. 管理員：審核、配額、總資源池", "admin 登入 → 開始審核 → 核准並指定 slug / 配額（受總資源池限制）→ 專案自動建立；另兩件申請由 API 核准。更新總資源池並檢視使用者列表。"],
+  zoo: ["2b. 管理員：模型庫（伺服器不連外）", "三種把預訓練權重帶進模型庫的方式：瀏覽器上傳、伺服器路徑（NAS / USB）、內網 URL（公司鏡像）；sha256 驗證與稽核。trainer 永遠離線，只讀模型庫。"],
   project: ["3. 專案：成員、資料來源、設定", "專案列表與總覽 → 邀請成員 → 新增 URL 資料來源（憑證加密、連線檢查）→ 專案設定。"],
   train: ["4. 訓練任務：上傳 → 前處理預覽 → AutoML → 即時 log → 產物", "一次性上傳 CSV（任務結束即刪）→ 指定欄位、加入前處理步驟並抽樣預覽 → AutoML（XGBoost / 隨機森林 / 線性 / SVM）→ 建立後經排程器以 subprocess runner 執行 → SSE 即時進度與 log → leaderboard、產物、預設模型。"],
   infer: ["5. 推論任務：直接輸入 → 結果預覽與下載", "用預設模型對新 lot 做 predict → 結果摘要、前 20 筆預覽（帶回 lot_id）、CSV 下載。"],
@@ -44,7 +45,7 @@ let body = `
     <tr><th>日期</th><td>${esc(date)}</td></tr>
     <tr><th>帳號</th><td>admin / admin1234（管理員）、user / user1234（一般使用者）</td></tr>
     <tr><th>資料</th><td>全部為合成資料：WAT 良率表（480 lot）、SEM 風格影像（golden 40 張、調機機台 16 張）、OCD 光譜（264 片 wafer × 200 波長）</td></tr>
-    <tr><th>環境</th><td>${esc(meta.env ?? "backend: SQLite + Redis 事件、JOB_RUNNER=subprocess（CPU）；frontend: next build + next start；瀏覽器: Chromium（Playwright）")}</td></tr>
+    <tr><th>環境</th><td>${esc(meta.env ?? "backend: SQLite、SCHEDULER_EMBEDDED=true（排程器與 API 同一程序，無 Redis）、JOB_RUNNER=auto → subprocess（沙盒沒有 systemd user manager；伺服器上會是 systemd cgroup）；frontend: next build + next start；瀏覽器: Chromium（Playwright）")}</td></tr>
     <tr><th>結果</th><td>${esc(meta.summary ?? "所有流程完成；訓練 / 推論任務皆 succeeded；強制中斷流程正確")}</td></tr>
   </table>
   <h2>目錄</h2>

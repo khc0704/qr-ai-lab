@@ -164,6 +164,7 @@ export function NewJobWizard({
   const [pending, startTransition] = useTransition();
 
   const gpuOf = (f: string) => catalog.families[f]?.resources.gpu === "required";
+  const weightsMissing = (f: string) => catalog.families[f]?.weights_ready === false;
   const needsGpu = isTrain
     ? mode === "auto"
       ? candidates.some(gpuOf)
@@ -461,6 +462,7 @@ export function NewJobWizard({
                 >
                   {familyLabel(f)}
                   {gpuOf(f) ? <span className="ml-1 font-mono text-[11px]">GPU</span> : null}
+                  {weightsMissing(f) ? <span className="ml-1 text-[11px] text-warning">缺權重</span> : null}
                 </button>
               );
             })}
@@ -497,7 +499,10 @@ export function NewJobWizard({
               >
                 <div className="flex items-center justify-between">
                   <span className="font-medium">{familyLabel(f)}</span>
-                  {gpuOf(f) ? <span className="font-mono text-[11px] text-muted-foreground">GPU</span> : null}
+                  <span className="flex items-center gap-2">
+                    {weightsMissing(f) ? <span className="text-[11px] text-warning">缺權重，請管理員匯入</span> : null}
+                    {gpuOf(f) ? <span className="font-mono text-[11px] text-muted-foreground">GPU</span> : null}
+                  </span>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">{catalog.families[f]?.sop}</div>
               </button>

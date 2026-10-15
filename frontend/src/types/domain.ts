@@ -154,6 +154,7 @@ export interface Job {
   requestedMemoryMb: number;
   timeoutMinutes: number;
   assignedGpus?: number[];
+  assignedCpus?: number[];
   progress: number;
   currentStage?: JobStage;
   taskType?: TaskType;
@@ -265,6 +266,16 @@ export interface NodeGpu {
   jobId?: number;
 }
 
+export interface RunnerInfo {
+  kind: "systemd" | "subprocess" | string;
+  enforces: { memory: boolean; cpu: boolean; cpuset: boolean };
+  memoryWatchdog: boolean;
+  trainerPython: string;
+  trainerDir: string;
+  offline: boolean;
+  note: string;
+}
+
 export interface NodeStatus {
   gpus: NodeGpu[];
   cpuCores: number;
@@ -274,6 +285,39 @@ export interface NodeStatus {
   diskTotalGb: number;
   diskFreeGb: number;
   allocated: Allocated;
+  runner?: RunnerInfo;
+}
+
+export type ZooStatus = "present" | "missing" | "mismatch" | "importing" | "error";
+
+export interface ZooTask {
+  weightId: string;
+  source: string;
+  state: "running" | "done" | "error";
+  progress: number;
+  downloadedMb: number;
+  totalMb?: number;
+  message?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface ModelZooEntry {
+  id: string;
+  family: string;
+  families: string[];
+  file: string;
+  license?: string;
+  source?: string;
+  kind: "file" | "hf_repo" | string;
+  present: boolean;
+  status: ZooStatus;
+  sizeBytes?: number;
+  sha256Expected?: string;
+  sha256Actual?: string;
+  importedAt?: string;
+  importedFrom?: string;
+  task?: ZooTask;
 }
 
 export interface AuditLog {
@@ -309,6 +353,7 @@ export interface CatalogFamily {
   defaults: Record<string, unknown>;
   search_space: Record<string, { type: string; low?: number; high?: number; log?: boolean; choices?: unknown[] }>;
   weights: string[];
+  weights_ready?: boolean;
   sop: string;
 }
 

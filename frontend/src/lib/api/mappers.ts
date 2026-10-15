@@ -10,13 +10,16 @@ import type {
   Job,
   LeaderboardRow,
   LogLine,
+  ModelZooEntry,
   NodeStatus,
   PreprocessOp,
   Project,
   ProjectRequest,
   ResourcePool,
+  RunnerInfo,
   Upload,
   User,
+  ZooTask,
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
@@ -147,6 +150,7 @@ export function toJob(j: J): Job {
     requestedMemoryMb: num(j.requested_memory_mb),
     timeoutMinutes: num(j.timeout_minutes),
     assignedGpus: opt<number[]>(j.assigned_gpus),
+    assignedCpus: opt<number[]>(j.assigned_cpus),
     progress: Math.round(num(j.progress)),
     currentStage: opt<Job["currentStage"]>(j.current_stage),
     taskType: opt<Job["taskType"]>(j.task_type),
@@ -290,6 +294,54 @@ export function toNode(n: J): NodeStatus {
     diskTotalGb: num(n.disk_total_gb),
     diskFreeGb: num(n.disk_free_gb),
     allocated: toAllocated(n.allocated as J),
+    runner: n.runner ? toRunner(n.runner as J) : undefined,
+  };
+}
+
+export function toRunner(r: J): RunnerInfo {
+  const enf = (r.enforces as J | undefined) ?? {};
+  return {
+    kind: str(r.kind),
+    enforces: { memory: Boolean(enf.memory), cpu: Boolean(enf.cpu), cpuset: Boolean(enf.cpuset) },
+    memoryWatchdog: Boolean(r.memory_watchdog),
+    trainerPython: str(r.trainer_python),
+    trainerDir: str(r.trainer_dir),
+    offline: r.offline !== false,
+    note: str(r.note ?? ""),
+  };
+}
+
+export function toZooTask(t: J): ZooTask {
+  return {
+    weightId: str(t.weight_id),
+    source: str(t.source),
+    state: str(t.state) as ZooTask["state"],
+    progress: num(t.progress),
+    downloadedMb: num(t.downloaded_mb),
+    totalMb: opt<number>(t.total_mb),
+    message: opt<string>(t.message),
+    startedAt: iso(str(t.started_at)),
+    finishedAt: t.finished_at ? iso(str(t.finished_at)) : undefined,
+  };
+}
+
+export function toZooEntry(e: J): ModelZooEntry {
+  return {
+    id: str(e.id),
+    family: str(e.family),
+    families: (e.families as string[] | undefined) ?? [str(e.family)],
+    file: str(e.file),
+    license: opt<string>(e.license),
+    source: opt<string>(e.source),
+    kind: str(e.kind ?? "file"),
+    present: Boolean(e.present),
+    status: str(e.status ?? (e.present ? "present" : "missing")) as ModelZooEntry["status"],
+    sizeBytes: opt<number>(e.size_bytes),
+    sha256Expected: opt<string>(e.sha256_expected),
+    sha256Actual: opt<string>(e.sha256_actual),
+    importedAt: e.imported_at ? iso(str(e.imported_at)) : undefined,
+    importedFrom: opt<string>(e.imported_from),
+    task: e.task ? toZooTask(e.task as J) : undefined,
   };
 }
 

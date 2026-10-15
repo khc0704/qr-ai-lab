@@ -60,7 +60,7 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
           </span>
           <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5">
             <Cpu className="size-3" />
-            {job.requestedCpu} CPU
+            {job.requestedCpu} CPU{job.assignedCpus?.length ? ` [${job.assignedCpus.join(",")}]` : ""}
           </span>
           <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5">
             <MemoryStick className="size-3" />

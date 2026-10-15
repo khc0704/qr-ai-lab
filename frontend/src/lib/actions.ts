@@ -344,3 +344,26 @@ export async function stopJobAction(jobId: number, reason: string): Promise<Acti
   if (r.ok) revalidatePath("/admin/queue");
   return r;
 }
+
+// --- model zoo (admin) ----------------------------------------------------------------------------
+
+export async function importWeightAction(
+  weightId: string,
+  body: { source: "url" | "path"; url?: string; path?: string },
+): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>(`/admin/model-zoo/${encodeURIComponent(weightId)}/import`, { method: "POST", body });
+    return undefined;
+  });
+  if (r.ok) revalidatePath("/admin/model-zoo");
+  return r;
+}
+
+export async function deleteWeightAction(weightId: string): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>(`/admin/model-zoo/${encodeURIComponent(weightId)}`, { method: "DELETE" });
+    return undefined;
+  });
+  if (r.ok) revalidatePath("/admin/model-zoo");
+  return r;
+}

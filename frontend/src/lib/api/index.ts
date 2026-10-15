@@ -18,6 +18,8 @@ import {
   toProject,
   toRequest,
   toUser,
+  toZooEntry,
+  toZooTask
 } from "@/lib/api/mappers";
 import type {
   Artifact,
@@ -31,12 +33,14 @@ import type {
   Issue,
   Job,
   LogLine,
+  ModelZooEntry,
   NodeStatus,
   PreprocessOp,
   Project,
   ProjectRequest,
   ResourcePool,
   User,
+  ZooTask
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
@@ -181,10 +185,12 @@ export async function getAdminOverview() {
   };
 }
 
-export async function getModelZoo() {
-  return apiFetch<
-    { id: string; family: string; file: string; license?: string; kind: string; present: boolean; size_bytes?: number }[]
-  >("/admin/model-zoo");
+export async function getModelZoo(verify = false): Promise<ModelZooEntry[]> {
+  return (await apiFetch<J[]>(`/admin/model-zoo${q({ verify: verify ? "true" : undefined })}`)).map(toZooEntry);
+}
+
+export async function getModelZooTasks(): Promise<ZooTask[]> {
+  return (await apiFetch<J[]>("/admin/model-zoo/tasks")).map(toZooTask);
 }
 
 // --- catalog ---------------------------------------------------------------------------------------

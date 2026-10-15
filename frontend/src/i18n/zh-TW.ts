@@ -164,6 +164,7 @@ export const nav = {
   adminQueue: "佇列",
   adminUsers: "使用者",
   adminQuotas: "專案配額",
+  adminModelZoo: "模型庫",
   adminAudit: "稽核紀錄",
 } as const;
 
