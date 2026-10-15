@@ -49,6 +49,7 @@ class JobRead(ORMModel):
     requested_memory_mb: int
     timeout_minutes: int
     assigned_gpus: list[int] | None
+    assigned_cpus: list[int] | None = None
     progress: float
     current_stage: str | None
     task_type: str | None

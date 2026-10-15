@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -36,6 +36,19 @@ class Allocated(BaseModel):
     running_jobs: int = 0
 
 
+class RunnerInfo(BaseModel):
+    """How jobs are executed on this host (no containers): which limits the kernel enforces and which the
+    scheduler's watchdog covers."""
+
+    kind: str  # systemd | subprocess
+    enforces: dict[str, bool]  # memory / cpu / cpuset
+    memory_watchdog: bool
+    trainer_python: str
+    trainer_dir: str
+    offline: bool = True
+    note: str = ""
+
+
 class NodeStatus(BaseModel):
     gpus: list[NodeGpu]
     cpu_cores: int
@@ -45,6 +58,7 @@ class NodeStatus(BaseModel):
     disk_total_gb: int
     disk_free_gb: int
     allocated: Allocated
+    runner: RunnerInfo | None = None
 
 
 class CapacityRead(BaseModel):
@@ -67,14 +81,39 @@ class AuditLogRead(ORMModel):
     created_at: datetime
 
 
+class ZooTask(BaseModel):
+    """Progress of a background import (url / path) for one weight id."""
+
+    weight_id: str
+    source: str
+    state: str  # running | done | error
+    progress: float = 0  # 0..1 when the size is known
+    downloaded_mb: float = 0
+    total_mb: float | None = None
+    message: str | None = None
+    started_at: str
+    finished_at: str | None = None
+
+
 class ModelZooEntry(BaseModel):
     id: str
     family: str
+    families: list[str] = []
     file: str
     license: str | None = None
     source: str | None = None
-    kind: str = "file"
+    kind: str = "file"  # file | hf_repo
     present: bool
+    status: str = "missing"  # present | missing | mismatch | importing | error
     size_bytes: int | None = None
     sha256_expected: str | None = None
     sha256_actual: str | None = None
+    imported_at: str | None = None
+    imported_from: str | None = None
+    task: ZooTask | None = None
+
+
+class ZooImportBody(BaseModel):
+    source: Literal["url", "path"]
+    url: str | None = None
+    path: str | None = None

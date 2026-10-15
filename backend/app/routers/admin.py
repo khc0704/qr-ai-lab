@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
 
 from app.core.deps import AdminUser, DbSession
 from app.routers import _serialize as ser
-from app.schemas.admin import AdminOverview, AuditLogRead, ModelZooEntry, NodeStatus, QueueRead
+from app.schemas.admin import (
+    AdminOverview,
+    AuditLogRead,
+    ModelZooEntry,
+    NodeStatus,
+    QueueRead,
+    ZooImportBody,
+    ZooTask,
+)
 from app.schemas.common import Ok, Page
 from app.schemas.job import JobRead, MoveBody, OrderBody, StopBody
 from app.schemas.settings import JobDefaults, ResourcePool
@@ -13,6 +21,9 @@ from app.services import (
 )
 from app.services import (
     jobs as jobs_svc,
+)
+from app.services import (
+    model_zoo as zoo_svc,
 )
 from app.services import (
     node as node_svc,
@@ -118,4 +129,45 @@ async def audit(
 
 @router.get("/model-zoo", response_model=list[ModelZooEntry], summary="目錄需要的預訓練權重是否已在模型庫")
 async def model_zoo(_: AdminUser, verify: bool = False) -> list[ModelZooEntry]:
-    return node_svc.model_zoo_status(verify=verify)
+    """`verify=true` 會重新計算每個檔案的 sha256（大檔案要幾秒）。"""
+    return zoo_svc.status(verify=verify)
+
+
+@router.get("/model-zoo/tasks", response_model=list[ZooTask], summary="背景匯入的進度")
+async def model_zoo_tasks(_: AdminUser) -> list[ZooTask]:
+    return zoo_svc.tasks()
+
+
+@router.post("/model-zoo/{weight_id}/upload", response_model=ModelZooEntry, summary="從瀏覽器上傳權重檔")
+async def model_zoo_upload(
+    weight_id: str, session: DbSession, admin: AdminUser, file: UploadFile = File(...)
+) -> ModelZooEntry:
+    """單檔權重直接上傳；Hugging Face 類型請上傳整個 snapshot 資料夾的 zip / tar.gz。會比對目錄登記的 sha256。"""
+    entry = await zoo_svc.upload(weight_id, file)
+    await audit_svc.record(
+        session, admin.id, "model_zoo.upload", "model_zoo", None, {"weight": weight_id, "file": file.filename}
+    )
+    await session.commit()
+    return entry
+
+
+@router.post(
+    "/model-zoo/{weight_id}/import", response_model=ZooTask, status_code=202, summary="從內網 URL 或伺服器路徑匯入"
+)
+async def model_zoo_import(weight_id: str, body: ZooImportBody, session: DbSession, admin: AdminUser) -> ZooTask:
+    """背景執行；進度看 `GET /admin/model-zoo/tasks`。
+    URL 主機要在 MODEL_ZOO_ALLOWED_HOSTS，路徑要在 MODEL_ZOO_IMPORT_ROOT。"""
+    task = await zoo_svc.start_import(weight_id, source=body.source, url=body.url, path=body.path)
+    await audit_svc.record(
+        session, admin.id, "model_zoo.import", "model_zoo", None, {"weight": weight_id, "source": task.source}
+    )
+    await session.commit()
+    return task
+
+
+@router.delete("/model-zoo/{weight_id}", response_model=Ok, summary="從模型庫移除權重")
+async def model_zoo_delete(weight_id: str, session: DbSession, admin: AdminUser) -> Ok:
+    zoo_svc.delete(weight_id)
+    await audit_svc.record(session, admin.id, "model_zoo.delete", "model_zoo", None, {"weight": weight_id})
+    await session.commit()
+    return Ok()

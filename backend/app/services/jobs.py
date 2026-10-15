@@ -19,6 +19,7 @@ from app.models import Artifact, DataSource, Job, Project, User
 from app.schemas.job import JobCreate
 from app.schemas.settings import ResourcePool
 from app.services import audit
+from app.services import model_zoo as zoo_svc
 from app.services import projects as projects_svc
 from app.services import settings as settings_svc
 from app.services import uploads as uploads_svc
@@ -171,6 +172,10 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 raise bad_request("MODEL_NOT_SUPPORTED", f"{model_family} 不支援 {project.data_type} × {task_type}")
             if loader.needs_gpu(model_family) and body.requested_gpu == 0:
                 raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
+            if not zoo_svc.family_ready(model_family):
+                raise bad_request(
+                    "WEIGHTS_MISSING", f"{model_family} 需要的預訓練權重尚未匯入模型庫，請管理員在「模型庫」頁匯入"
+                )
         else:
             try:
                 search = loader.automl_search(project.data_type, task_type, body.input.spec)
@@ -182,6 +187,13 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 search["candidates"] = [c for c in search["candidates"] if not loader.needs_gpu(c)]
                 if not search["candidates"]:
                     raise bad_request("GPU_REQUIRED", "所有候選模型都需要 GPU，請申請至少 1 GPU")
+            ready = zoo_svc.families_ready()
+            missing = [c for c in search["candidates"] if not ready.get(c, True)]
+            if missing:
+                search["candidates"] = [c for c in search["candidates"] if c not in missing]
+                search["skipped_missing_weights"] = missing
+                if not search["candidates"]:
+                    raise bad_request("WEIGHTS_MISSING", f"候選模型 {missing} 的預訓練權重都不在模型庫，請管理員先匯入")
             config["search"] = search
             model_family = None
         if body.input.kind == "inline":
@@ -197,6 +209,8 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         mode = None
         if loader.needs_gpu(model_family) and body.requested_gpu == 0:
             raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
+        if not zoo_svc.family_ready(model_family):
+            raise bad_request("WEIGHTS_MISSING", f"{model_family} 推論需要的預訓練權重不在模型庫，請管理員先匯入")
 
     steps = body.input.spec.get("preprocess")
     if steps:
@@ -354,11 +368,14 @@ async def delete(session: AsyncSession, admin: User, job: Job) -> None:
 # --- state transitions (scheduler) ----------------------------------------------------------
 
 
-async def mark_scheduled(session: AsyncSession, job: Job, gpus: list[int]) -> None:
+async def mark_scheduled(session: AsyncSession, job: Job, gpus: list[int], cpus: list[int] | None = None) -> None:
     job.status = "scheduled"
     job.assigned_gpus = gpus
+    job.assigned_cpus = cpus or None
     await session.commit()
-    await get_bus().publish(job.id, "status", {"status": "scheduled", "assigned_gpus": gpus})
+    await get_bus().publish(
+        job.id, "status", {"status": "scheduled", "assigned_gpus": gpus, "assigned_cpus": cpus or []}
+    )
 
 
 async def mark_running(session: AsyncSession, job: Job, container_id: str | None) -> None:

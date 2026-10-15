@@ -1,0 +1,22 @@
+[Unit]
+Description=QR AI Lab frontend (Next.js)
+After=network-online.target qrlab-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qrlab
+Group=qrlab
+WorkingDirectory=/opt/qr-ai-lab/frontend
+Environment=NODE_ENV=production
+Environment=BACKEND_URL=http://127.0.0.1:8000
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+Environment=NEXT_TELEMETRY_DISABLED=1
+# COOKIE_SECURE=0 only when nginx does NOT terminate TLS (the login cookie is marked Secure in production builds)
+ExecStart=/usr/bin/npm run start -- -p 3000 -H 127.0.0.1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

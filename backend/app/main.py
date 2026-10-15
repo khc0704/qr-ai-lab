@@ -47,15 +47,34 @@ async def init_dev_schema() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    import contextlib
+
     s = get_settings()
     setup_logging(s.log_level)
     s.data_root.mkdir(parents=True, exist_ok=True)
     if s.app_env != "prod" and s.is_sqlite:
         await init_dev_schema()
+    scheduler_task: asyncio.Task | None = None
+    if s.scheduler_embedded:
+        # Single-process mode: the scheduler loop shares this event loop and the in-process event bus, so a
+        # laptop / WSL / single-service deployment needs neither Redis nor a second process.
+        from app.scheduler.loop import Scheduler
+
+        scheduler_task = asyncio.create_task(Scheduler().run_forever(), name="scheduler")
     log.info(
-        "backend ready", env=s.app_env, auth_mode=s.auth_mode, db=s.database_url.split("://")[0], runner=s.job_runner
+        "backend ready",
+        env=s.app_env,
+        auth_mode=s.auth_mode,
+        db=s.database_url.split("://")[0],
+        runner=s.job_runner,
+        scheduler="embedded" if scheduler_task else "separate process",
     )
     yield
+    if scheduler_task:
+        scheduler_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await scheduler_task
     await get_engine().dispose()
 
 

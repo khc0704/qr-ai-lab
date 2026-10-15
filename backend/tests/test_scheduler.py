@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 
 from app.core.config import get_settings
 from app.db.base import utcnow
@@ -17,10 +18,17 @@ from tests.conftest import make_data_source, make_project
 
 
 class FakeRunner:
+    """Pretends to run jobs; trainer output is appended to the job log file the way a real child would."""
+
+    kind = "fake"
+
     def __init__(self) -> None:
+        from app.scheduler.runner import Enforcement
+
+        self.enforcement = Enforcement(memory=True, cpu=True, cpuset=True)
         self.started: list[LaunchSpec] = []
         self.states: dict[str, RunState] = {}
-        self.queues: dict[str, asyncio.Queue] = {}
+        self.log_paths: dict[str, Path] = {}
         self.stopped: list[str] = []
         self.removed: list[str] = []
 
@@ -28,7 +36,7 @@ class FakeRunner:
         handle = f"fake-{spec.job_id}"
         self.started.append(spec)
         self.states[handle] = RunState(True, None)
-        self.queues[handle] = asyncio.Queue()
+        self.log_paths[handle] = spec.log_path
         return handle
 
     async def inspect(self, handle: str) -> RunState:
@@ -38,26 +46,21 @@ class FakeRunner:
         self.stopped.append(handle)
         self.finish(handle, 143)
 
-    async def logs(self, handle: str):
-        q = self.queues[handle]
-        while True:
-            line = await q.get()
-            if line is None:
-                break
-            yield line
-
-    async def find(self, job_id: int) -> str | None:
+    async def find(self, job_id: int, handle: str | None) -> str | None:
         return None
 
     async def remove(self, handle: str) -> None:
         self.removed.append(handle)
 
+    def pids(self, handle: str) -> list[int]:
+        return []
+
     def emit(self, handle: str, line: str) -> None:
-        self.queues[handle].put_nowait(line)
+        with self.log_paths[handle].open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     def finish(self, handle: str, code: int) -> None:
         self.states[handle] = RunState(False, code)
-        self.queues[handle].put_nowait(None)
 
 
 async def _set_started_at(job_id: int, when) -> None:
@@ -94,7 +97,7 @@ async def test_tick_launches_pumps_logs_and_finishes(client, admin, user):
     # one launch per project per tick
     assert [s.job_id for s in runner.started] == [j1["id"]]
     spec = runner.started[0]
-    assert spec.input_writable and spec.env["JOB_ID"] == str(j1["id"]) and spec.env["HF_HUB_OFFLINE"] == "1"
+    assert spec.env["JOB_ID"] == str(j1["id"]) and spec.cpu == 2 and spec.memory_mb == 2048
     assert spec.env["DATA_SOURCE_KIND"] == "url" and spec.env["DATA_SOURCE_URL"] == "https://example.com/yield.csv"
     assert "Bearer x" in spec.env["DATA_SOURCE_HEADERS"]  # decrypted only here, for the job process
     assert get_storage().job_input_dir(j1["id"]).exists()
@@ -115,7 +118,7 @@ async def test_tick_launches_pumps_logs_and_finishes(client, admin, user):
     await asyncio.sleep(0.05)
     logs = (await client.get(f"/api/v1/jobs/{j1['id']}/logs", headers=user)).json()
     text = "\n".join(logs["lines"])
-    assert "scheduled on GPU" in text and "[INFO] hello from trainer" in text and "[WARN] careful" in text
+    assert "scheduled: gpu=[]" in text and "[INFO] hello from trainer" in text and "[WARN] careful" in text
 
     # trainer reports success through the internal API with its per-job token, then the process exits 0
     token = {"Authorization": f"Bearer {spec.env['JOB_TOKEN']}"}

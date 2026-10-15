@@ -34,6 +34,7 @@ class Job(IdMixin, TimestampMixin, Base):
     requested_memory_mb: Mapped[int] = mapped_column(Integer, default=2048, nullable=False)
     timeout_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=240)
     assigned_gpus: Mapped[list[int] | None] = mapped_column(JSON)
+    assigned_cpus: Mapped[list[int] | None] = mapped_column(JSON)  # logical CPUs pinned / cpuset for the job
     container_id: Mapped[str | None] = mapped_column(String(64))
     progress: Mapped[float] = mapped_column(Numeric(5, 2), default=0, nullable=False)
     current_stage: Mapped[str | None] = mapped_column(String(64))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import psutil
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.catalog import loader
 from app.core.config import get_settings
 from app.models import Job
-from app.schemas.admin import Allocated, ModelZooEntry, NodeGpu, NodeStatus
+from app.schemas.admin import Allocated, ModelZooEntry, NodeGpu, NodeStatus, RunnerInfo
 
 
 def physical_cpu_cores() -> int:
@@ -62,6 +63,65 @@ async def allocated(session: AsyncSession) -> Allocated:
     )
 
 
+def busy_gpus(indices: list[int], threshold: float) -> list[int]:
+    """GPUs whose memory is already in use (another process) beyond `threshold` of the total."""
+    if not indices:
+        return []
+    by_index = {g.index: g for g in detect_gpus()}
+    busy = []
+    for i in indices:
+        g = by_index.get(i)
+        if g and g.memory_total_mb and g.memory_used_mb / g.memory_total_mb > threshold:
+            busy.append(i)
+    return busy
+
+
+async def cpu_core_map(session: AsyncSession) -> dict[int, int]:
+    rows = (await session.execute(select(Job).where(Job.status.in_(("scheduled", "running"))))).scalars().all()
+    out: dict[int, int] = {}
+    for j in rows:
+        for c in j.assigned_cpus or []:
+            out[int(c)] = j.id
+    return out
+
+
+_runner_cache: tuple[float, RunnerInfo] | None = None
+
+
+def runner_info() -> RunnerInfo:
+    """How this host runs jobs (probed at most once a minute; the scheduler makes the same decision)."""
+    global _runner_cache
+    now = time.monotonic()
+    if _runner_cache and now - _runner_cache[0] < 60:
+        return _runner_cache[1]
+    from app.scheduler.runner import Enforcement, detect_cgroup_controllers, systemd_available, trainer_python
+
+    s = get_settings()
+    kind = s.job_runner
+    if kind == "auto":
+        kind = "systemd" if systemd_available(user=s.systemd_user) else "subprocess"
+    if kind == "systemd":
+        enf = detect_cgroup_controllers(user=s.systemd_user)
+        enf.cpuset = enf.cpuset or hasattr(psutil.Process, "cpu_affinity")
+        note = "systemd-run --scope（cgroup v2）"
+        if not (enf.memory and enf.cpu):
+            note += "；部分 controller 未委派給 user slice，缺的由 watchdog 補"
+    else:
+        enf = Enforcement(memory=False, cpu=False, cpuset=hasattr(psutil.Process, "cpu_affinity"))
+        note = "主機子程序：CPU affinity + 執行緒數；記憶體由排程器 watchdog 監看（每 3 秒）"
+    info = RunnerInfo(
+        kind=kind,
+        enforces=enf.as_dict(),
+        memory_watchdog=s.memory_watchdog and not enf.memory,
+        trainer_python=trainer_python(s.trainer_dir.resolve(), s.trainer_python),
+        trainer_dir=str(s.trainer_dir.resolve()),
+        offline=True,
+        note=note,
+    )
+    _runner_cache = (now, info)
+    return info
+
+
 async def gpu_job_map(session: AsyncSession) -> dict[int, int]:
     rows = (await session.execute(select(Job).where(Job.status.in_(("scheduled", "running"))))).scalars().all()
     out: dict[int, int] = {}
@@ -89,6 +149,7 @@ async def node_status(session: AsyncSession) -> NodeStatus:
         disk_total_gb=int(du.total / 2**30),
         disk_free_gb=int(du.free / 2**30),
         allocated=await allocated(session),
+        runner=runner_info(),
     )
 
 

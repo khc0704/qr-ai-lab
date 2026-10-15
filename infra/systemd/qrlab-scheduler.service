@@ -1,0 +1,23 @@
+[Unit]
+Description=QR AI Lab scheduler (runs jobs as host processes from the trainer venv)
+After=network-online.target qrlab-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qrlab
+Group=qrlab
+WorkingDirectory=/opt/qr-ai-lab/backend
+EnvironmentFile=/etc/qr-ai-lab/qrlab.env
+# systemd-run --user needs the user's own manager: `loginctl enable-linger qrlab` once, and XDG_RUNTIME_DIR
+# must point at it (the uid of qrlab, e.g. 1001).
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+ExecStart=/opt/qr-ai-lab/backend/.venv/bin/python -m app.scheduler
+Restart=always
+RestartSec=5
+# Jobs are started as transient scopes inside the qrlab user's slice, not as children of this unit, so
+# restarting the scheduler leaves running jobs alone (it re-attaches to them).
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

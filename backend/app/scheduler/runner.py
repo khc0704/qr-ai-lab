@@ -1,36 +1,65 @@
-"""Job runners: DockerRunner (GPU server) and SubprocessRunner (dev / CPU families without docker)."""
+"""Job runners: every job is `python -m trainer run` from the trainer venv on this host.
+
+- SystemdRunner (Linux, default when available): the process tree lives in a transient systemd scope, so the
+  kernel enforces MemoryMax / CPUQuota / AllowedCPUs (cgroups v2) and `systemctl stop` kills every child.
+- SubprocessRunner (fallback, also dev on macOS / WSL without systemd): its own process group, CPU affinity to the
+  assigned cores, and the scheduler's memory watchdog instead of a kernel limit.
+
+Both write the child's stdout straight into the job log file (the scheduler tails it), so a scheduler restart
+neither kills the job nor loses its log: the handle `pid:<pid>:<create_time>` / `scope:<unit>:<pid>` is enough
+to find the process again.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import os
+import shutil
+import signal
+import subprocess
 import sys
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+import psutil
+
+from app.core.logging import get_logger
+
+log = get_logger("runner")
+
+# Set for every job: weights come from the model zoo only, nothing phones home, threads follow the CPU grant.
+OFFLINE_ENV = {
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "YOLO_OFFLINE": "1",
+    "NO_ALBUMENTATIONS_UPDATE": "1",
+    "WANDB_DISABLED": "true",
+    "WANDB_MODE": "disabled",
+    "MLFLOW_TRACKING_URI": "",
+    "PYTHONUNBUFFERED": "1",
+}
 
 
 @dataclass
 class LaunchSpec:
     job_id: int
     kind: str
-    image: str
     env: dict[str, str]
     input_dir: Path
     output_dir: Path
     model_dir: Path | None
     zoo_dir: Path | None
-    host_input_dir: Path
-    host_output_dir: Path
-    host_model_dir: Path | None
-    host_zoo_dir: Path | None
+    log_path: Path
     gpus: list[int] = field(default_factory=list)
+    cpus: list[int] = field(default_factory=list)  # logical CPUs granted to this job (affinity / cpuset)
     cpu: float = 1.0
     memory_mb: int = 2048
-    network: str | None = None
-    input_writable: bool = False  # data_source jobs download into /job/input; uploads stay read-only
+    timeout_s: int | None = None
 
 
 @dataclass
@@ -39,189 +68,278 @@ class RunState:
     exit_code: int | None
 
 
+@dataclass
+class Enforcement:
+    """What the runner can enforce by itself (the scheduler's watchdog covers the rest)."""
+
+    memory: bool = False
+    cpu: bool = False
+    cpuset: bool = False
+
+    def as_dict(self) -> dict[str, bool]:
+        return {"memory": self.memory, "cpu": self.cpu, "cpuset": self.cpuset}
+
+
 class Runner(Protocol):
+    kind: str
+    enforcement: Enforcement
+
     async def start(self, spec: LaunchSpec) -> str: ...
     async def inspect(self, handle: str) -> RunState: ...
     async def stop(self, handle: str, grace: int = 10) -> None: ...
-    def logs(self, handle: str) -> AsyncIterator[str]: ...
-    async def find(self, job_id: int) -> str | None: ...
+    async def find(self, job_id: int, handle: str | None) -> str | None: ...
     async def remove(self, handle: str) -> None: ...
+    def pids(self, handle: str) -> list[int]: ...
 
 
-class DockerRunner:
-    """Each job is a hardened container: read-only rootfs, no capabilities, its own input/output mounts only."""
+def trainer_python(trainer_dir: Path, override: Path | None = None) -> str:
+    if override:
+        return str(override)
+    venv = trainer_dir / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return str(venv) if venv.exists() else sys.executable
 
-    def __init__(self) -> None:
-        import docker
 
-        self.client = docker.from_env()
+def job_env(spec: LaunchSpec, base: dict[str, str] | None = None) -> dict[str, str]:
+    threads = str(max(1, math.ceil(spec.cpu)))
+    return {
+        **(base if base is not None else os.environ),
+        **OFFLINE_ENV,
+        "OMP_NUM_THREADS": threads,
+        "MKL_NUM_THREADS": threads,
+        "OPENBLAS_NUM_THREADS": threads,
+        "TORCH_NUM_THREADS": threads,
+        "CUDA_VISIBLE_DEVICES": ",".join(str(g) for g in spec.gpus) if spec.gpus else "",
+        **spec.env,
+        "JOB_INPUT_DIR": str(spec.input_dir),
+        "JOB_OUTPUT_DIR": str(spec.output_dir),
+        "JOB_MODEL_DIR": str(spec.model_dir or ""),
+        "MODEL_ZOO_ROOT": str(spec.zoo_dir or ""),
+    }
 
-    async def start(self, spec: LaunchSpec) -> str:
-        def _start() -> str:
-            from docker.types import DeviceRequest
 
-            volumes = {
-                str(spec.host_input_dir): {"bind": "/job/input", "mode": "rw" if spec.input_writable else "ro"},
-                str(spec.host_output_dir): {"bind": "/job/output", "mode": "rw"},
-            }
-            if spec.host_model_dir:
-                volumes[str(spec.host_model_dir)] = {"bind": "/job/model", "mode": "ro"}
-            if spec.host_zoo_dir:
-                volumes[str(spec.host_zoo_dir)] = {"bind": "/job/zoo", "mode": "ro"}
-            kwargs: dict = {
-                "image": spec.image,
-                "command": ["python", "-m", "trainer", "run"],
-                "environment": spec.env,
-                "detach": True,
-                "volumes": volumes,
-                "nano_cpus": int(spec.cpu * 1e9),
-                "mem_limit": f"{spec.memory_mb}m",
-                "memswap_limit": f"{spec.memory_mb}m",
-                "read_only": True,
-                "tmpfs": {"/tmp": "size=4g"},
-                "cap_drop": ["ALL"],
-                "security_opt": ["no-new-privileges"],
-                "user": "1000:1000",
-                "labels": {"qr-ai-lab.job_id": str(spec.job_id), "qr-ai-lab.kind": spec.kind},
-                "name": f"qr-job-{spec.job_id}",
-                "shm_size": "2g",
-            }
-            if spec.network:
-                kwargs["network"] = spec.network
-            if spec.gpus:
-                ids = [str(g) for g in spec.gpus]
-                kwargs["device_requests"] = [DeviceRequest(device_ids=ids, capabilities=[["gpu"]])]
-            return self.client.containers.run(**kwargs).id
+def _proc_matches(pid: int, create_time: float) -> psutil.Process | None:
+    try:
+        p = psutil.Process(pid)
+        if abs(p.create_time() - create_time) < 2 and p.status() != psutil.STATUS_ZOMBIE:
+            return p
+    except psutil.Error:
+        return None
+    return None
 
-        return await asyncio.to_thread(_start)
 
-    async def inspect(self, handle: str) -> RunState:
-        def _inspect() -> RunState:
-            from docker.errors import NotFound
-
-            try:
-                c = self.client.containers.get(handle)
-            except NotFound:
-                return RunState(False, None)
-            c.reload()
-            st = c.attrs["State"]
-            return RunState(bool(st.get("Running")), None if st.get("Running") else st.get("ExitCode"))
-
-        return await asyncio.to_thread(_inspect)
-
-    async def stop(self, handle: str, grace: int = 10) -> None:
-        def _stop() -> None:
-            from docker.errors import NotFound
-
-            with contextlib.suppress(NotFound):
-                self.client.containers.get(handle).stop(timeout=grace)
-
-        await asyncio.to_thread(_stop)
-
-    async def logs(self, handle: str) -> AsyncIterator[str]:
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-        def _pump() -> None:
-            try:
-                c = self.client.containers.get(handle)
-                for chunk in c.logs(stream=True, follow=True, stdout=True, stderr=True):
-                    for line in chunk.decode("utf-8", errors="replace").splitlines():
-                        loop.call_soon_threadsafe(queue.put_nowait, line)
-            except Exception as e:
-                loop.call_soon_threadsafe(queue.put_nowait, f"[ERROR] log stream ended: {e}")
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
-
-        task = loop.run_in_executor(None, _pump)
-        while True:
-            line = await queue.get()
-            if line is None:
-                break
-            yield line
-        await task
-
-    async def find(self, job_id: int) -> str | None:
-        def _find() -> str | None:
-            cs = self.client.containers.list(all=True, filters={"label": f"qr-ai-lab.job_id={job_id}"})
-            return cs[0].id if cs else None
-
-        return await asyncio.to_thread(_find)
-
-    async def remove(self, handle: str) -> None:
-        def _rm() -> None:
-            from docker.errors import NotFound
-
-            with contextlib.suppress(NotFound):
-                self.client.containers.get(handle).remove(force=True)
-
-        await asyncio.to_thread(_rm)
+def _kill_tree(root: psutil.Process, sig: int) -> None:
+    procs = [root, *root.children(recursive=True)]
+    for p in procs:
+        with contextlib.suppress(psutil.Error):
+            p.send_signal(sig)
 
 
 class SubprocessRunner:
-    """Runs `python -m trainer run` from the trainer checkout (its own venv if present). Dev only, no isolation."""
+    """Process group + CPU affinity; memory is watched by the scheduler (no kernel limit)."""
 
-    def __init__(self, trainer_dir: Path) -> None:
+    kind = "subprocess"
+
+    def __init__(self, trainer_dir: Path, python: Path | None = None) -> None:
         self.trainer_dir = trainer_dir.resolve()
+        self.python = trainer_python(self.trainer_dir, python)
         self.procs: dict[str, asyncio.subprocess.Process] = {}
+        self.enforcement = Enforcement(memory=False, cpu=False, cpuset=hasattr(psutil.Process, "cpu_affinity"))
 
-    def _python(self) -> str:
-        venv = self.trainer_dir / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        return str(venv) if venv.exists() else sys.executable
+    def argv(self, spec: LaunchSpec) -> list[str]:
+        return [self.python, "-m", "trainer", "run"]
 
     async def start(self, spec: LaunchSpec) -> str:
-        env = {
-            **os.environ,
-            **spec.env,
-            "JOB_INPUT_DIR": str(spec.input_dir),
-            "JOB_OUTPUT_DIR": str(spec.output_dir),
-            "JOB_MODEL_DIR": str(spec.model_dir or ""),
-            "MODEL_ZOO_ROOT": str(spec.zoo_dir or ""),
-            "PYTHONUNBUFFERED": "1",
-        }
-        proc = await asyncio.create_subprocess_exec(
-            self._python(),
-            "-m",
-            "trainer",
-            "run",
-            cwd=self.trainer_dir,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        handle = f"pid:{proc.pid}"
+        spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with spec.log_path.open("ab") as out:
+            proc = await asyncio.create_subprocess_exec(
+                *self.argv(spec),
+                cwd=self.trainer_dir,
+                env=job_env(spec),
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,  # its own process group / session: killpg reaches DataLoader workers
+            )
+        self._apply_affinity(proc.pid, spec.cpus)
+        try:
+            create_time = psutil.Process(proc.pid).create_time()
+        except psutil.Error:
+            create_time = 0.0
+        handle = f"pid:{proc.pid}:{int(create_time)}"
         self.procs[handle] = proc
         return handle
 
+    def _apply_affinity(self, pid: int, cpus: list[int]) -> None:
+        if not cpus or not self.enforcement.cpuset:
+            return
+        try:
+            psutil.Process(pid).cpu_affinity(cpus)
+        except (psutil.Error, OSError, ValueError) as e:
+            log.warning("cpu affinity not applied", pid=pid, cpus=cpus, error=repr(e))
+
+    @staticmethod
+    def _parse(handle: str) -> tuple[int, float]:
+        _, pid, ct = handle.split(":", 2)
+        return int(pid), float(ct)
+
+    def _process(self, handle: str) -> psutil.Process | None:
+        pid, ct = self._parse(handle)
+        return _proc_matches(pid, ct)
+
+    def pids(self, handle: str) -> list[int]:
+        p = self._process(handle)
+        if p is None:
+            return []
+        return [p.pid, *(c.pid for c in p.children(recursive=True))]
+
     async def inspect(self, handle: str) -> RunState:
         proc = self.procs.get(handle)
-        if proc is None:
-            return RunState(False, None)
-        return RunState(proc.returncode is None, proc.returncode)
+        if proc is not None:
+            if proc.returncode is None:
+                # reap without blocking; returncode is set once the child exits
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), timeout=0)
+            return RunState(proc.returncode is None, proc.returncode)
+        # re-attached after a scheduler restart: alive or not, exit code unknown (the trainer reports its own status)
+        return RunState(self._process(handle) is not None, None)
 
     async def stop(self, handle: str, grace: int = 10) -> None:
-        proc = self.procs.get(handle)
-        if proc is None or proc.returncode is not None:
+        p = self._process(handle)
+        if p is None:
             return
-        proc.terminate()
         try:
-            await asyncio.wait_for(proc.wait(), timeout=grace)
-        except TimeoutError:
-            proc.kill()
-
-    async def logs(self, handle: str) -> AsyncIterator[str]:
-        proc = self.procs.get(handle)
-        if proc is None or proc.stdout is None:
-            return
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
+            os.killpg(p.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, AttributeError):
+            _kill_tree(p, signal.SIGTERM)
+        deadline = asyncio.get_running_loop().time() + grace
+        while asyncio.get_running_loop().time() < deadline:
+            if self._process(handle) is None:
                 break
-            yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
-        await proc.wait()
+            await asyncio.sleep(0.25)
+        else:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, AttributeError):
+                _kill_tree(p, signal.SIGKILL)
+        proc = self.procs.get(handle)
+        if proc is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=5)
 
-    async def find(self, job_id: int) -> str | None:
-        return None  # child processes do not survive a scheduler restart
+    async def find(self, job_id: int, handle: str | None) -> str | None:
+        if not handle or not handle.startswith("pid:"):
+            return None
+        return handle if self._process(handle) is not None else None
 
     async def remove(self, handle: str) -> None:
         self.procs.pop(handle, None)
+
+
+class SystemdRunner(SubprocessRunner):
+    """`systemd-run --scope` puts the job in its own cgroup so the kernel enforces the limits."""
+
+    kind = "systemd"
+
+    def __init__(self, trainer_dir: Path, python: Path | None = None, *, user: bool = True) -> None:
+        super().__init__(trainer_dir, python)
+        self.user = user
+        self.enforcement = detect_cgroup_controllers(user=user)
+        self.enforcement.cpuset = self.enforcement.cpuset or hasattr(psutil.Process, "cpu_affinity")
+
+    def _ctl(self) -> list[str]:
+        return ["systemctl", "--user"] if self.user else ["systemctl"]
+
+    @staticmethod
+    def unit(job_id: int) -> str:
+        return f"qrlab-job-{job_id}.scope"
+
+    def argv(self, spec: LaunchSpec) -> list[str]:
+        props = [
+            f"MemoryMax={spec.memory_mb}M",
+            "MemorySwapMax=0",
+            f"CPUQuota={max(1, round(spec.cpu * 100))}%",
+            "TasksMax=8192",
+        ]
+        if spec.cpus and self.enforcement.cpuset:
+            props.append("AllowedCPUs=" + ",".join(str(c) for c in spec.cpus))
+        if spec.timeout_s:
+            props.append(f"RuntimeMaxSec={spec.timeout_s}")
+        cmd = ["systemd-run", "--scope", "--quiet", "--collect", f"--unit={self.unit(spec.job_id)}"]
+        if self.user:
+            cmd.append("--user")
+        for p in props:
+            cmd += ["-p", p]
+        cmd.append("--")
+        return cmd + super().argv(spec)
+
+    async def start(self, spec: LaunchSpec) -> str:
+        pid_handle = await super().start(spec)
+        handle = pid_handle.replace("pid:", f"scope:{self.unit(spec.job_id)}:", 1)
+        self.procs[handle] = self.procs.pop(pid_handle)
+        return handle
+
+    @staticmethod
+    def _parse(handle: str) -> tuple[int, float]:
+        _, _unit, pid, ct = handle.split(":", 3)
+        return int(pid), float(ct)
+
+    def _unit_of(self, handle: str) -> str:
+        return handle.split(":", 3)[1]
+
+    async def _is_active(self, unit: str) -> bool:
+        proc = await asyncio.create_subprocess_exec(
+            *self._ctl(), "is-active", "--quiet", unit, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return await proc.wait() == 0
+
+    async def inspect(self, handle: str) -> RunState:
+        proc = self.procs.get(handle)
+        if proc is not None:
+            if proc.returncode is None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), timeout=0)
+            return RunState(proc.returncode is None, proc.returncode)
+        return RunState(await self._is_active(self._unit_of(handle)), None)
+
+    async def stop(self, handle: str, grace: int = 10) -> None:
+        unit = self._unit_of(handle)
+        proc = await asyncio.create_subprocess_exec(
+            *self._ctl(), "stop", "--no-block", unit, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        await proc.wait()
+        await super().stop(handle, grace)
+
+    async def find(self, job_id: int, handle: str | None) -> str | None:
+        if not handle or not handle.startswith("scope:"):
+            return None
+        if await self._is_active(self._unit_of(handle)) or self._process(handle) is not None:
+            return handle
+        return None
+
+
+def detect_cgroup_controllers(*, user: bool = True) -> Enforcement:
+    """Which cgroup v2 controllers systemd can apply to our transient scopes."""
+    try:
+        if user:
+            uid = os.getuid()
+            path = Path(f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.subtree_control")
+        else:
+            path = Path("/sys/fs/cgroup/system.slice/cgroup.subtree_control")
+        controllers = set(path.read_text().split())
+    except OSError:
+        controllers = set()
+    return Enforcement(memory="memory" in controllers, cpu="cpu" in controllers, cpuset="cpuset" in controllers)
+
+
+def systemd_available(*, user: bool = True) -> bool:
+    """Can this process start transient scopes? (systemd running, user manager up, systemd-run on PATH)"""
+    if os.name == "nt" or shutil.which("systemd-run") is None:
+        return False
+    cmd = ["systemd-run", "--scope", "--quiet", "--collect", "-p", "MemoryMax=64M"]
+    if user:
+        cmd.append("--user")
+    cmd += ["--", "/bin/true"]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
