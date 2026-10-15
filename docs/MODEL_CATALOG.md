@@ -45,7 +45,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 ## 4. 模型家族與推論模式
 
 每個家族在 trainer 實作 `BaseTrainer`（`fit / evaluate / finalize / export`）與 `BaseInferencer`（`load / predict`）。
-推論模式：`predict`（類別 / 數值）、`score`（異常分數 + 門檻判定）、`embed`（向量）、`retrieve`（對參考庫找最相似 / 最不相似）、
+推論模式：`predict`（類別 / 數值）、`score`（異常分數 + 門檻判定）、`compare`（整批影像對黃金基準的機台比對報告）、`embed`（向量）、`retrieve`（對參考庫找最相似 / 最不相似）、
 `detect` / `segment`（框 / 遮罩）、`measure`（遮罩幾何量）、`extend`（免重訓新增類別）。
 
 | id | 支援 | 推論模式 | 白話 | 資源 | 預訓練權重 | 產物 |
@@ -58,6 +58,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLO11，微調或從頭 | GPU | `yolo11n/s/m[-seg|-cls].pt` | `model/best.pt` + `report/training_curve.csv` |
 | `vision.dino_fewshot` | IMAGE × classification | predict / embed / retrieve / extend | 凍結 DINOv2 + 原型庫；新類別免重訓 | GPU | `dinov2-small/`、`dinov2-base/` | `model/prototypes.npz` |
 | `vision.dino_patchcore` | IMAGE × anomaly | score（熱圖）/ embed | 正常影像 patch 記憶庫 | GPU | `dinov2-small/` | `model/memory_bank.npz` |
+| `vision.image_quality` | IMAGE × anomaly | compare / score / embed | 17 個無參考影像品質指標的黃金機台基準與浮動範圍；compare 產出機台比對報告 | CPU | 無 | `model/baseline.json` + `report/baseline_ranges.csv` |
 | `sequence.patch_autoencoder` | SEQUENCE / SPECTRUM × anomaly | score / embed / retrieve | patch 嵌入 + 位置編碼 + 視窗 latent | CPU / GPU | 無 | `model/model.pt` + `reference.npz` |
 | `spectrum.masked_autoencoder` | SPECTRUM × anomaly / regression | score / embed / retrieve / predict | 遮蔽重建的光譜鑑別器；可接迴歸頭 | CPU / GPU | 無 | `model/model.pt` + `reference.npz` + `head.joblib` |
 | `text.bert_classifier` | TEXT × classification | predict / embed | 預訓練 BERT 微調 | GPU | `bert-base-chinese/`、`xlm-roberta-base/` | `model/bert/`（HF 格式） |
@@ -74,12 +75,26 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `vision.yolo` | `model=yolo11s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolo11n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
 | `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base`；`k: 1 … 20` |
 | `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
+| `vision.image_quality` | `z_threshold=3.0, distance_percentile=99` | （無；compare 的 `effect_warn / effect_fail / alpha` 在推論 config 指定） |
 | `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2` |
 | `spectrum.masked_autoencoder` | `patch_size=16, mask_ratio=0.5, dim=64, depth=4, heads=4, lr=5e-4, epochs=100` | `patch_size: 8 / 16 / 32`；`mask_ratio: 0.3 … 0.75`；`dim: 32 / 64 / 128`；`depth: 2 … 6`；`lr: log 1e-4 … 5e-3` |
 | `text.bert_classifier` | `model=bert-base-chinese, max_len=256, lr=2e-5, epochs=3, batch=16` | `lr: log 1e-5 … 5e-5`；`epochs: 2 … 5`；`max_len: 128 / 256 / 512` |
 
 共通：驗證集 = 20% 分層切分（分類）或隨機；異常偵測只用正常樣本訓練、異常樣本進驗證集；手動 Job 的 `config` 會覆蓋預設；
 AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial 抽到的參數（例如固定 `epochs`）。
+
+### 4.2 資料前處理（`input.spec.preprocess`）
+
+共用套件 `libs/preprocess`（`qrlab_preprocess`）：使用者在上傳後挑步驟與參數，`POST /projects/{slug}/uploads/{id}/preview` 抽樣套用回傳前後對照；
+步驟放在任務的 `input.spec.preprocess = [{op, params}]`。訓練時 fitted 步驟（補值數字、標準化統計、MSC 參考曲線、對位參考影像…）在訓練資料上學習並存進模型（`model/preprocess.json` 與產物 metadata）；推論自動沿用，不得再指定。
+`GET /catalog/preprocess?data_type=` 列出每個步驟的參數規格。偵測 / 分割任務拒絕會改變座標的影像步驟。
+
+| data_type | 步驟 |
+|---|---|
+| TABULAR | `tabular.impute`、`drop_missing`、`clip_outliers`、`standardize`、`minmax`、`log`、`to_numeric`、`filter_rows`、`drop_columns`、`keep_columns`、`drop_duplicates` |
+| IMAGE | `image.resize`、`grayscale`、`crop`、`center_crop`、`autocontrast`、`equalize`、`gamma`、`stretch`、`denoise`、`sharpen`、`invert`、`flip`、`rotate`、`align` |
+| SEQUENCE / SPECTRUM | `sequence.resample`、`crop`、`fill_nan`、`savgol`、`moving_average`、`derivative`、`baseline_poly`、`baseline_rolling_min`、`detrend`、`snv`、`minmax_sample`、`msc`、`standardize`、`clip` |
+| TEXT | `text.lowercase`、`strip_whitespace`、`remove_punctuation`、`remove_urls`、`remove_numbers`、`truncate`、`replace_regex`、`drop_empty`、`dedupe` |
 
 ## 5. AutoML 候選矩陣（`mode = auto`）
 
@@ -89,7 +104,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 | TABULAR | anomaly_detection | `tabular.isolation_forest` | | 10 / 20 |
 | IMAGE | classification | `vision.dino_fewshot`、`vision.yolo` | `row_count < 100` 剔除 yolo | 8 / 120 |
 | IMAGE | detection / segmentation | `vision.yolo` | | 8 / 120 |
-| IMAGE | anomaly_detection | `vision.dino_patchcore` | | 6 / 60 |
+| IMAGE | anomaly_detection | `vision.dino_patchcore`、`vision.image_quality` | 沒申請 GPU 時只剩 image_quality | 6 / 60 |
 | SEQUENCE | anomaly_detection | `sequence.patch_autoencoder` | | 10 / 60 |
 | SPECTRUM | anomaly_detection | `spectrum.masked_autoencoder`、`sequence.patch_autoencoder` | | 10 / 60 |
 | SPECTRUM | regression | `spectrum.masked_autoencoder` | | 10 / 60 |

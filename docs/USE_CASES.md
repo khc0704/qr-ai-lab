@@ -15,6 +15,7 @@
 | `detect` / `segment` | 圖裡東西在哪、哪些像素 | 框、遮罩、標註圖 | YOLO |
 | `measure` | 從分割遮罩算幾何量（面積、寬高、等效直徑；給 `pixel_size` 可換算 nm / µm） | 每個物件一列 | YOLO segmentation |
 | `extend` | **不重訓**，直接把新類別（新 bin code）的範例加進原型庫，產生新版本模型 | 新 model artifact（自動設為預設） | DINO few-shot |
+| `compare` | 整批影像與黃金機台的影像品質基準比對（調機驗收） | 每個指標 match / drift / fail、總判定、`comparison.csv` | 影像品質基準 |
 
 推論 Job 的 `config.mode` 指定模式；不填就用該模型 `inference_modes` 的第一個。
 
@@ -29,6 +30,7 @@
 | 同上，資料量大、類別固定 | `IMAGE` × `classification` | 高準確度分類 | `vision.yolo`（`-cls` 權重微調，或 `pretrained=false` 從頭訓） | `predict` |
 | 同上，只有良品影像 | `IMAGE` × `anomaly_detection` | 找「跟正常不一樣」的影像並標出位置 | `vision.dino_patchcore` | `score`（含熱圖） |
 | SEM 線寬 / 孔洞 / 顆粒 | `IMAGE` × `segmentation` | 分割後量測幾何 | `vision.yolo`（`-seg`） | `segment`、`measure` |
+| 任何機台（SEM / TEM / 光學）的影像品質 | `IMAGE` × `anomaly_detection` | 黃金機台建立品質基準與浮動範圍；調機後驗收、日常監控 | `vision.image_quality`（CPU、免權重） | `compare`、`score` |
 | AOI / 外觀檢測 | `IMAGE` × `detection` | 缺陷定位、計數、分類 | `vision.yolo` | `detect` |
 | Wafer map / bin map | `IMAGE` × `classification` | 失效圖樣（環、刮痕、邊緣…）分類 | 先把 map 轉成圖片 → `vision.dino_fewshot` / `vision.yolo` | `predict` |
 | FDC / 機台感測器 trace | `SEQUENCE` × `anomaly_detection` | 異常 run 偵測、找相似 run | `sequence.patch_autoencoder` | `score`、`retrieve`、`embed` |
@@ -75,6 +77,14 @@
 - YOLO segmentation 格式（多邊形標註 + `data.yaml`）訓練 `vision.yolo`（`-seg`）。
 - 推論 `measure`：每個物件回 `area_px`、`width_px`、`height_px`、`equiv_diameter_px`；`config.pixel_size`（例如 2.5 代表每像素 2.5 nm）會多給 `*_phys` 欄。
 
+### 3.5b 影像品質基準與機台比對（tool matching）
+
+- **問題**：沒有標準答案的「影像品質」要怎麼量？做法是把黃金機台的一批影像變成 17 個無參考指標（清晰度 Laplacian / Tenengrad / Brenner、雜訊標準差、訊噪比、對比 RMS / Michelson、亮度平均 / P1 / P99、過暗 / 過亮飽和比例、亮度熵、高頻能量比、頻譜斜率、梯度與頻譜的方向性），以穩健中位數與 MAD 建立基準與浮動範圍（中位數 ± 3 × 尺度），並以 Mahalanobis 距離做整體判定。
+- **訓練**：`vision.image_quality`，資料夾 `good/` 放黃金機台影像（≥ 30 張較穩）；其他資料夾可放已知偏差的影像當驗證。產物 `report/baseline_ranges.csv` 直接是每個指標的允收範圍。
+- **推論 `compare`**：把調機後機台的一批影像丟進來 → 每個指標的 effect（偏移幾個尺度）、KS 檢定 p 值、in_range_ratio 與 verdict，總判定 pass / drift / fail，`output/comparison.csv` 就是調機報告；`score` 給單張影像的 z 分數與距離做日常監控。
+- **注意**：基準只適用同類樣品與同倍率；先用前處理 `image.crop` 裁掉 SEM 資訊列。像散 / 掃描方向問題會反映在方向性指標，焦距在清晰度與高頻能量比，亮度 / 對比設定在亮度與飽和比例。
+- **可再加**：DINOv2 特徵分布距離（Fréchet）當第 18 個「語意」指標、依樣品結構分區計算（中心 / 邊緣）。
+
 ### 3.6 FDC trace 異常 / 找相似 run
 
 - 長表 `series_id,t,feature…` + `spec.window` / `stride`（切視窗），或 `npy` `N × T × C`。
@@ -93,6 +103,10 @@
 - `jsonl` 或 `csv`，`spec.text_column` / `label_column`。
 - < 300 筆：AutoML 只會用 TF-IDF + 邏輯迴歸（秒級）；≥ 300 筆加入 `text.bert_classifier`（模型庫的 `bert-base-chinese` / `xlm-roberta-base`，需要 GPU）。
 - 推論 `predict`（各類機率）或 `embed`（CLS 向量）。
+
+## 3.10 資料前處理（所有資料類型）
+
+上傳後可挑選前處理步驟並即時抽樣預覽（表格補值 / 離群 / 標準化、影像裁切 / 對比 / 去雜訊 / 對位、光譜 SNV / MSC / 平滑 / 基線、文字清理），步驟隨任務送出；訓練時學到的數值存進模型，推論自動沿用。清單見 `docs/MODEL_CATALOG.md` §4.2。
 
 ## 4. 預訓練權重政策（模型庫）
 

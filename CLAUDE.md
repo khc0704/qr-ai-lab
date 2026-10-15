@@ -36,8 +36,9 @@ qr-ai-lab/
 ├─ .claude/rules/      路徑觸發的規則：frontend.md、backend.md、database.md
 ├─ .claude/skills/     /design-review
 ├─ .claude/settings.json  PostToolUse hook → scripts/design_lint.py
-├─ docs/               ARCHITECTURE.md、DATABASE.md、MODEL_CATALOG.md、USE_CASES.md、GETTING_STARTED.md
-├─ scripts/            design_lint.py、fetch_model_zoo.py（在有網路的機器下載預訓練權重）
+├─ docs/               ARCHITECTURE.md、DATABASE.md、MODEL_CATALOG.md、USE_CASES.md、GETTING_STARTED.md、ROADMAP.md、manuals/
+├─ scripts/            design_lint.py、fetch_model_zoo.py（在有網路的機器下載預訓練權重）、build_manual.js（使用手冊 DOCX）
+├─ libs/preprocess/    共用套件 qrlab_preprocess：資料前處理步驟（backend 預覽 / 驗證、trainer fit + replay）
 ├─ frontend/           Next.js 16（src/app、src/components/{ui,layout,features}、src/lib、src/proxy.ts）
 ├─ backend/            FastAPI：app/{core,db,events,models,schemas,routers,services,scheduler,storage,catalog}、alembic/、tests/
 ├─ trainer/            訓練 / 推論 runtime：trainer/{runtime,automl,dataset,fetch,metrics}.py、trainer/{data,models}/、tests/
@@ -62,12 +63,14 @@ uv run python -m app.scheduler                    # 排程器：JOB_RUNNER=subpr
 uv run python -m app.cli seed|create-user|set-password|model-zoo [--verify]
 # trainer
 cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
+cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest             # 共用前處理套件
+node scripts/build_manual.js                      # 使用手冊 DOCX（再用 soffice 轉 PDF）
 # model zoo（在有網路的機器）
 python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis
 docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d   # + backend、scheduler
-docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
+docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .   # context = repo 根目錄
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ```
@@ -76,8 +79,9 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 
 - `data_type`：`TABULAR | IMAGE | SEQUENCE | TEXT | SPECTRUM`
 - `task_type`：`classification | regression | detection | segmentation | anomaly_detection`
-- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_patchcore | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
-- 推論模式（推論 Job 的 `config.mode`）：`predict | score | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
+- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
+- 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
+- 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
 - ProjectRequest（專案申請）`status`：`submitted | in_review | approved | rejected | withdrawn`；核准才建立 project
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
 - Project `status`：`active | archived`
@@ -103,6 +107,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
 13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，容器設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記並更新 `scripts/fetch_model_zoo.py` 能處理的 `kind`。
+14. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
 ## 文件地圖
 
@@ -111,5 +116,6 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - `docs/DATABASE.md`：資料表定義、索引、狀態機。
 - `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫；也是給使用者看的 SOP 底稿。
 - `docs/USE_CASES.md`：半導體 / 電子製造的機台資料 → 模型 → 推論目的（OCD 光譜鑑別器、TEM few-shot bin code、PatchCore、FDC、WAT…）。
-- `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/`：各頁截圖。
+- `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/`：各頁截圖；`docs/manuals/`：使用者手冊（DOCX / PDF，由 `scripts/build_manual.js` 產生）。
+- `docs/ROADMAP.md`：已知缺口與改善方向（審視清單）。
 - `.claude/rules/frontend.md`、`backend.md`、`database.md`：動到對應路徑時自動載入的細部慣例。

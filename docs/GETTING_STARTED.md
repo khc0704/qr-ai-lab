@@ -91,7 +91,7 @@ uv run python -m app.scheduler                # 另一個終端；每 3 秒：�
 ```
 
 - 開發機預設 `JOB_RUNNER=subprocess`：直接用 `../trainer/.venv` 執行 `python -m trainer run`（無隔離，只適合 CPU 家族）。
-- GPU 伺服器用 `JOB_RUNNER=docker`：先建 image `docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer`，排程器以硬化容器（唯讀 rootfs、cap_drop ALL、只掛該 Job 的目錄）啟動，並用 `CUDA_VISIBLE_DEVICES` 指定 GPU。
+- GPU 伺服器用 `JOB_RUNNER=docker`：先建 image `docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .`（context 是 repo 根目錄，因為會一起裝 `libs/preprocess`），排程器以硬化容器（唯讀 rootfs、cap_drop ALL、只掛該 Job 的目錄）啟動，並用 `CUDA_VISIBLE_DEVICES` 指定 GPU。
 - 資源池預設 = 偵測到的 GPU / CPU / 記憶體；管理員可在 `PUT /admin/settings/resource-pool` 調整（或 UI 管理員頁）。
 - 深度學習家族在開發機測試：`cd trainer && uv sync --extra dl`（會抓 CUDA 版 torch，很大）；或只裝 CPU torch：`uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu` 再 `uv pip install --python .venv/bin/python transformers pillow`。
 
@@ -123,6 +123,8 @@ uv run python -m app.cli create-user --username alice --password '…' --email a
 ```bash
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest          # 含排程器（假 runner）與端到端（真的 trainer 子程序）
 cd trainer && uv run ruff check . && uv run pytest                                          # 模型家族、registry 與 yaml 對照、runtime
+cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest                            # 共用前處理套件（backend 與 trainer 都以 path dependency 安裝）
+QR_TEST_ZOO=/path/to/zoo uv run pytest tests/test_yolo_cpu.py                              # trainer：YOLO 從 yolo11n.pt 微調（CPU）
 uv run python -m trainer check                                                              # 這個環境能跑哪些家族
 ```
 
@@ -130,7 +132,7 @@ uv run python -m trainer check                                                  
 
 ```bash
 cp infra/.env.example infra/.env   # 填密碼、DATA_ROOT_HOST、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY
-docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
+docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .
 docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app build
 docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app run --rm backend alembic upgrade head
 docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app run --rm backend python -m app.cli seed
@@ -138,6 +140,13 @@ docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app u
 ```
 
 - 前端接上後端：在 `frontend/.env.local` 設 `BACKEND_URL=http://localhost:8000`，並把 `src/lib/api/index.ts` 的假資料換成 fetch（頁面不用改）；這一步尚未完成。
+
+### 4.7 使用手冊（DOCX / PDF）
+
+```bash
+node scripts/build_manual.js                                                   # docs/manuals/QR-AI-Lab-使用手冊.docx
+soffice --headless --convert-to pdf --outdir docs/manuals "docs/manuals/QR-AI-Lab-使用手冊.docx"
+```
 
 ## 5. Keycloak（外部）
 

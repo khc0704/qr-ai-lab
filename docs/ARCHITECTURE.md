@@ -165,6 +165,7 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 推論：`config.mode` 選推論模式（`predict | score | embed | retrieve | detect | segment | measure | extend`），輸出 `output/predictions.csv` + `.jsonl` + `summary.json`，並以 `kind=report` 登記；`result.preview` 存前 20 列。
 - 產物 `path` 可以是目錄（例如 `model/`）；`GET /artifacts/{id}/download` 會即時打包成 zip。
 - 執行環境：`JOB_RUNNER=docker`（伺服器）或 `subprocess`（開發機直接以 `trainer/.venv` 跑 `python -m trainer run`，無隔離）。
+- 前處理：`input.spec.preprocess` 的步驟由共用套件 `libs/preprocess`（`qrlab_preprocess`）定義；backend 用它做上傳抽樣預覽與驗證，trainer 在訓練時 fit 並把狀態存成 `model/preprocess.json` + 產物 metadata，推論時 replay。
 
 ## 7. Log
 
@@ -265,6 +266,7 @@ GET    /healthz  GET /readyz
   - 共用：`APP_ENV`、`PUBLIC_URL`
   - frontend：`AUTH_SECRET`、`AUTH_KEYCLOAK_ID`、`AUTH_KEYCLOAK_SECRET`、`AUTH_KEYCLOAK_ISSUER`、`BACKEND_URL`
   - backend / scheduler：`DATABASE_URL`（`mariadb+asyncmy://…`）、`REDIS_URL`、`DATA_ROOT`（容器內 `/data`）、`DATA_ROOT_HOST`（主機路徑，scheduler 用於 bind mount）、`MODEL_ZOO_ROOT`、`AUTH_MODE`（`local` 過渡 / `keycloak`）、`AUTH_SECRET`、`SEED_ADMIN_PASSWORD`、`SEED_USER_PASSWORD`、`KEYCLOAK_ISSUER`、`KEYCLOAK_AUDIENCE`、`DATASET_SECRET_KEY`（Fernet）、`JOB_TOKEN_SECRET`、`JOB_RUNNER`、`TRAINER_IMAGE`、`JOB_NETWORK`、`INTERNAL_BACKEND_URL`、`SCHEDULER_INTERVAL_S`、`UPLOAD_MAX_MB`、`UPLOAD_TTL_MINUTES`、`LOG_MAX_MB`、`DEFAULT_JOB_TIMEOUT_MINUTES`
+- Docker build context 一律是 repo 根目錄（backend / trainer 都依賴 `libs/preprocess`）：`docker build -f infra/trainer/Dockerfile .`。
 - compose：`backend` 與 `scheduler` 在 profile `app`（`docker compose --profile app up -d`），image 由 `infra/backend/Dockerfile` 建置；frontend / nginx 待前端接上 backend 後加入。
 - 更新流程：`git pull` → `docker compose --profile app build backend scheduler` → `docker compose --profile app run --rm backend alembic upgrade head` → `docker compose --profile app up -d`。
 - 模型庫：在有網路的機器 `python3 scripts/fetch_model_zoo.py --dest model_zoo`，複製到 `${DATA_ROOT_HOST}/model_zoo`。

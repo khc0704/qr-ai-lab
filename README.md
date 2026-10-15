@@ -17,6 +17,8 @@
 | [docs/MODEL_CATALOG.md](docs/MODEL_CATALOG.md) | 資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫（使用者 SOP 底稿） |
 | [docs/USE_CASES.md](docs/USE_CASES.md) | 半導體 / 電子製造情境：機台資料 → 模型 → 推論目的 |
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | 從 `git pull` 到前端、後端、排程器、模型庫、compose 的啟動 SOP |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 已知缺口與改善方向 |
+| [docs/manuals/](docs/manuals/) | 使用者手冊（DOCX / PDF） |
 
 ## 設計一致性如何被維持
 
@@ -29,5 +31,7 @@
 
 - 前端第一版頁面已完成（Next.js 16、假資料；見 `docs/screenshots/`），尚未接 backend。
 - backend 已完成：本地帳號 `admin` / `user`、專案申請與審批、討論區、資料來源（憑證加密）、一次性上傳、Job 佇列與資源池、管理員 API（資源池、重排、強制中斷、稽核、模型庫）、SSE 事件、log；排程器（Docker / subprocess runner）。
-- trainer 已完成 11 個模型家族與 AutoML、推論模式；sklearn 家族與 PyTorch 家族（CPU、小型權重）皆有測試，YOLO 需在有 GPU 與 ultralytics 的環境驗證。
+- trainer 已完成 12 個模型家族（含影像品質基準 / 機台比對）與 AutoML、推論模式；sklearn、PyTorch（CPU、小型權重）與 YOLO（CPU，從 yaml 與從 yolo11n.pt 微調）皆有測試。
+- 資料前處理：`libs/preprocess` 共用套件，上傳後抽樣預覽、訓練時 fit、推論自動沿用。
+- 使用者手冊：`docs/manuals/`（DOCX / PDF）。
 - 本地啟動流程見 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
