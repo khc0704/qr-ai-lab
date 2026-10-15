@@ -1,5 +1,6 @@
 // 所有 UI 文案集中於此；元件只引用 key，不散落硬編碼。
 import type {
+  AnalysisKind,
   ArtifactKind,
   DataFormat,
   DataScale,
@@ -76,7 +77,16 @@ export const jobStatusLabel: Record<JobStatus, string> = {
   cancelled: "已取消",
 };
 
-export const jobKindLabel: Record<JobKind, string> = { train: "訓練", inference: "推論" };
+export const jobKindLabel: Record<JobKind, string> = {
+  train: "訓練",
+  inference: "推論",
+  preprocess: "前處理",
+  analysis: "分析",
+};
+export const analysisKindLabel: Record<AnalysisKind, string> = {
+  tabular_profile: "表格資料探勘",
+  image_quality: "影像品質分析",
+};
 export const jobModeLabel: Record<JobMode, string> = { manual: "手動", auto: "自動 (AutoML)" };
 
 export const jobStageLabel: Record<JobStage, string> = {
@@ -88,6 +98,7 @@ export const jobStageLabel: Record<JobStage, string> = {
   exporting: "匯出產物中",
   loading: "載入模型中",
   predicting: "推論中",
+  processing: "處理中",
   done: "完成",
   failed: "失敗",
   cancelled: "已取消",
@@ -167,6 +178,7 @@ export const nav = {
   projectRequests: "專案申請",
   projects: "專案",
   tools: "資料前處理",
+  analyze: "資料分析",
   admin: "管理",
   adminDashboard: "Dashboard",
   adminRequests: "申請審核",
@@ -191,6 +203,7 @@ export const routeLabel: Record<string, string> = {
   usage: nav.adminUsage,
   tools: "工具",
   preprocess: nav.tools,
+  analyze: nav.analyze,
   "model-zoo": nav.adminModelZoo,
   "data-sources": "資料來源",
   jobs: "任務",

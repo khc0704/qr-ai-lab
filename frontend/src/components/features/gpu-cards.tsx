@@ -111,7 +111,7 @@ export function GpuCards({
               ) : null}
             </div>
             <ResourceMeter
-              label="顯存（驅動程式）"
+              label="顯存實測（驅動程式，所有程序）"
               used={g.memoryUsedMb}
               total={g.memoryTotalMb}
               format={formatMb}
@@ -119,8 +119,24 @@ export function GpuCards({
             />
             <ResourceMeter label="使用率" used={g.utilization} total={100} unit="%" compact />
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground tabular-nums">
-              <span>任務 {g.jobIds.length ? g.jobIds.map((id) => `#${id}`).join(" ") : "—"}</span>
-              <span>{exclusive ? "獨占" : g.reservedMb != null ? `保留 ${formatMb(g.reservedMb)}` : "未保留"}</span>
+              <span>
+                任務{" "}
+                {g.jobs.length
+                  ? g.jobs
+                      .map(
+                        (j) =>
+                          `#${j.jobId} ${formatMb(j.measuredMb)}${j.requestedMb ? `/${formatMb(j.requestedMb)}` : ""}`,
+                      )
+                      .join(" · ")
+                  : "—"}
+              </span>
+              <span>
+                {exclusive
+                  ? "獨占"
+                  : g.measuredMb != null
+                    ? `本系統實測 ${formatMb(g.measuredMb)}`
+                    : "沒有本系統的任務"}
+              </span>
               {g.processes != null ? <span>程序 {g.processes}</span> : null}
             </div>
           </Card>

@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { AdminJobActions } from "@/components/features/admin-job-actions";
+import { AnalysisReport } from "@/components/features/analysis-report";
+import { PreprocessJobResults } from "@/components/features/tool-job-results";
 import { ArtifactRowActions } from "@/components/features/artifact-row-actions";
 import { FamilyText, InputKindChip } from "@/components/features/chips";
 import { EmptyState } from "@/components/features/empty-state";
@@ -50,7 +52,9 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
   const metricName =
     (typeof job.result?.metric === "string" ? job.result.metric : undefined) ??
     search?.metric ??
-    Object.keys(metrics).find((k) => k.startsWith("best_"))?.replace("best_", "") ??
+    Object.keys(metrics)
+      .find((k) => k.startsWith("best_"))
+      ?.replace("best_", "") ??
     headline[0]?.[0] ??
     "metric";
   const direction =
@@ -69,7 +73,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
               {job.kind === "train"
                 ? familyLabel(job.modelFamily)
                 : inferenceMode
-                  ? inferenceModeLabel[inferenceMode] ?? inferenceMode
+                  ? (inferenceModeLabel[inferenceMode] ?? inferenceMode)
                   : "—"}
             </span>
           }
@@ -112,7 +116,10 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
                       </TableCell>
                       <TableCell className="max-w-md truncate font-mono text-xs text-muted-foreground">
                         {Object.entries(r.params)
-                          .map(([k, v]) => `${k}=${typeof v === "number" && !Number.isInteger(v) ? formatMetric(v) : String(v)}`)
+                          .map(
+                            ([k, v]) =>
+                              `${k}=${typeof v === "number" && !Number.isInteger(v) ? formatMetric(v) : String(v)}`,
+                          )
                           .join("  ")}
                       </TableCell>
                       <TableCell
@@ -152,7 +159,17 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
   );
 
   const results =
-    job.kind === "inference" ? (
+    job.kind === "preprocess" ? (
+      <PreprocessJobResults job={job} />
+    ) : job.kind === "analysis" ? (
+      job.result ? (
+        <AnalysisReport result={job.result} />
+      ) : (
+        <Card>
+          <CardContent className="text-sm text-muted-foreground">任務完成後會在這裡顯示分析報告。</CardContent>
+        </Card>
+      )
+    ) : job.kind === "inference" ? (
       <div className="space-y-4">
         <Card>
           <CardHeader>
@@ -309,7 +326,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
         initialLines={log}
         overview={overview}
         results={results}
-        resultsLabel={job.kind === "train" ? "產物" : "結果"}
+        resultsLabel={job.kind === "train" ? "產物" : job.kind === "analysis" ? "報告" : "結果"}
         config={config}
       />
     </>

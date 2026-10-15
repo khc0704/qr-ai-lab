@@ -1,6 +1,8 @@
 import {
   Activity,
   Brain,
+  ChartScatter,
+  Wand2,
   Database,
   FileText,
   Image as ImageIcon,
@@ -42,7 +44,12 @@ export const taskTypeIcon: Record<TaskType, LucideIcon> = {
   segmentation: Layers,
   anomaly_detection: TriangleAlert,
 };
-export const jobKindIcon: Record<JobKind, LucideIcon> = { train: Brain, inference: Sparkles };
+export const jobKindIcon: Record<JobKind, LucideIcon> = {
+  train: Brain,
+  inference: Sparkles,
+  preprocess: Wand2,
+  analysis: ChartScatter,
+};
 export const sourceKindIcon: Record<DataSourceKind, LucideIcon> = { minio: Database, url: LinkIcon };
 export const inputKindIcon: Record<InputKind, LucideIcon> = { upload: Upload, data_source: Database, inline: FileText };
 

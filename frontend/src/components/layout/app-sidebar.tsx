@@ -2,6 +2,7 @@
 
 import {
   ChartLine,
+  ChartScatter,
   ClipboardCheck,
   ClipboardList,
   FolderKanban,
@@ -112,6 +113,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
     { href: "/project-requests", label: nav.projectRequests, icon: ClipboardList, badge: counts.myRequestReplies },
     { href: "/projects", label: nav.projects, icon: FolderKanban },
     { href: "/tools/preprocess", label: nav.tools, icon: Wand2 },
+    { href: "/tools/analyze", label: nav.analyze, icon: ChartScatter },
   ];
   const admin: NavItem[] = [
     { href: "/admin", label: nav.adminDashboard, icon: Gauge, exact: true },

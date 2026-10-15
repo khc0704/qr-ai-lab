@@ -5,7 +5,7 @@ import { QuotasTable } from "./quotas-table";
 
 export default async function AdminQuotasPage() {
   const [projects, pool, me] = await Promise.all([
-    listProjects({ includeArchived: true }),
+    listProjects({ includeArchived: true, includePersonal: true }),
     getResourcePool(),
     getCurrentUser(),
   ]);

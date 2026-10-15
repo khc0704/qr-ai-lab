@@ -5,7 +5,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { toGpuReset, toJob, toProject, toRequest, toToolResult, toUpload, toUser } from "@/lib/api/mappers";
+import { toGpuReset, toJob, toProject, toRequest, toUpload, toUser } from "@/lib/api/mappers";
 import { ApiError, apiFetch, AUTH_MODE, errorMessage, PUBLIC_URL, TOKEN_COOKIE } from "@/lib/backend";
 import type {
   GpuResetMode,
@@ -15,7 +15,6 @@ import type {
   PreviewPayload,
   Project,
   ProjectRequest,
-  ToolProcessResult,
   Upload,
 } from "@/types/domain";
 
@@ -321,14 +320,58 @@ export async function previewToolAction(
   );
 }
 
+/** Whole-file preprocessing as a job in the personal workspace (202 → queued job). */
 export async function processToolAction(
   id: string,
   steps: PreprocessStep[],
   spec: J,
-): Promise<ActionResult<ToolProcessResult>> {
-  return run(async () =>
-    toToolResult(await apiFetch<J>(`/tools/uploads/${id}/process`, { method: "POST", body: { steps, spec } })),
+  name?: string,
+): Promise<ActionResult<Job>> {
+  const r = await run(async () =>
+    toJob(await apiFetch<J>(`/tools/uploads/${id}/process`, { method: "POST", body: { steps, spec, name } })),
   );
+  if (r.ok) revalidatePath("/tools", "layout");
+  return r;
+}
+
+/** Data exploration job (tabular profile / image quality) on a tool upload. */
+export async function analyzeToolAction(
+  id: string,
+  analysis: "tabular_profile" | "image_quality",
+  params: J,
+  name?: string,
+): Promise<ActionResult<Job>> {
+  const r = await run(async () =>
+    toJob(await apiFetch<J>(`/tools/uploads/${id}/analyze`, { method: "POST", body: { analysis, params, name } })),
+  );
+  if (r.ok) revalidatePath("/tools", "layout");
+  return r;
+}
+
+export async function updateToolDefaultsAction(d: {
+  gpuLimit: number;
+  cpuLimit: number;
+  memoryLimitMb: number;
+  storageQuotaMb: number;
+  maxConcurrentJobs: number;
+  resultTtlHours: number;
+}): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>("/admin/settings/tool-defaults", {
+      method: "PUT",
+      body: {
+        gpu_limit: d.gpuLimit,
+        cpu_limit: d.cpuLimit,
+        memory_limit_mb: d.memoryLimitMb,
+        storage_quota_mb: d.storageQuotaMb,
+        max_concurrent_jobs: d.maxConcurrentJobs,
+        result_ttl_hours: d.resultTtlHours,
+      },
+    });
+    return undefined;
+  });
+  if (r.ok) revalidatePath("/admin");
+  return r;
 }
 
 export async function deleteToolUploadAction(id: string): Promise<ActionResult<undefined>> {

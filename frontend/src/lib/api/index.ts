@@ -17,10 +17,11 @@ import {
   toPreprocessOp,
   toProject,
   toRequest,
+  toToolDefaults,
   toUsageHistory,
   toUser,
   toZooEntry,
-  toZooTask
+  toZooTask,
 } from "@/lib/api/mappers";
 import type {
   Artifact,
@@ -40,10 +41,11 @@ import type {
   Project,
   ProjectRequest,
   ResourcePool,
+  ToolDefaults,
   UsageHistory,
   UsageRange,
   User,
-  ZooTask
+  ZooTask,
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
@@ -61,9 +63,28 @@ const q = (params: Record<string, string | number | boolean | undefined>) => {
 
 // --- projects --------------------------------------------------------------------------------------
 
-export async function listProjects(opts?: { includeArchived?: boolean }): Promise<Project[]> {
-  const rows = await apiFetch<J[]>(`/projects${q({ include_archived: opts?.includeArchived })}`);
+export async function listProjects(opts?: {
+  includeArchived?: boolean;
+  includePersonal?: boolean;
+}): Promise<Project[]> {
+  const rows = await apiFetch<J[]>(
+    `/projects${q({ include_archived: opts?.includeArchived, include_personal: opts?.includePersonal })}`,
+  );
   return rows.map(toProject);
+}
+
+// --- standalone tools (personal workspace) ---------------------------------------------------------
+
+export async function getWorkspace(): Promise<Project> {
+  return toProject(await apiFetch<J>("/tools/workspace"));
+}
+
+export async function listToolJobs(): Promise<Job[]> {
+  return (await apiFetch<J[]>("/tools/jobs")).map(toJob);
+}
+
+export async function getToolDefaults(): Promise<ToolDefaults> {
+  return toToolDefaults(await apiFetch<J>("/admin/settings/tool-defaults"));
 }
 
 export async function getProject(slug: string): Promise<Project | undefined> {

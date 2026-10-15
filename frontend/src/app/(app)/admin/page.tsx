@@ -3,20 +3,22 @@ import Link from "next/link";
 import { GpuCards } from "@/components/features/gpu-cards";
 import { ResourceMeter } from "@/components/features/resource-meter";
 import { ResourcePoolForm } from "@/components/features/resource-pool-form";
+import { ToolDefaultsForm } from "@/components/features/tool-defaults-form";
 import { StatCard } from "@/components/features/stat-card";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getAdminOverview, getNodeStatus, getResourcePool } from "@/lib/api";
+import { getAdminOverview, getNodeStatus, getResourcePool, getToolDefaults } from "@/lib/api";
 import { formatMb } from "@/lib/format";
 import { can, getCurrentUser } from "@/lib/session";
 
 export default async function AdminDashboardPage() {
-  const [overview, pool, node, me] = await Promise.all([
+  const [overview, pool, node, me, toolDefaults] = await Promise.all([
     getAdminOverview(),
     getResourcePool(),
     getNodeStatus(),
     getCurrentUser(),
+    getToolDefaults(),
   ]);
   const canManagePool = can(me, "pool.manage");
   const canResetGpu = can(me, "gpu.reset");
@@ -98,6 +100,20 @@ export default async function AdminDashboardPage() {
             </CardHeader>
             <CardContent>
               <ResourcePoolForm pool={pool} node={node} readOnly={!canManagePool} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>工具預設（個人工作區配額）</CardTitle>
+              <CardDescription>
+                每位使用者第一次用「資料前處理 /
+                資料分析」時會建立一個個人工作區，配額用這裡的值；已建立的工作區在「專案配額」頁個別調整。結果保留時間是前處理
+                zip 沒被下載時的壽命。
+                {!canManagePool ? "只有 superadmin 可以調整。" : ""}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ToolDefaultsForm defaults={toolDefaults} readOnly={!canManagePool} />
             </CardContent>
           </Card>
         </div>

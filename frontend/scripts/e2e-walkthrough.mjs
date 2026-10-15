@@ -799,7 +799,7 @@ try {
     console.log("▶ tool");
     const page = await uiLogin(userCtx, "user", "user1234");
     await goto(page, "/tools/preprocess");
-    await shot(page, "tool-empty", "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 預覽 → 執行 → 下載；不保存資料");
+    await shot(page, "tool-empty", "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在個人工作區排隊執行）；不保存資料");
     await page.fill("#tool-spec-target", "yield_pct");
     await page.fill("#tool-spec-id_column", "lot_id");
     await page.setInputFiles('[data-testid="upload-input"]', DS.wat);
@@ -810,15 +810,61 @@ try {
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
     await settle(page, 800);
-    await shot(page, "tool-preview", "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽前後差異");
+    await shot(page, "tool-preview", "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽（即時，只取樣）");
     await page.getByTestId("tool-run").click();
-    await page.getByTestId("tool-summary").waitFor({ timeout: 120_000 });
-    await settle(page, 800);
-    await shot(page, "tool-done", "對整個檔案執行完成：摘要（步驟、檔案、列數前後）與下載按鈕");
+    await page.getByText(/已建立前處理任務 #(\d+)/).waitFor({ timeout: 30_000 });
+    await settle(page, 1500);
+    await shot(page, "tool-queued", "建立後成為個人工作區（ws-user）裡的 preprocess 任務：進佇列、受工具預設的配額限制，列表每 5 秒自動更新");
+    const mine = await api(userTok, "GET", "/tools/jobs");
+    const pre = mine.find((j) => j.kind === "preprocess");
+    state.toolJob = pre.id;
+    const done = await waitJob(userTok, pre.id);
+    if (done.status !== "succeeded") throw new Error(`preprocess job failed: ${done.error_message}`);
+    await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1500);
+    await shot(page, "tool-job-done", "前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕");
     const [download] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), page.getByTestId("tool-download").click()]);
     state.toolDownload = download.suggestedFilename();
     await settle(page, 2500);
-    await shot(page, "tool-downloaded", `下載 ${state.toolDownload}（processed.csv + pipeline.json + summary.json）後，伺服器端的暫存檔立即刪除`);
+    await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1200);
+    await shot(page, "tool-downloaded", `下載 ${state.toolDownload}（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留`);
+    await page.close();
+  }
+
+  // =====================================================================================================
+  if (want("analyze")) {
+    phase = "analyze";
+    console.log("▶ analyze");
+    const page = await uiLogin(userCtx, "user", "user1234");
+    await goto(page, "/tools/analyze");
+    await shot(page, "analyze-empty", "資料分析服務：表格資料探勘或影像品質分析，同樣以個人工作區的任務執行；只留報告不留資料");
+    await page.fill("#an-target", "yield_pct");
+    await page.fill("#an-id", "lot_id");
+    await page.setInputFiles('[data-testid="upload-input"]', DS.wat);
+    await page.getByText("已上傳 wat_yield.csv").waitFor({ timeout: 60_000 });
+    await page.getByTestId("analysis-run").click();
+    await page.getByText(/已建立分析任務 #(\d+)/).waitFor({ timeout: 30_000 });
+    await settle(page, 1000);
+    const tab = (await api(userTok, "GET", "/tools/jobs")).find((j) => j.kind === "analysis" && j.config?.analysis === "tabular_profile");
+    state.analysisTabular = tab.id;
+    // image quality: three tools in three folders
+    await page.getByTestId("analysis-image_quality").click();
+    await page.setInputFiles('[data-testid="upload-input"]', path.join(DATA, "iqa_groups.zip"));
+    await page.getByText("已上傳 iqa_groups.zip").waitFor({ timeout: 120_000 });
+    await shot(page, "analyze-image-form", "影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）");
+    await page.getByTestId("analysis-run").click();
+    await page.getByText(/已建立分析任務 #(\d+)/).waitFor({ timeout: 30_000 });
+    await settle(page, 1500);
+    await shot(page, "analyze-queued", "兩個分析任務排隊中（個人工作區同時只跑 1 個）");
+    const img = (await api(userTok, "GET", "/tools/jobs")).find((j) => j.kind === "analysis" && j.config?.analysis === "image_quality");
+    state.analysisImage = img.id;
+    const t = await waitJob(userTok, tab.id);
+    if (t.status !== "succeeded") throw new Error(`tabular analysis failed: ${t.error_message}`);
+    await goto(page, `/projects/${tab.project_slug}/jobs/${tab.id}`, 1500);
+    await shot(page, "analyze-tabular-report", "表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況");
+    const i = await waitJob(userTok, img.id);
+    if (i.status !== "succeeded") throw new Error(`image analysis failed: ${i.error_message}`);
+    await goto(page, `/projects/${img.project_slug}/jobs/${img.id}`, 1500);
+    await shot(page, "analyze-image-report", "影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議");
     await page.close();
   }
 

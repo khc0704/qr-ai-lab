@@ -20,7 +20,9 @@ export type InferenceMode =
 export type SystemRole = "superadmin" | "admin" | "user";
 export type ProjectRole = "owner" | "maintainer" | "member" | "viewer";
 export type ProjectStatus = "active" | "archived";
-export type JobKind = "train" | "inference";
+export type JobKind = "train" | "inference" | "preprocess" | "analysis";
+export type ProjectKind = "standard" | "personal";
+export type AnalysisKind = "tabular_profile" | "image_quality";
 export type JobStatus = "queued" | "scheduled" | "running" | "succeeded" | "failed" | "cancelled";
 export type JobMode = "manual" | "auto";
 export type JobStage =
@@ -32,6 +34,7 @@ export type JobStage =
   | "exporting"
   | "loading"
   | "predicting"
+  | "processing"
   | "done"
   | "failed"
   | "cancelled";
@@ -70,6 +73,8 @@ export interface Project {
   slug: string;
   name: string;
   description: string;
+  /** personal = the user's workspace that hosts preprocessing / analysis tool jobs */
+  kind: ProjectKind;
   dataType: DataType;
   taskType: TaskType;
   status: ProjectStatus;
@@ -257,6 +262,12 @@ export interface Allocated {
   runningJobs: number;
 }
 
+export interface GpuJobUsage {
+  jobId: number;
+  requestedMb?: number;
+  measuredMb: number;
+}
+
 export interface NodeGpu {
   index: number;
   name: string;
@@ -265,6 +276,9 @@ export interface NodeGpu {
   utilization: number;
   jobId?: number;
   jobIds: number[];
+  jobs: GpuJobUsage[];
+  /** Σ VRAM the driver attributes to our jobs' processes */
+  measuredMb?: number;
   /** Σ VRAM reserved by the jobs placed here; equals the total when one of them holds the GPU exclusively. */
   reservedMb?: number;
   /** Compute processes the driver sees on this GPU (any user). */
@@ -541,11 +555,13 @@ export interface ToolUpload {
   createdAt: string;
 }
 
-export interface ToolProcessResult {
-  id: string;
-  summary: Record<string, unknown> & { steps?: string[]; files?: string[] };
-  zipSizeBytes: number;
-  downloadPath: string;
+export interface ToolDefaults {
+  gpuLimit: number;
+  cpuLimit: number;
+  memoryLimitMb: number;
+  storageQuotaMb: number;
+  maxConcurrentJobs: number;
+  resultTtlHours: number;
 }
 
 export interface Capacity {

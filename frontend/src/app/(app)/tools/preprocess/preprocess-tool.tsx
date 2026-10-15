@@ -1,7 +1,8 @@
 "use client";
 
-// Standalone preprocessing: data type → upload → steps (preview on a sample) → run on the whole file → download.
-import { Download, LoaderCircle, Play, Trash2 } from "lucide-react";
+// Standalone preprocessing: data type → upload → steps (real-time preview on a sample) → a job for the whole file.
+import { LoaderCircle, Play, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Dropzone } from "@/components/features/dropzone";
@@ -16,75 +17,45 @@ import { deleteToolUploadAction, previewToolAction, processToolAction } from "@/
 import { toToolUpload } from "@/lib/api/mappers";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { DataType, PreprocessOp, PreprocessStep, ToolProcessResult, ToolUpload, Upload } from "@/types/domain";
+import type { DataType, PreprocessOp, PreprocessStep, ToolUpload, Upload } from "@/types/domain";
 
-const TYPES: { value: DataType; hint: string; accept: string; files: string }[] = [
-  {
-    value: "TABULAR",
-    hint: "表格資料：csv / parquet / jsonl",
-    accept: ".csv,.parquet,.jsonl",
-    files: "csv / parquet / jsonl",
-  },
-  {
-    value: "IMAGE",
-    hint: "影像：zip（資料夾結構保留）或單張圖片",
-    accept: ".zip,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp",
-    files: "zip 或單張影像",
-  },
-  {
-    value: "SEQUENCE",
-    hint: "時間序列：長表 csv（series_id, t, 特徵…）或 npy",
-    accept: ".csv,.npy",
-    files: "csv / npy",
-  },
+export const TOOL_TYPES: { value: DataType; hint: string; accept: string; files: string }[] = [
+  { value: "TABULAR", hint: "表格資料：csv / parquet / jsonl", accept: ".csv,.parquet,.jsonl", files: "csv / parquet / jsonl" },
+  { value: "IMAGE", hint: "影像：zip（資料夾結構保留）或單張圖片", accept: ".zip,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp", files: "zip 或單張影像" },
+  { value: "SEQUENCE", hint: "時間序列：長表 csv（series_id, t, 特徵…）或 npy", accept: ".csv,.npy", files: "csv / npy" },
   { value: "SPECTRUM", hint: "光譜：寬表 csv（每列一條光譜）或 npy", accept: ".csv,.npy", files: "csv / npy" },
-  {
-    value: "TEXT",
-    hint: "文字：csv / jsonl，含文字欄位",
-    accept: ".csv,.parquet,.jsonl",
-    files: "csv / parquet / jsonl",
-  },
+  { value: "TEXT", hint: "文字：csv / jsonl，含文字欄位", accept: ".csv,.parquet,.jsonl", files: "csv / parquet / jsonl" },
 ];
 
 const SPEC_FIELDS: Record<DataType, { key: string; label: string; hint?: string }[]> = {
-  TABULAR: [
-    { key: "target", label: "目標欄位（不會被處理）", hint: "例：yield_pct" },
-    { key: "id_column", label: "ID 欄位（不會被處理）" },
-  ],
-  TEXT: [
-    { key: "text_column", label: "文字欄位", hint: "預設 text" },
-    { key: "label_column", label: "標籤欄位（不會被處理）" },
-  ],
+  TABULAR: [{ key: "target", label: "目標欄位（不會被處理）", hint: "例：yield_pct" }, { key: "id_column", label: "ID 欄位（不會被處理）" }],
+  TEXT: [{ key: "text_column", label: "文字欄位", hint: "預設 text" }, { key: "label_column", label: "標籤欄位（不會被處理）" }],
   SEQUENCE: [
     { key: "series_id", label: "序列 ID 欄位", hint: "預設 series_id" },
     { key: "time", label: "時間欄位", hint: "預設 t" },
     { key: "window", label: "視窗長度", hint: "預設 256" },
     { key: "label", label: "標籤欄位（排除）" },
   ],
-  SPECTRUM: [
-    { key: "label", label: "標籤欄位（排除）" },
-    { key: "id_column", label: "ID 欄位（排除）" },
-  ],
+  SPECTRUM: [{ key: "label", label: "標籤欄位（排除）" }, { key: "id_column", label: "ID 欄位（排除）" }],
   IMAGE: [],
 };
 
 export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
+  const router = useRouter();
   const [dataType, setDataType] = useState<DataType>("TABULAR");
   const [upload, setUpload] = useState<ToolUpload | null>(null);
   const [steps, setSteps] = useState<PreprocessStep[]>([]);
   const [spec, setSpec] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<ToolProcessResult | null>(null);
   const [pending, startTransition] = useTransition();
   const [resetKey, setResetKey] = useState(0);
-  const type = TYPES.find((t) => t.value === dataType)!;
+  const type = TOOL_TYPES.find((t) => t.value === dataType)!;
   const typeOps = ops.filter((o) => o.dataTypes.includes(dataType));
   const cleanSpec = Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""));
-  const step = result ? 3 : upload ? 2 : 1;
+  const step = upload ? (steps.length ? 2 : 1) : 0;
 
   const onUploaded = (u: Upload | null, raw?: Record<string, unknown>) => {
     // Dropzone parses the project Upload shape (numeric id); the tool's id is a hex string, so use the raw JSON
     setUpload(u && raw ? toToolUpload(raw) : null);
-    setResult(null);
   };
   const changeType = (t: DataType) => {
     if (upload) return;
@@ -92,14 +63,17 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
     setSteps([]);
     setSpec({});
   };
-  const run = () =>
+  const submit = () =>
     startTransition(async () => {
       if (!upload) return;
       const r = await processToolAction(upload.id, steps, cleanSpec);
       if (!r.ok) toast.error(r.error);
       else {
-        setResult(r.data);
-        toast.success("處理完成，可以下載了");
+        toast.success(`已建立前處理任務 #${r.data.id}，排入佇列`);
+        setUpload(null);
+        setSteps([]);
+        setResetKey((k) => k + 1);
+        router.refresh();
       }
     });
   const discard = () =>
@@ -109,14 +83,13 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
         if (!r.ok && r.code !== "TOOL_UPLOAD_NOT_FOUND") toast.error(r.error);
       }
       setUpload(null);
-      setResult(null);
       setSteps([]);
       setResetKey((k) => k + 1);
     });
 
   return (
     <div className="space-y-6">
-      <Stepper steps={["資料類型與檔案", "前處理步驟", "執行與下載"]} current={step - 1} />
+      <Stepper steps={["資料類型與檔案", "前處理步驟與預覽", "建立任務"]} current={step} />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
@@ -125,7 +98,7 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="資料類型">
-              {TYPES.map((t) => (
+              {TOOL_TYPES.map((t) => (
                 <button
                   key={t.value}
                   type="button"
@@ -170,10 +143,10 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>2. 前處理步驟</CardTitle>
+            <CardTitle>2. 前處理步驟與預覽</CardTitle>
             <CardDescription>
               {upload
-                ? `對 ${upload.originalFilename}（${formatBytes(upload.sizeBytes)}）加入步驟，按「抽樣預覽」看前後差異。`
+                ? `對 ${upload.originalFilename}（${formatBytes(upload.sizeBytes)}）加入步驟，按「抽樣預覽」即時看前後差異（只取樣，不會處理整個檔案）。`
                 : "上傳後才能預覽；步驟可以先挑。"}
             </CardDescription>
           </CardHeader>
@@ -191,48 +164,22 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>3. 執行與下載</CardTitle>
+          <CardTitle>3. 建立任務</CardTitle>
           <CardDescription>
-            對整個檔案執行所有步驟（同步，預設最多 10 分鐘），結果打包成 zip；下載後伺服器立即刪除暫存檔。
+            整個檔案的處理是一個任務：進入全域佇列、受個人工作區的 CPU / 記憶體配額限制、有即時 log。完成後到任務頁下載 zip；下載一次就刪除。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
-          <Button onClick={run} disabled={!upload || pending || !!result} data-testid="tool-run">
+          <Button onClick={submit} disabled={!upload || pending} data-testid="tool-run">
             {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
-            執行前處理
+            建立前處理任務
           </Button>
-          {result ? (
-            <Button variant="outline" asChild data-testid="tool-download">
-              <a href={`/api/tools/download/${result.id}`} download onClick={() => setTimeout(() => discard(), 1500)}>
-                <Download />
-                下載結果（{formatBytes(result.zipSizeBytes)}）
-              </a>
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            onClick={discard}
-            disabled={!upload || pending}
-            className="text-destructive hover:text-destructive"
-          >
+          <Button variant="ghost" onClick={discard} disabled={!upload || pending} className="text-destructive hover:text-destructive">
             <Trash2 />
             刪除暫存檔
           </Button>
-          {result ? (
-            <div className="basis-full rounded-lg bg-muted/60 p-3 text-xs" data-testid="tool-summary">
-              <div className="font-medium">處理摘要</div>
-              <ul className="mt-1 grid gap-0.5 font-mono text-muted-foreground sm:grid-cols-2">
-                {(result.summary.steps ?? []).map((s, i) => (
-                  <li key={i}>
-                    {i + 1}. {s}
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-2 font-mono text-muted-foreground">
-                檔案：{(result.summary.files ?? []).join("、")} · 前 {JSON.stringify(result.summary.before ?? {})} → 後{" "}
-                {JSON.stringify(result.summary.after ?? {})}
-              </div>
-            </div>
+          {upload && steps.length === 0 ? (
+            <p className="basis-full text-xs text-muted-foreground">沒有加入任何步驟時，任務只會把檔案原樣打包（可用來確認格式）。</p>
           ) : null}
         </CardContent>
       </Card>

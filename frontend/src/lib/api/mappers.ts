@@ -23,7 +23,7 @@ import type {
   GpuResetResult,
   UsageHistory,
   UsageProject,
-  ToolProcessResult,
+  ToolDefaults,
   ToolUpload,
 } from "@/types/domain";
 
@@ -74,6 +74,7 @@ export function toProject(p: J): Project {
     dataType: p.data_type as Project["dataType"],
     taskType: p.task_type as Project["taskType"],
     status: p.status === "archived" ? "archived" : "active",
+    kind: p.kind === "personal" ? "personal" : "standard",
     owner: toUser(p.owner as J),
     gpuLimit: num(p.gpu_limit),
     cpuLimit: num(p.cpu_limit),
@@ -297,6 +298,12 @@ export function toNode(n: J): NodeStatus {
       utilization: num(g.utilization),
       jobId: opt<number>(g.job_id),
       jobIds: ((g.job_ids as number[]) ?? []).map(Number),
+      jobs: ((g.jobs as J[]) ?? []).map((x) => ({
+        jobId: num(x.job_id),
+        requestedMb: opt<number>(x.requested_mb),
+        measuredMb: num(x.measured_mb),
+      })),
+      measuredMb: opt<number>(g.measured_mb),
       reservedMb: opt<number>(g.reserved_mb),
       processes: opt<number>(g.processes),
     })),
@@ -475,12 +482,14 @@ export function toToolUpload(u: J): ToolUpload {
   };
 }
 
-export function toToolResult(r: J): ToolProcessResult {
+export function toToolDefaults(d: J): ToolDefaults {
   return {
-    id: str(r.id),
-    summary: (r.summary as ToolProcessResult["summary"]) ?? {},
-    zipSizeBytes: num(r.zip_size_bytes),
-    downloadPath: str(r.download_path),
+    gpuLimit: num(d.gpu_limit),
+    cpuLimit: num(d.cpu_limit, 2),
+    memoryLimitMb: num(d.memory_limit_mb, 4096),
+    storageQuotaMb: num(d.storage_quota_mb, 2048),
+    maxConcurrentJobs: num(d.max_concurrent_jobs, 1),
+    resultTtlHours: num(d.result_ttl_hours, 24),
   };
 }
 

@@ -184,7 +184,8 @@ export function NewJobWizard({
     gpu: cloneFrom?.requestedGpu ?? Math.min(needsGpu ? 1 : 0, project.gpuLimit),
     cpu: cloneFrom?.requestedCpu ?? Math.min(2, project.cpuLimit),
     memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(4096, project.memoryLimitMb),
-    gpuMemoryMb: cloneFrom?.requestedGpuMemoryMb ?? 0,
+    // VRAM-shared placement is the norm: a declared amount lets the scheduler pack jobs by measured free memory
+    gpuMemoryMb: cloneFrom?.requestedGpuMemoryMb ?? 8192,
     timeout: cloneFrom?.timeoutMinutes ?? project.defaultTimeout,
   });
   const overQuota = res.gpu > project.gpuLimit || res.cpu > project.cpuLimit || res.memoryMb > project.memoryLimitMb;
