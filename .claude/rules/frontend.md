@@ -18,6 +18,8 @@ paths:
 - 元件分層：`@/components/ui`（shadcn 基底，可改樣式但不改 API）→ `@/components/layout`（AppShell、Sidebar、Topbar、PageHeader）→ `@/components/features/*`（StatusBadge、ResourceMeter、StatCard、LogViewer、EmptyState…）→ 頁面只做組合與資料取得，不自行重造樣式。
 - 一個畫面只有一個橘色主按鈕；數字 / ID / log 一律 `font-mono tabular-nums`；狀態一律 `<StatusBadge>`，不自行拼色。
 - 每頁都要有 `loading.tsx`（Skeleton）、`error.tsx`（含重試）與空狀態 `<EmptyState>`。
+- Job 相關畫面（專案的 Job 詳情、管理員佇列的 Job 抽屜）共用 `LogViewer`、`JobStatusBar`、`StatusBadge`；不要為管理員另做一套。
+- 任何接觸使用者資料的 UI（一次性上傳 `Dropzone`、資料來源表單）必須顯示「本服務不保存資料」的 `info` 提示，憑證欄位不回填。
 - 完成 UI 後自檢：light 與 dark 都看過；`python3 scripts/design_lint.py frontend/src` 無錯誤；鍵盤 focus ring 可見；icon-only 按鈕有 `aria-label`。
 
 ## Next.js 16 慣例
@@ -29,7 +31,7 @@ paths:
 - 即時資料（job 進度、log）：client component 用 `EventSource` 訂閱 backend `/api/v1/jobs/{id}/events`（SSE）。
 - 路由分組：`(auth)` 未登入頁；`(app)` 登入後的 AppShell；admin 頁在 `(app)/admin/**`，其 layout 檢查 `role === "admin"`，否則 `notFound()`。
 - 狀態管理：伺服器狀態靠 RSC，client 端互動列表用 TanStack Query；表單 react-hook-form + zod；不引入全域 store。
-- 型別：TypeScript strict；API 型別從 `src/types/api.ts` 取得（`pnpm gen:api` 由 backend OpenAPI 產生），不手寫重複型別。
+- 型別：TypeScript strict；API 型別從 `src/types/api.ts` 取得（`npm run gen:api` 由 backend OpenAPI 產生），不手寫重複型別。
 - 檔名：所有元件與檔案 kebab-case（`status-badge.tsx` 匯出 `StatusBadge`）；hooks `use-xxx.ts`；路由資料夾 kebab-case。
 - 文案繁體中文，集中在元件常數或 `src/i18n/zh-TW.ts`（預留），不要散落硬編碼。
 - Lint 用 ESLint 直接執行（Next.js 16 已移除 `next lint`）；格式用 Prettier + `prettier-plugin-tailwindcss`（class 排序）。

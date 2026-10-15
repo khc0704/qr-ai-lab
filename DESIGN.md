@@ -104,8 +104,8 @@
 
 | 狀態 | token | 點 |
 |---|---|---|
-| `queued`、`cancelled`、`closed`、`archived` | muted | 靜止 |
-| `scheduled`、`open` | info | 靜止 |
+| `queued`、`cancelled`、`closed`、`archived`、`withdrawn`、`purged` | muted | 靜止 |
+| `scheduled`、`open`、`submitted`、`pending` | info | 靜止 |
 | `running` | primary | `animate-pulse-dot` |
 | `succeeded`、`approved`、`active` | success | 靜止 |
 | `failed`、`rejected` | destructive | 靜止 |
@@ -164,7 +164,8 @@
 - 固定對應：
   - 資料類型：TABULAR `Table2`、IMAGE `Image`、SEQUENCE `Activity`、TEXT `FileText`、SPECTRUM `Waves`
   - 任務：classification `Tags`、regression `TrendingUp`、detection `ScanSearch`、segmentation `Layers`、anomaly_detection `AlertTriangle`
-  - 導覽：首頁 `House`、討論區 `MessagesSquare`、專案 `FolderKanban`、管理 `ShieldCheck`
+  - 導覽：首頁 `House`、討論區 `MessagesSquare`、專案申請 `ClipboardList`、專案 `FolderKanban`、管理 `ShieldCheck`、佇列 `ListOrdered`、資源池 `Gauge`
+  - Job 種類：訓練 `Brain`、推論 `Sparkles`；資料來源：MinIO `Database`、URL `Link`、一次性上傳 `Upload`
 - Icon-only 按鈕必有 `aria-label` 與 `Tooltip`。
 
 ## 7. 版面：App Shell
@@ -175,7 +176,8 @@
 ├──────────────┼────────────────────────────────────────────────┤
 │ 主選單        │  h1 頁面標題                        [主按鈕]    │ ← Page header
 │ ▸ 首頁        │  說明文字 text-sm muted                        │
-│ ▸ 討論區   3  │                                                │
+│ ▸ 討論區      │                                                │
+│ ▸ 專案申請  2 │                                                │
 │ ▸ 專案        │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐  │ ← stat 列 grid 4
 │ 管理          │  │ GPU    │ │ CPU    │ │ Memory │ │ Storage│  │
 │ ▸ Dashboard   │  └────────┘ └────────┘ └────────┘ └────────┘  │
@@ -194,9 +196,9 @@
 - 寬度：展開 `16rem`、收合 `3.5rem`。狀態存 cookie（名稱取安裝後 `sidebar.tsx` 的 `SIDEBAR_COOKIE_NAME`），`(app)/layout.tsx` 讀 cookie 設 `defaultOpen`，避免 SSR 閃爍；快捷鍵 `⌘B` / `Ctrl+B`。
 - 底色 `bg-sidebar`，右側 `border-sidebar-border`。
 - Header：品牌標誌（`size-8 rounded-md bg-primary text-primary-foreground shadow-glow-sm` 內放簡寫符號）+ 「QR AI Lab」（`font-semibold tracking-tight`，收合時隱藏）。
-- 群組：`主選單`（首頁、討論區、專案）、`管理`（Dashboard、使用者、資源與佇列；僅 admin 可見）。群組名用 `text-label`。
+- 群組：`主選單`（首頁、討論區、專案申請、專案）、`管理`（Dashboard、申請審核、佇列、使用者、專案配額、稽核紀錄；僅 admin 可見）。群組名用 `text-label`。
 - 項目：`h-9 rounded-md`、icon `size-4` + `text-sm`；hover `bg-sidebar-accent`。作用中：`bg-sidebar-accent font-medium` + 左側 2px 橘色指示條（`before:absolute before:left-0 before:top-1/2 before:h-5 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary`）+ icon `text-brand-ink`。
-- 計數：討論區待審數用 `SidebarMenuBadge`（`font-mono text-xs`）。
+- 計數：`SidebarMenuBadge`（`font-mono text-xs`）顯示 admin 的待審申請數、使用者自己有新回覆的申請數、佇列的執行中 Job 數。
 - Footer：使用者卡（`Avatar size-8`、display name `text-sm`、角色 `text-xs text-muted-foreground`）；點擊開 `DropdownMenu`：個人資料、主題（light / dark / system）、登出。收合時只顯示頭像。
 - 手機（< md）：自動變 off-canvas Sheet；Topbar 左側 `SidebarTrigger`。
 
@@ -247,8 +249,8 @@
 ### 8.4 表單
 - 一律 `Form`（react-hook-form + zod）+ `Field` 組合：`Label text-sm font-medium` → 控制項 → `FormDescription text-xs text-muted-foreground` → `FormMessage text-xs text-destructive`。
 - `Input` / `Textarea` / `Select`：`h-9 rounded-md border-input bg-background text-sm`；focus `border-ring ring-2 ring-ring/30`；錯誤 `border-destructive ring-destructive/20`；數字輸入 `font-mono text-right`。
-- 憑證輸入（MinIO access / secret、URL header）用 `type="password"` + 顯示切換；不自動填充。
-- 分段表單（新增資料集的三種來源）用 `Tabs` 切換，不用 radio 展開。
+- 憑證輸入（使用者自己 MinIO 的 access / secret、URL header）用 `type="password"` + 顯示切換；不自動填充；儲存後只顯示「已設定」，不回填。
+- 分段表單（新增資料來源的 MinIO / URL 兩種）用 `Tabs` 切換，不用 radio 展開。一次性上傳不在資料來源頁，而是建立 Job 精靈第一步的 `Dropzone`，且 UI 必須明說「檔案只存在於該 Job 執行期間，結束即刪」。
 - 精靈（新建訓練）用 `Stepper`（features）：上方步驟列（完成 `bg-primary`、目前 `border-primary`、未到 `border-border`），每步一個 `Card`，底部「上一步 / 下一步 / 建立」。
 
 ### 8.5 Table
@@ -285,7 +287,8 @@
 - 外框 `rounded-xl border border-border bg-background`，內部 `font-mono text-xs leading-5`，`max-h-[480px] overflow-auto`。
 - 行號 `text-subtle-foreground select-none w-10 text-right pr-3`；等級著色：`ERROR` `text-destructive`、`WARN` `text-warning`、`INFO` 預設、`DEBUG` `text-muted-foreground`。
 - 工具列：自動捲動開關、換行開關、下載、複製；running 時標題旁放 `StatusBadge`。
-- 透過 SSE 追加，單次最多保留 5,000 行（舊的截斷並顯示「已省略 N 行」）。
+- 執行中透過 SSE 追加（單次最多保留 5,000 行，舊的截斷並顯示「已省略 N 行」）；結束後改讀 `GET /jobs/{id}/logs` 的檔案分頁，頂端有 `載入更早` 按鈕。
+- 同一個元件用在專案 Job 詳情的 `Log` tab 與管理員佇列的 Job `Sheet`；`[system]` 行（排程、中斷理由、逾時、結束碼）用 `text-brand-ink` 標示。
 
 ### 8.12 EmptyState（features）
 - 置中 `py-16`：圖示容器 `size-12 rounded-xl bg-muted text-muted-foreground`（icon `size-6`）→ 標題 `text-base font-medium` → 說明 `text-sm text-muted-foreground max-w-sm` → 一個主按鈕（可選次要連結）。
@@ -308,25 +311,41 @@
 - 歡迎列：「早安，王小明」+ 今日節點 GPU 可用數（`font-mono`）。
 - 一般使用者：stat 列（我的專案、執行中 job、待審申請、儲存使用）→ 「我的專案」卡片網格（名稱、`DataTypeChip`、成員頭像、`ResourceMeter`×3、最新 job `StatusBadge`）→ 「最近的訓練」表 → 「我的申請」清單。
 - admin 額外：待審批數 stat（`text-warning`）、節點 GPU 使用率。
-- 主按鈕：`申請新專案`（導向討論區新單，type = project_request）。
+- 主按鈕：`申請新專案`（導向專案申請區的新申請表單）。
 
-### 9.2 討論區（類 GitLab Issues）
-- 列表：篩選列（類型、狀態、`我的`、搜尋）；每列：`#id`（mono）、標題、type chip、`StatusBadge`、作者 `Avatar`、相對時間、留言數（mono）。
-- 新單：`type` 選擇後，`project_request` 展開結構化欄位（資料類型、任務、資料量級、資源需求 GPU / CPU / Memory / Storage、預計成員）；其餘類型只有標題與 markdown 內文。
-- 詳情：`grid lg:grid-cols-[minmax(0,1fr)_320px]`。左：內文（markdown 渲染）+ 時間軸（留言 `Card`；系統事件如「管理員將狀態改為 in_review」以一行 `text-label` 樣式插在時間軸中）+ 回覆輸入。右：屬性卡（狀態、類型、作者、指派、建立時間）、申請摘要卡（結構化欄位）、admin 面板（`核准` primary：填寫 slug 與配額後直接建立專案並關單；`退回` destructive：需理由）。
+### 9.2 討論區（問答 / 問題單，與專案申請分開）
+- 列表：篩選列（類型 question / bug / feature、狀態 open / closed、`我的`、搜尋）；每列：`#id`（mono）、標題、type chip、`StatusBadge`、作者 `Avatar`、關聯專案 chip（可選）、相對時間、留言數（mono）。
+- 新單：類型、標題、markdown 內文、可選關聯專案。沒有資源欄位，那些屬於專案申請。
+- 詳情：`grid lg:grid-cols-[minmax(0,1fr)_320px]`。左：內文 + `CommentThread`（留言 `Card`；系統事件以 `text-label` 行插在時間軸）+ 回覆輸入。右：屬性卡（狀態、類型、作者、指派、關聯專案、時間）；admin 面板：指派、`關閉`（需填說明）/ `重開`。
+- 主按鈕：`新問題`。
 
-### 9.3 專案
-- 列表：卡片 / 表格切換；篩選（資料類型、狀態、我參與的）。
-- 詳情 tabs：`總覽`（配額 `ResourceMeter`、儲存用量、最近 jobs、預設模型、成員）、`資料集`（表 + 新增 `Dialog`：三種來源 `Tabs`）、`訓練`（job 表 + 新建精靈：資料集 → 任務 → 模式 自動 / 手動 → 模型與參數（手動）或 候選與預算（自動）→ 資源 → 確認；job 詳情頁：狀態列 + 進度、metrics `StatCard` 列、`LogViewer`、AutoML leaderboard 表、產物清單）、`模型`（artifacts 表：設為預設、下載、刪除）、`推論`（選模型 → 輸入來源 → 送出 → 結果表 / 下載）、`成員`（表 + 邀請、角色變更）、`設定`（名稱、描述、封存）。
-- SOP 入口：新建精靈第 2 步右側 `Sheet` 顯示對應資料類型的 SOP 章節（來源 `docs/MODEL_CATALOG.md` 經 API 提供）。
+### 9.3 專案申請
+- 列表：一般使用者只看自己的申請；admin 看全部並可篩狀態。每列：`#id`、題目、`DataTypeChip` + 任務 chip、資源摘要（`font-mono`：`2 GPU · 8 CPU · 32 GB · 50 GB`）、`StatusBadge`、申請人、送出時間。
+- 新申請（`max-w-2xl` 表單頁，四個 `Card` 區段）：基本（題目、目的 markdown）、資料（資料類型、任務、資料量級、資料描述；右側 `Sheet` 可開 SOP）、資源（GPU / CPU / Memory / Storage 數字輸入 `font-mono`，旁邊顯示目前總資源池與可申請上限）、成員（email 列表 + 角色、建議 slug）。底部 sticky：`撤回` / `送出申請`（primary）。
+- 詳情：左：申請內容（結構化欄位以 `text-label` + 值的描述清單呈現）+ `CommentThread`（審核往返）。右：狀態卡（`StatusBadge`、審核人、時間）、申請人動作（`修改並重送`：rejected 時；`撤回`：submitted / in_review 時，`AlertDialog`）。
+- admin 審核面板 `RequestReviewPanel`（詳情右欄，僅 admin）：`開始審核`（→ in_review）、`核准`（primary；`Dialog` 內可調整 slug 與四項配額、勾選成員；配額合計超過資源池時顯示 `warning`；確認後直接建立專案並導向專案頁）、`退回`（destructive；需填理由）。
+- 主按鈕：`新申請`。
 
-### 9.4 管理員 Dashboard
-- 節點資源：每張 GPU 一張 `Card`（名稱、使用率與記憶體 `ResourceMeter`、正在跑的 job 連結）+ CPU / Memory / Disk stat。
-- 佇列：`queued` / `running` 表（可取消、調整優先權）。
-- 待審批：issue 清單捷徑。
-- 使用者：表（角色切換 admin / user、停用）。
-- 專案配額：表（可直接編輯配額，儲存前 `AlertDialog` 確認）。
-- 稽核紀錄：表（時間、操作者、動作、對象）。
+### 9.4 專案
+- 列表：卡片 / 表格切換；篩選（資料類型、狀態、我參與的）；每卡：名稱、`DataTypeChip`、成員頭像、`ResourceMeter`×3（GPU / CPU / Memory 配額使用）、儲存用量、最新 Job `StatusBadge`。
+- 詳情 tabs：
+  - `總覽`：配額 `ResourceMeter`、儲存用量（本機專案資料夾）、最近 Job、預設模型、成員。
+  - `資料來源`：表（名稱、kind chip `MinIO` / `URL`、format、最近檢查結果 `StatusBadge`、建立者）+ 新增 `Dialog`（`Tabs`：MinIO 填 endpoint / bucket / object path / access / secret；URL 填網址 / headers）+ `檢查連線` 動作。頁首 `info` 提示條：「本服務不保存資料，只記錄連線資訊」。
+  - `任務`：統一的 Job 表（kind chip `訓練` / `推論`、名稱、模型、`StatusBadge`、佇列位置（queued 時 `#3`）、進度、資源、時間、動作：取消）。主按鈕 `新建訓練`、outline `新建推論`。
+    - 新建訓練精靈（`Stepper`）：資料（`Tabs`：一次性上傳 `Dropzone` / 選資料來源）→ 欄位設定（spec：target、classes… 依 data_type 顯示；右側 `Sheet` SOP）→ 模式（自動 / 手動）→ 模型與參數（手動：`ModelPicker` + 參數表單；自動：候選 chips + 預算）→ 資源與逾時（受專案配額限制，超過即時顯示錯誤）→ 確認。
+    - 新建推論精靈：模型（預設模型預選）→ 輸入（inline 小量 JSON / 一次性上傳 / 資料來源）→ 資源 → 確認。
+    - Job 詳情頁：頂部 `JobStatusBar`（`StatusBadge`、kind chip、佇列位置或執行時間、資源 chips、`取消` 按鈕；被 admin 中斷時顯示 `cancel_reason` 的 `warning` 提示條）；`Tabs`：`概況`（進度、metrics `StatCard` 列、AutoML leaderboard 表）、`Log`（`LogViewer`：執行中即時、結束後讀檔、可下載）、`產物`（artifacts 表：設為預設、下載、刪除）、`設定`（唯讀的 input / config JSON，`font-mono`）。
+  - `模型`：所有 `kind=model` 的 artifacts：名稱、版本、家族、指標、大小（mono）、來源 Job 連結、預設標記；動作：設為預設、下載、刪除（`AlertDialog`）。
+  - `成員`：表 + 邀請、角色變更。
+  - `設定`：名稱、描述、封存。
+
+### 9.5 管理員
+- `Dashboard`：stat 列（待審申請、佇列中、執行中、資源池使用率）；`資源池` `Card`（`ResourcePoolForm`：可用 GPU 勾選，每張顯示型號、實體記憶體、目前使用率；CPU 核數；Memory；最大同時 Job 數；是否允許 backfill。右側顯示實體總量與目前已配置量，超出實體即時 `destructive` 錯誤；儲存前 `AlertDialog`）；磁碟剩餘空間 `ResourceMeter`。
+- `申請審核`：全部 project_requests（預設篩 submitted / in_review）→ 詳情同 §9.3。
+- `佇列`：`QueueTable`。上半 `執行中`：專案、Job、kind、資源、已執行時間、`強制中斷`（destructive → `AlertDialog` 需填理由）。下半 `等待中`：拖曳排序或每列 `置頂 / 上移 / 下移 / 置底` icon 按鈕；顯示等待原因（「等待 2 GPU」「專案已達同時上限」「超出資源池」）。每列可開 `JobSheet`：Job 摘要 + `LogViewer`。
+- `使用者`：表（角色切換 admin / user、停用，`AlertDialog`）。
+- `專案配額`：表（每專案四項配額可直接編輯，儲存前確認；合計超過資源池時顯示 `warning`）。
+- `稽核紀錄`：表（時間、操作者、動作、對象、理由）。
 
 ## 10. Dark mode 與實作
 
@@ -635,17 +654,17 @@ shadcn `init` 產生的 `globals.css` 以這份整個取代；變數名稱與 sh
 ## 附錄 B：shadcn/ui 設定與安裝
 
 ```bash
-# 1. 建立專案（Node ≥ 20.9；Next.js 16 預設 Turbopack）
-pnpm create next-app@latest frontend --ts --tailwind --eslint --app --src-dir --import-alias "@/*"
+# 1. 建立專案（Node ≥ 20.9；Next.js 16 預設 Turbopack；套件管理用 npm，提交 package-lock.json）
+npx create-next-app@latest frontend --ts --tailwind --eslint --app --src-dir --import-alias "@/*"
 cd frontend
 
 # 2. 依賴
-pnpm add geist next-themes lucide-react sonner @tanstack/react-query react-hook-form zod @hookform/resolvers next-auth@beta
-pnpm add -D tw-animate-css prettier prettier-plugin-tailwindcss
+npm install geist next-themes lucide-react sonner @tanstack/react-query react-hook-form zod @hookform/resolvers next-auth@beta
+npm install -D tw-animate-css prettier prettier-plugin-tailwindcss
 
 # 3. shadcn（style: new-york、base color: neutral、CSS variables: yes）→ 之後用附錄 A 覆蓋 globals.css
-pnpm dlx shadcn@latest init
-pnpm dlx shadcn@latest add button card badge input label textarea select switch checkbox table tabs \
+npx shadcn@latest init
+npx shadcn@latest add button card badge input label textarea select switch checkbox table tabs \
   dialog alert-dialog sheet dropdown-menu tooltip popover command sidebar breadcrumb separator \
   skeleton avatar sonner form progress scroll-area kbd spinner empty
 ```
@@ -728,11 +747,17 @@ frontend/src/components/
    ├─ data-type-chip.tsx    §8.3
    ├─ stat-card.tsx         §8.9
    ├─ resource-meter.tsx    §8.10
-   ├─ log-viewer.tsx        §8.11（client，SSE）
+   ├─ log-viewer.tsx        §8.11（client，SSE + 檔案分頁）
    ├─ empty-state.tsx       §8.12
    ├─ member-avatars.tsx    §8.14
    ├─ stepper.tsx           §8.4
-   ├─ issue-timeline.tsx    §9.2
-   ├─ project-card.tsx      §9.3
-   └─ model-picker.tsx      §9.3（讀 /api/v1/catalog）
+   ├─ comment-thread.tsx    §9.2 / §9.3（討論區與專案申請共用）
+   ├─ request-review-panel.tsx  §9.3 admin 審核面板
+   ├─ project-card.tsx      §9.4
+   ├─ model-picker.tsx      §9.4（讀 /api/v1/catalog）
+   ├─ dropzone.tsx          §9.4 一次性上傳
+   ├─ job-status-bar.tsx    §9.4 Job 詳情頂部狀態列
+   ├─ queue-table.tsx       §9.5 佇列（排序、強制中斷）
+   ├─ job-sheet.tsx         §9.5 Job 摘要 + LogViewer 抽屜
+   └─ resource-pool-form.tsx §9.5 總資源池
 ```

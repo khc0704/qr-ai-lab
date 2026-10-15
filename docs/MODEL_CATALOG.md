@@ -85,7 +85,7 @@
 
 ## 6. AutoML 流程
 
-1. backend 依矩陣與資料集 `spec` 展開候選，寫入 `train_jobs.config.search`。
+1. backend 依矩陣與 Job 輸入的 `spec`（`jobs.input.spec`，含 `row_count` / `image_count`）展開候選，寫入 `jobs.config.search`。
 2. trainer：Optuna `TPESampler(seed)` + `MedianPruner(n_startup_trials=3)`；每個 trial 先抽 family，再抽該家族的空間。
 3. 每個 trial 回報 leaderboard row：`{trial, family, params, metrics, duration_s, status}`。
 4. 時間 / 次數到 → 取最佳 trial，以完整訓練集重訓並匯出產物；`metadata.automl = {best_trial, params, leaderboard_ref}`。

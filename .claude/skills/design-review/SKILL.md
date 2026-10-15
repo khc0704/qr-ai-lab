@@ -23,5 +23,5 @@ description: 依 DESIGN.md 檢查前端變更的設計一致性（token、元件
    - 版面：page header 結構、`max-w-7xl`、間距用 4/8 倍數、圓角依規定
    - 無障礙：focus ring 可見、icon-only 按鈕有 `aria-label`、顏色不是唯一的狀態訊號
    - 動效只用於狀態變化與空間關係，有 `motion-reduce:` 處理
-4. 若 dev server 可啟動（`cd frontend && pnpm dev`）且有 Playwright：對每個變更頁面各截一張 light 與 dark 截圖（切換 `document.documentElement.classList.toggle("dark")`），檢查對比、對齊、溢出。沒有環境就說明略過。
+4. 若 dev server 可啟動（`cd frontend && npm run dev`）且有 Playwright：對每個變更頁面各截一張 light 與 dark 截圖（切換 `document.documentElement.classList.toggle("dark")`），檢查對比、對齊、溢出。沒有環境就說明略過。
 5. 若使用者要求修正：直接改檔，重跑第 2 步直到無錯誤，再回報。
