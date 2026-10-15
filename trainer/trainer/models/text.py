@@ -155,6 +155,7 @@ class BertClassifierInferencer(BaseInferencer):
         )
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
         import torch
 
         texts = [str(t) for t in ds.X]

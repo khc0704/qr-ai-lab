@@ -424,6 +424,7 @@ class _SeqInferencer(BaseInferencer):
         return np.concatenate(scores), np.concatenate(embs)
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
         X = as_windows(ds.X, self.config["T"])
         ids = ds.ids or [str(i) for i in range(len(X))]
         scores, emb = self._run(X)

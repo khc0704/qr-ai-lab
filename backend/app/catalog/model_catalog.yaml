@@ -156,6 +156,19 @@ families:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
     sop: 只用正常影像建 patch 特徵記憶庫，異常分數 = 最近鄰距離，並輸出熱圖定位。
 
+  vision.image_quality:
+    label: 影像品質基準（機台比對）
+    group: vision
+    framework: numpy
+    supports: { IMAGE: [anomaly_detection] }
+    inference_modes: [compare, score, embed]
+    resources: { gpu: none, cpu_min: 1, memory_mb_min: 2048 }
+    min_rows: 20
+    defaults: { z_threshold: 3.0, distance_percentile: 99 }
+    search_space: {}
+    weights: []
+    sop: 用黃金機台的影像集算出 17 個無參考影像品質指標（清晰度、雜訊、對比、亮度、飽和、熵、頻譜、方向性）的基準與浮動範圍；其他機台調機後用 compare 模式比對，每個指標回報 match / drift / fail。不需要 GPU 與權重。
+
   sequence.patch_autoencoder:
     label: Patch Autoencoder
     group: sequence
@@ -233,7 +246,7 @@ automl:
     budget: { max_trials: 8, time_budget_minutes: 120 }
   - data_type: IMAGE
     tasks: [anomaly_detection]
-    candidates: [vision.dino_patchcore]
+    candidates: [vision.dino_patchcore, vision.image_quality]
     budget: { max_trials: 6, time_budget_minutes: 60 }
   - data_type: SEQUENCE
     tasks: [anomaly_detection]

@@ -23,6 +23,7 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
         "DinoPatchCoreTrainer",
         "DinoPatchCoreInferencer",
     ),
+    "vision.image_quality": ("trainer.models.iqa", "ImageQualityTrainer", "ImageQualityInferencer"),
     "sequence.patch_autoencoder": (
         "trainer.models.sequence",
         "PatchAutoencoderTrainer",

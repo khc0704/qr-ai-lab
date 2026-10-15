@@ -235,6 +235,7 @@ class YoloInferencer(BaseInferencer):
         self.imgsz = int(self.meta.get("imgsz") or 640)
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
         paths = [str(p) for p in ds.X]
         ids = ds.ids or [Path(p).name for p in paths]
         save = bool(options.get("save_images", True))
@@ -531,6 +532,7 @@ class DinoFewShotInferencer(BaseInferencer):
         self.dino = _Dino(self.ctx, str(self.meta.get("backbone", "dinov2-small")))
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
         ids = ds.ids or [Path(p).name for p in ds.X]
         emb = self.dino.embed(list(ds.X), progress=lambda f: self.ctx.progress(0.8 * f))
         k = int(options.get("k", self.meta.get("k", 5)))
@@ -759,6 +761,7 @@ class DinoPatchCoreInferencer(BaseInferencer):
         self.dino = _Dino(self.ctx, str(self.meta.get("backbone", "dinov2-small")))
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
         ids = ds.ids or [Path(p).name for p in ds.X]
         paths = list(ds.X)
         if mode == "embed":
