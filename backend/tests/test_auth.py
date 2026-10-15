@@ -25,9 +25,9 @@ async def test_user_cannot_use_admin_api(client, user):
     assert r.status_code == 403 and r.json()["detail"]["code"] == "ADMIN_ONLY"
 
 
-async def test_disabled_user_rejected(client, admin, user):
+async def test_disabled_user_rejected(client, admin, user, superadmin):
     me = (await client.get("/api/v1/me", headers=user)).json()
-    r = await client.patch(f"/api/v1/users/{me['id']}", json={"is_active": False}, headers=admin)
+    r = await client.patch(f"/api/v1/users/{me['id']}", json={"is_active": False}, headers=superadmin)
     assert r.status_code == 200 and r.json()["is_active"] is False
     r = await client.get("/api/v1/me", headers=user)
     assert r.status_code == 401

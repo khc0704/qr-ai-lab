@@ -1,8 +1,9 @@
 """Operational commands: uv run python -m app.cli <command>
 
 init-db                 create all tables (dev/SQLite; production uses `alembic upgrade head`)
-seed                    seed `admin` / `user` accounts and default settings (idempotent)
-create-user             --username --password --email [--role admin|user] [--name ...]
+seed                    seed `superadmin` / `admin` / `user` accounts and default settings (idempotent)
+create-user             --username --password --email [--role superadmin|admin|user] [--name ...]
+set-role                --username --role superadmin|admin|user   (bootstrap the first superadmin)
 set-password            --username --password
 model-zoo               list required pretrained weights and whether they are present
 """
@@ -33,7 +34,9 @@ async def _seed() -> None:
 
     s = get_settings()
     async with get_sessionmaker()() as session:
-        created = await users_svc.seed_users(session, s.seed_admin_password, s.seed_user_password)
+        created = await users_svc.seed_users(
+            session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
+        )
         pool = await settings_svc.get_resource_pool(session)
         await settings_svc.get_job_defaults(session)
     print(f"created users: {created or 'none (already present)'}; resource pool: {pool.model_dump()}")
@@ -51,6 +54,20 @@ async def _create_user(a: argparse.Namespace) -> None:
             session, username=a.username, password=a.password, email=a.email, display_name=a.name, role=a.role
         )
         print(f"created user id={u.id} username={u.username} role={u.role}")
+
+
+async def _set_role(a: argparse.Namespace) -> None:
+    from app.db.session import get_sessionmaker
+    from app.services import users as users_svc
+
+    async with get_sessionmaker()() as session:
+        u = await users_svc.get_by_username(session, a.username)
+        if u is None:
+            print("no such user (Keycloak users exist after their first login)", file=sys.stderr)
+            sys.exit(1)
+        u.role = a.role
+        await session.commit()
+        print(f"{u.username}: role={u.role}")
 
 
 async def _set_password(a: argparse.Namespace) -> None:
@@ -90,8 +107,11 @@ def main(argv: list[str] | None = None) -> None:
     cu.add_argument("--username", required=True)
     cu.add_argument("--password", required=True)
     cu.add_argument("--email", required=True)
-    cu.add_argument("--role", default="user", choices=["admin", "user"])
+    cu.add_argument("--role", default="user", choices=["superadmin", "admin", "user"])
     cu.add_argument("--name", default=None)
+    sr = sub.add_parser("set-role")
+    sr.add_argument("--username", required=True)
+    sr.add_argument("--role", required=True, choices=["superadmin", "admin", "user"])
     sp = sub.add_parser("set-password")
     sp.add_argument("--username", required=True)
     sp.add_argument("--password", required=True)
@@ -106,6 +126,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_create_user(a))
     elif a.cmd == "set-password":
         asyncio.run(_set_password(a))
+    elif a.cmd == "set-role":
+        asyncio.run(_set_role(a))
     elif a.cmd == "model-zoo":
         _model_zoo(a.verify)
 

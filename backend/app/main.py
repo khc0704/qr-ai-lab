@@ -21,6 +21,7 @@ from app.routers import (
     jobs,
     project_requests,
     projects,
+    tools,
     users,
 )
 
@@ -38,7 +39,9 @@ async def init_dev_schema() -> None:
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with get_sessionmaker()() as session:
-        created = await users_svc.seed_users(session, s.seed_admin_password, s.seed_user_password)
+        created = await users_svc.seed_users(
+            session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
+        )
         await settings_svc.get_resource_pool(session)
         await settings_svc.get_job_defaults(session)
     if created:
@@ -87,7 +90,7 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=s.cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
     )
     prefix = "/api/v1"
-    for r in (auth, users, catalog, issues, project_requests, projects, jobs, artifacts, admin, internal):
+    for r in (auth, users, catalog, issues, project_requests, projects, jobs, artifacts, admin, tools, internal):
         app.include_router(r.router, prefix=prefix)
     app.include_router(health.router)
     return app

@@ -4,7 +4,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
-from app.core.deps import AdminUser, CurrentUser, DbSession, ProjectAccess, project_access
+from app.core.deps import CurrentUser, DbSession, ProjectAccess, project_access, require_perm
+from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.artifact import ArtifactRead
 from app.schemas.common import Ok, Page
@@ -34,6 +35,8 @@ Viewer = Annotated[ProjectAccess, Depends(project_access("viewer"))]
 Member = Annotated[ProjectAccess, Depends(project_access("member"))]
 Maintainer = Annotated[ProjectAccess, Depends(project_access("maintainer"))]
 Owner = Annotated[ProjectAccess, Depends(project_access("owner"))]
+QuotaManager = Annotated[User, Depends(require_perm("quota.manage"))]
+ProjectDeleter = Annotated[User, Depends(require_perm("projects.delete"))]
 
 
 @router.get("", response_model=list[ProjectRead], summary="我有權限的專案")
@@ -56,8 +59,16 @@ async def archive_project(access: Owner, session: DbSession) -> ProjectRead:
     return await ser.project(session, await projects_svc.archive(session, access.user, access.project))
 
 
-@router.patch("/{slug}/quota", response_model=ProjectRead, summary="調整配額（admin）")
-async def update_quota(slug: str, body: QuotaUpdate, session: DbSession, admin: AdminUser) -> ProjectRead:
+@router.delete("/{slug}", response_model=Ok, summary="刪除專案與所有產物（superadmin）")
+async def delete_project(slug: str, session: DbSession, admin: ProjectDeleter) -> Ok:
+    """不可復原：刪除任務、產物、資料來源設定、成員與專案資料夾。還有未結束的任務時拒絕。"""
+    project = await projects_svc.get_by_slug(session, slug)
+    await projects_svc.delete(session, admin, project)
+    return Ok()
+
+
+@router.patch("/{slug}/quota", response_model=ProjectRead, summary="調整配額（superadmin）")
+async def update_quota(slug: str, body: QuotaUpdate, session: DbSession, admin: QuotaManager) -> ProjectRead:
     project = await projects_svc.get_by_slug(session, slug)
     return await ser.project(session, await projects_svc.update_quota(session, admin, project, body))
 

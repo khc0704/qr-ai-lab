@@ -9,6 +9,8 @@ class ResourcePool(BaseModel):
     memory_mb: int = Field(ge=1024)
     max_running_jobs: int = Field(ge=1, le=256)
     allow_backfill: bool = True
+    # Several jobs on one GPU when they declare requested_gpu_memory_mb and the VRAM is free (pynvml).
+    gpu_share: bool = True
 
 
 class JobDefaults(BaseModel):

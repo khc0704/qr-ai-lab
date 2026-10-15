@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import bad_request, conflict, not_found
 from app.db.base import utcnow
-from app.models import Artifact, Job, Project, ProjectMember, User
+from app.models import Artifact, DataSource, Issue, Job, Project, ProjectMember, ProjectRequest, Upload, User
 from app.schemas.project import MemberAdd, MemberUpdate, ProjectUpdate, ProjectUsage, QuotaUpdate
 from app.services import audit
 from app.services import users as users_svc
@@ -82,6 +84,53 @@ async def archive(session: AsyncSession, actor: User, project: Project) -> Proje
     await audit.record(session, actor.id, "project.archive", "project", project.id)
     await session.commit()
     return project
+
+
+async def delete(session: AsyncSession, actor: User, project: Project) -> None:
+    """superadmin: remove the project, its jobs, artifacts, data-source references, members and the folder on disk.
+    Refused while any job is still queued / scheduled / running. Discussion threads and the original request keep
+    their rows but lose the link (history stays readable)."""
+    active = (
+        await session.execute(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.project_id == project.id, Job.status.in_(("queued", "scheduled", "running")))
+        )
+    ).scalar_one()
+    if active:
+        raise conflict("PROJECT_HAS_ACTIVE_JOBS", f"還有 {active} 個任務未結束，請先中斷")
+    counts = {
+        "jobs": (
+            await session.execute(select(func.count()).select_from(Job).where(Job.project_id == project.id))
+        ).scalar_one(),
+        "artifacts": (
+            await session.execute(select(func.count()).select_from(Artifact).where(Artifact.project_id == project.id))
+        ).scalar_one(),
+    }
+    # FK order: jobs → artifacts (inference jobs) and artifacts → jobs (RESTRICT both ways), so break the link first.
+    await session.execute(sql_update(Job).where(Job.project_id == project.id).values(artifact_id=None))
+    await session.execute(sql_delete(Artifact).where(Artifact.project_id == project.id))
+    await session.execute(sql_delete(Upload).where(Upload.project_id == project.id))
+    await session.execute(sql_delete(Job).where(Job.project_id == project.id))
+    await session.execute(sql_delete(DataSource).where(DataSource.project_id == project.id))
+    await session.execute(sql_update(Issue).where(Issue.project_id == project.id).values(project_id=None))
+    await session.execute(
+        sql_update(ProjectRequest).where(ProjectRequest.project_id == project.id).values(project_id=None)
+    )
+    await audit.record(
+        session,
+        actor.id,
+        "project.delete",
+        "project",
+        project.id,
+        {"slug": project.slug, "name": project.name, **counts},
+    )
+    await session.delete(project)  # members cascade
+    await session.flush()
+    storage = get_storage()
+    storage.remove_tree(f"projects/{project.slug}")
+    storage.remove_tree(f"uploads/{project.id}")
+    await session.commit()
 
 
 async def update_quota(session: AsyncSession, admin: User, project: Project, body: QuotaUpdate) -> Project:

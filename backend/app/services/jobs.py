@@ -16,7 +16,7 @@ from app.core.errors import bad_request, conflict, not_found
 from app.db.base import utcnow
 from app.events.bus import get_bus
 from app.models import Artifact, DataSource, Job, Project, User
-from app.schemas.job import JobCreate
+from app.schemas.job import JobCreate, JobInputBody
 from app.schemas.settings import ResourcePool
 from app.services import audit
 from app.services import model_zoo as zoo_svc
@@ -252,6 +252,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         requested_gpu=body.requested_gpu,
         requested_cpu=body.requested_cpu,
         requested_memory_mb=body.requested_memory_mb,
+        requested_gpu_memory_mb=body.requested_gpu_memory_mb if body.requested_gpu > 0 else None,
         timeout_minutes=timeout,
         task_type=task_type,
         mode=mode,
@@ -318,6 +319,50 @@ async def cancel(
         },
     )
     return job
+
+
+async def restart(session: AsyncSession, actor: User, job: Job) -> Job:
+    """Re-queue a finished job as a new job with the same input, resources and settings (audit: job.restart).
+    One-time uploads are deleted when a job ends, so those jobs cannot be restarted."""
+    if job.is_active:
+        raise conflict("JOB_ACTIVE", f"任務仍在 {job.status}，請先中斷")
+    if job.project.status != "active":
+        raise conflict("PROJECT_ARCHIVED", "專案已封存")
+    inp = job.input or {}
+    if inp.get("kind") == "upload":
+        raise conflict("RESTART_INPUT_GONE", "一次性上傳的資料在任務結束時已刪除，請用「複製設定」重新上傳")
+    config = dict(job.config or {})
+    if job.mode == "auto" and isinstance(config.get("search"), dict):
+        # candidates / skipped weights are recomputed from the catalog and the model zoo at creation time
+        config["search"] = {
+            k: v for k, v in config["search"].items() if k not in ("candidates", "skipped_missing_weights")
+        }
+    config["restarted_from"] = job.id
+    body = JobCreate(
+        kind=job.kind,  # type: ignore[arg-type]
+        name=job.name,
+        input=JobInputBody(
+            kind=inp.get("kind", "data_source"),
+            data_source_id=job.data_source_id,
+            format=inp.get("format"),
+            spec=dict(inp.get("spec") or {}),
+            rows=inp.get("rows"),
+        ),
+        task_type=job.task_type,
+        mode=job.mode,  # type: ignore[arg-type]
+        model_family=job.model_family if job.mode != "auto" else None,
+        config=config,
+        artifact_id=job.artifact_id,
+        requested_gpu=job.requested_gpu,
+        requested_cpu=float(job.requested_cpu),
+        requested_memory_mb=job.requested_memory_mb,
+        requested_gpu_memory_mb=job.requested_gpu_memory_mb,
+        timeout_minutes=job.timeout_minutes,
+    )
+    new = await create(session, actor, job.project, body)
+    await audit.record(session, actor.id, "job.restart", "job", new.id, {"from_job_id": job.id})
+    await session.commit()
+    return await get(session, new.id)
 
 
 async def set_order(session: AsyncSession, admin: User, job_ids: list[int]) -> list[Job]:

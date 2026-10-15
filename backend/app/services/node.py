@@ -123,20 +123,46 @@ def runner_info() -> RunnerInfo:
 
 
 async def gpu_job_map(session: AsyncSession) -> dict[int, int]:
+    """GPU → first job placed on it (exclusive jobs are the only job; sharing jobs may be several)."""
+    return {g: jobs[0].id for g, jobs in (await gpu_jobs_map(session)).items() if jobs}
+
+
+async def gpu_jobs_map(session: AsyncSession) -> dict[int, list[Job]]:
     rows = (await session.execute(select(Job).where(Job.status.in_(("scheduled", "running"))))).scalars().all()
-    out: dict[int, int] = {}
+    out: dict[int, list[Job]] = {}
     for j in rows:
         for g in j.assigned_gpus or []:
-            out[int(g)] = j.id
+            out.setdefault(int(g), []).append(j)
     return out
+
+
+async def pool_indices(session: AsyncSession) -> list[int]:
+    from app.services import settings as settings_svc
+
+    return (await settings_svc.get_resource_pool(session)).gpu_indices
 
 
 async def node_status(session: AsyncSession) -> NodeStatus:
     s = get_settings()
     gpus = detect_gpus()
-    gmap = await gpu_job_map(session)
+    gmap = await gpu_jobs_map(session)
     for g in gpus:
-        g.job_id = gmap.get(g.index)
+        jobs = gmap.get(g.index, [])
+        g.job_id = jobs[0].id if jobs else None
+        g.job_ids = [j.id for j in jobs]
+        g.reserved_mb = (
+            None
+            if any(j.requested_gpu_memory_mb is None for j in jobs)
+            else sum(j.requested_gpu_memory_mb or 0 for j in jobs)
+        )
+        if jobs and g.reserved_mb is None:
+            g.reserved_mb = g.memory_total_mb  # held exclusively
+        try:
+            from app.services.gpu import gpu_processes
+
+            g.processes = len(gpu_processes(g.index))
+        except Exception:
+            g.processes = None
     vm = psutil.virtual_memory()
     s.data_root.mkdir(parents=True, exist_ok=True)
     du = psutil.disk_usage(str(s.data_root))

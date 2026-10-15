@@ -52,7 +52,7 @@ async def _wait_terminal(client, job_id: int, headers: dict, sched: Scheduler, t
     raise AssertionError(f"job {job_id} did not finish in {timeout}s")
 
 
-async def test_train_and_infer_through_real_trainer(client, admin, user):
+async def test_train_and_infer_through_real_trainer(client, admin, user, superadmin):
     settings = get_settings()
     trainer_dir = settings.trainer_dir.resolve()
     if not (trainer_dir / "trainer" / "runtime.py").exists():
@@ -71,7 +71,7 @@ async def test_train_and_infer_through_real_trainer(client, admin, user):
         await client.patch(
             f"/api/v1/projects/{slug}/quota",
             json={"gpu_limit": 0, "cpu_limit": 4, "memory_limit_mb": 8192, "max_concurrent_jobs": 1},
-            headers=admin,
+            headers=superadmin,
         )
         up = await client.post(
             f"/api/v1/projects/{slug}/uploads",

@@ -18,7 +18,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("jobs", sa.Column("assigned_cpus", sa.JSON(), nullable=True))
+    # 0001 runs create_all from the current models, so a fresh database already has this column.
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("jobs")}
+    if "assigned_cpus" not in cols:
+        op.add_column("jobs", sa.Column("assigned_cpus", sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:

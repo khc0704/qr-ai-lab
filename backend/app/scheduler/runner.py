@@ -59,6 +59,7 @@ class LaunchSpec:
     cpus: list[int] = field(default_factory=list)  # logical CPUs granted to this job (affinity / cpuset)
     cpu: float = 1.0
     memory_mb: int = 2048
+    gpu_memory_mb: int | None = None  # VRAM cap per visible GPU (shared GPU); None = whole device
     timeout_s: int | None = None
 
 
@@ -99,15 +100,37 @@ def trainer_python(trainer_dir: Path, override: Path | None = None) -> str:
     return str(venv) if venv.exists() else sys.executable
 
 
-def job_env(spec: LaunchSpec, base: dict[str, str] | None = None) -> dict[str, str]:
-    threads = str(max(1, math.ceil(spec.cpu)))
+def thread_env(cpu: float) -> dict[str, str]:
+    """Every thread-pool knob native libraries read at import time. Together with the kernel-level limit
+    (cgroup cpuset / CPUQuota or sched_setaffinity) this is what stops sklearn / numpy / torch / numexpr from
+    spawning one thread per physical core (TSNE on an 88-core box with a 1-core grant)."""
+    threads = str(max(1, math.ceil(cpu)))
     return {
-        **(base if base is not None else os.environ),
-        **OFFLINE_ENV,
         "OMP_NUM_THREADS": threads,
         "MKL_NUM_THREADS": threads,
         "OPENBLAS_NUM_THREADS": threads,
+        "BLIS_NUM_THREADS": threads,
+        "VECLIB_MAXIMUM_THREADS": threads,
+        "NUMEXPR_NUM_THREADS": threads,
+        "NUMEXPR_MAX_THREADS": threads,
+        "TBB_NUM_THREADS": threads,
+        "NUMBA_NUM_THREADS": threads,
+        "RAYON_NUM_THREADS": threads,
+        "POLARS_MAX_THREADS": threads,
+        "LOKY_MAX_CPU_COUNT": threads,  # joblib.cpu_count() → n_jobs=-1 means "the grant", not the machine
         "TORCH_NUM_THREADS": threads,
+        "JOB_CPU_LIMIT": threads,
+    }
+
+
+def job_env(spec: LaunchSpec, base: dict[str, str] | None = None) -> dict[str, str]:
+    return {
+        **(base if base is not None else os.environ),
+        **OFFLINE_ENV,
+        **thread_env(spec.cpu),
+        "JOB_CPU_CORES": ",".join(str(c) for c in spec.cpus),
+        "JOB_MEMORY_MB": str(spec.memory_mb),
+        "JOB_GPU_MEMORY_MB": str(spec.gpu_memory_mb or ""),
         "CUDA_VISIBLE_DEVICES": ",".join(str(g) for g in spec.gpus) if spec.gpus else "",
         **spec.env,
         "JOB_INPUT_DIR": str(spec.input_dir),

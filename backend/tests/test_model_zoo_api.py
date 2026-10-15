@@ -32,7 +32,7 @@ async def _wait_task(client, admin, weight_id: str, timeout: float = 20) -> dict
     raise AssertionError("import did not finish")
 
 
-async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, monkeypatch):
+async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, monkeypatch, superadmin):
     s = get_settings()
     monkeypatch.setattr(type(s), "zoo_root", property(lambda self: tmp_path / "zoo"))
     transfer = tmp_path / "transfer"
@@ -54,7 +54,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     r = await client.post(
         "/api/v1/admin/model-zoo/yolo11n/upload",
         files={"file": ("yolo11n.pt", blob, "application/octet-stream")},
-        headers=admin,
+        headers=superadmin,
     )
     assert r.status_code == 200, r.text
     e = r.json()
@@ -67,7 +67,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     bad = await client.post(
         "/api/v1/admin/model-zoo/dinov2-small/upload",
         files={"file": ("model.safetensors", b"x", "application/octet-stream")},
-        headers=admin,
+        headers=superadmin,
     )
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "ARCHIVE_REQUIRED"
     zpath = tmp_path / "dinov2-small.zip"
@@ -77,7 +77,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     r = await client.post(
         "/api/v1/admin/model-zoo/dinov2-small/upload",
         files={"file": ("dinov2-small.zip", zpath.read_bytes(), "application/zip")},
-        headers=admin,
+        headers=superadmin,
     )
     assert r.status_code == 200, r.text
     assert (tmp_path / "zoo" / "dinov2-small" / "config.json").exists()
@@ -87,14 +87,16 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     # 2) import from a folder mounted on the server (only under MODEL_ZOO_IMPORT_ROOT)
     (transfer / "yolo11s.pt").write_bytes(b"s" * 5000)
     r = await client.post(
-        "/api/v1/admin/model-zoo/yolo11s/import", json={"source": "path", "path": "yolo11s.pt"}, headers=admin
+        "/api/v1/admin/model-zoo/yolo11s/import", json={"source": "path", "path": "yolo11s.pt"}, headers=superadmin
     )
     assert r.status_code == 202, r.text
     t = await _wait_task(client, admin, "yolo11s")
     assert t["state"] == "done", t
     assert (tmp_path / "zoo" / "yolo11s.pt").stat().st_size == 5000
     r = await client.post(
-        "/api/v1/admin/model-zoo/yolo11m/import", json={"source": "path", "path": "../../etc/passwd"}, headers=admin
+        "/api/v1/admin/model-zoo/yolo11m/import",
+        json={"source": "path", "path": "../../etc/passwd"},
+        headers=superadmin,
     )
     assert r.status_code == 400 and r.json()["detail"]["code"] == "PATH_NOT_ALLOWED"
 
@@ -105,7 +107,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
         r = await client.post(
             "/api/v1/admin/model-zoo/yolo11n-cls/import",
             json={"source": "url", "url": f"http://127.0.0.1:{port}/yolo11n-cls.pt"},
-            headers=admin,
+            headers=superadmin,
         )
         assert r.status_code == 202, r.text
         t = await _wait_task(client, admin, "yolo11n-cls")
@@ -114,7 +116,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
         r = await client.post(
             "/api/v1/admin/model-zoo/yolo11m/import",
             json={"source": "url", "url": f"http://example.com:{port}/x.pt"},
-            headers=admin,
+            headers=superadmin,
         )
         assert r.status_code == 400 and r.json()["detail"]["code"] == "URL_NOT_ALLOWED"
     finally:
@@ -126,13 +128,13 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     assert rows["yolo11s"]["status"] == "mismatch" and rows["yolo11n"]["status"] == "present"
 
     # delete
-    r = await client.delete("/api/v1/admin/model-zoo/yolo11n", headers=admin)
+    r = await client.delete("/api/v1/admin/model-zoo/yolo11n", headers=superadmin)
     assert r.status_code == 200 and not (tmp_path / "zoo" / "yolo11n.pt").exists()
     audit = {a["action"] for a in (await client.get("/api/v1/admin/audit", headers=admin)).json()["items"]}
     assert {"model_zoo.upload", "model_zoo.import", "model_zoo.delete"} <= audit
 
 
-async def test_job_creation_refuses_missing_weights(client, admin, user, tmp_path, monkeypatch):
+async def test_job_creation_refuses_missing_weights(client, admin, user, tmp_path, monkeypatch, superadmin):
     from tests.conftest import APPROVE, REQUEST, make_data_source
 
     s = get_settings()
@@ -145,7 +147,7 @@ async def test_job_creation_refuses_missing_weights(client, admin, user, tmp_pat
     await client.patch(
         f"/api/v1/projects/{slug}/quota",
         json={"gpu_limit": 1, "cpu_limit": 4, "memory_limit_mb": 8192, "max_concurrent_jobs": 1},
-        headers=admin,
+        headers=superadmin,
     )
     ds = await make_data_source(client, user, slug)
     r = await client.post(

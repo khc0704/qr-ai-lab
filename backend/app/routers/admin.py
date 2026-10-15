@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Query, UploadFile
+from typing import Annotated
 
-from app.core.deps import AdminUser, DbSession
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+
+from app.core.deps import AdminUser, DbSession, require_perm
+from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.admin import (
     AdminOverview,
     AuditLogRead,
+    GpuResetBody,
+    GpuResetResult,
     ModelZooEntry,
     NodeStatus,
     QueueRead,
+    UsageHistory,
     ZooImportBody,
     ZooTask,
 )
@@ -18,6 +24,9 @@ from app.schemas.job import JobRead, MoveBody, OrderBody, StopBody
 from app.schemas.settings import JobDefaults, ResourcePool
 from app.services import (
     audit as audit_svc,
+)
+from app.services import (
+    gpu as gpu_svc,
 )
 from app.services import (
     jobs as jobs_svc,
@@ -34,8 +43,18 @@ from app.services import (
 from app.services import (
     settings as settings_svc,
 )
+from app.services import (
+    usage as usage_svc,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Fine-grained permissions (see app/core/permissions.py): admins run the day-to-day operations, only superadmins
+# touch resources, the model zoo and user roles.
+PoolManager = Annotated[User, Depends(require_perm("pool.manage"))]
+JobController = Annotated[User, Depends(require_perm("jobs.control"))]
+ZooManager = Annotated[User, Depends(require_perm("model_zoo.manage"))]
+GpuResetter = Annotated[User, Depends(require_perm("gpu.reset"))]
 
 
 @router.get("/overview", response_model=AdminOverview)
@@ -62,13 +81,32 @@ async def node(session: DbSession, _: AdminUser) -> NodeStatus:
     return await node_svc.node_status(session)
 
 
+@router.post("/gpus/{index}/reset", response_model=GpuResetResult, summary="強制釋放 GPU 顯存（superadmin）")
+async def reset_gpu(index: int, body: GpuResetBody, session: DbSession, admin: GpuResetter) -> GpuResetResult:
+    """jobs：強制中斷排程器放在這張 GPU 上的任務；all：再把驅動程式看到的其他程序一併 kill；
+    device：再執行 GPU_RESET_COMMAND（nvidia-smi --gpu-reset）。一律寫入稽核紀錄。"""
+    return await gpu_svc.reset(session, admin, index, body.mode, body.reason)
+
+
+@router.get("/usage", response_model=UsageHistory, summary="資源使用率歷史（節點、資源池、各專案）")
+async def usage(
+    session: DbSession, _: AdminUser, range: str = Query("24h", pattern="^(1h|6h|24h|7d|30d)$")
+) -> UsageHistory:
+    """排程器每 USAGE_SAMPLE_INTERVAL_S 秒取樣一次；回傳依區間自動分桶的平均值，
+    以及各專案在此區間的時間加權平均配置（相對配額 / 資源池 / 系統總量的百分比）。"""
+    from app.core.config import get_settings
+
+    return await usage_svc.history(session, range, get_settings().usage_sample_interval_s)
+
+
 @router.get("/settings/resource-pool", response_model=ResourcePool)
 async def get_pool(session: DbSession, _: AdminUser) -> ResourcePool:
     return await settings_svc.get_resource_pool(session)
 
 
 @router.put("/settings/resource-pool", response_model=ResourcePool, summary="所有專案合計可用的總資源池")
-async def put_pool(body: ResourcePool, session: DbSession, admin: AdminUser) -> ResourcePool:
+async def put_pool(body: ResourcePool, session: DbSession, admin: PoolManager) -> ResourcePool:
+    """superadmin only."""
     physical = node_svc.detect_gpus()
     if physical:
         bad = [i for i in body.gpu_indices if i not in {g.index for g in physical}]
@@ -84,8 +122,8 @@ async def get_job_defaults(session: DbSession, _: AdminUser) -> JobDefaults:
     return await settings_svc.get_job_defaults(session)
 
 
-@router.put("/settings/job-defaults", response_model=JobDefaults)
-async def put_job_defaults(body: JobDefaults, session: DbSession, admin: AdminUser) -> JobDefaults:
+@router.put("/settings/job-defaults", response_model=JobDefaults, summary="Job 預設值（superadmin）")
+async def put_job_defaults(body: JobDefaults, session: DbSession, admin: PoolManager) -> JobDefaults:
     return await settings_svc.set_job_defaults(session, body, admin.id)
 
 
@@ -96,25 +134,33 @@ async def get_queue(session: DbSession, _: AdminUser) -> QueueRead:
 
 
 @router.put("/queue/order", response_model=list[JobRead], summary="整批重排等待中的任務")
-async def put_order(body: OrderBody, session: DbSession, admin: AdminUser) -> list[JobRead]:
+async def put_order(body: OrderBody, session: DbSession, admin: JobController) -> list[JobRead]:
     return await ser.jobs(session, await jobs_svc.set_order(session, admin, body.job_ids))
 
 
 @router.post("/queue/{job_id}/move", response_model=list[JobRead])
-async def move_job(job_id: int, body: MoveBody, session: DbSession, admin: AdminUser) -> list[JobRead]:
+async def move_job(job_id: int, body: MoveBody, session: DbSession, admin: JobController) -> list[JobRead]:
     return await ser.jobs(
         session, await jobs_svc.move(session, admin, await jobs_svc.get(session, job_id), body.position)
     )
 
 
 @router.post("/jobs/{job_id}/stop", response_model=JobRead, summary="強制中斷（必填理由）")
-async def stop_job(job_id: int, body: StopBody, session: DbSession, admin: AdminUser) -> JobRead:
+async def stop_job(job_id: int, body: StopBody, session: DbSession, admin: JobController) -> JobRead:
     job = await jobs_svc.get(session, job_id)
     return await ser.job(session, await jobs_svc.cancel(session, admin, job, body.reason, forced=True))
 
 
+@router.post("/jobs/{job_id}/restart", response_model=JobRead, status_code=202, summary="重新排入佇列（複製為新任務）")
+async def restart_job(job_id: int, session: DbSession, admin: JobController) -> JobRead:
+    """已結束（failed / cancelled / succeeded）的任務以相同輸入與設定重新建立一個新任務進入佇列。
+    一次性上傳的輸入在任務結束時已刪除，這類任務無法重啟。"""
+    job = await jobs_svc.get(session, job_id)
+    return await ser.job(session, await jobs_svc.restart(session, admin, job))
+
+
 @router.delete("/jobs/{job_id}", response_model=Ok, summary="刪除任務與其 log / 輸出")
-async def delete_job(job_id: int, session: DbSession, admin: AdminUser) -> Ok:
+async def delete_job(job_id: int, session: DbSession, admin: JobController) -> Ok:
     await jobs_svc.delete(session, admin, await jobs_svc.get(session, job_id))
     return Ok()
 
@@ -140,7 +186,7 @@ async def model_zoo_tasks(_: AdminUser) -> list[ZooTask]:
 
 @router.post("/model-zoo/{weight_id}/upload", response_model=ModelZooEntry, summary="從瀏覽器上傳權重檔")
 async def model_zoo_upload(
-    weight_id: str, session: DbSession, admin: AdminUser, file: UploadFile = File(...)
+    weight_id: str, session: DbSession, admin: ZooManager, file: UploadFile = File(...)
 ) -> ModelZooEntry:
     """單檔權重直接上傳；Hugging Face 類型請上傳整個 snapshot 資料夾的 zip / tar.gz。會比對目錄登記的 sha256。"""
     entry = await zoo_svc.upload(weight_id, file)
@@ -154,7 +200,7 @@ async def model_zoo_upload(
 @router.post(
     "/model-zoo/{weight_id}/import", response_model=ZooTask, status_code=202, summary="從內網 URL 或伺服器路徑匯入"
 )
-async def model_zoo_import(weight_id: str, body: ZooImportBody, session: DbSession, admin: AdminUser) -> ZooTask:
+async def model_zoo_import(weight_id: str, body: ZooImportBody, session: DbSession, admin: ZooManager) -> ZooTask:
     """背景執行；進度看 `GET /admin/model-zoo/tasks`。
     URL 主機要在 MODEL_ZOO_ALLOWED_HOSTS，路徑要在 MODEL_ZOO_IMPORT_ROOT。"""
     task = await zoo_svc.start_import(weight_id, source=body.source, url=body.url, path=body.path)
@@ -166,7 +212,7 @@ async def model_zoo_import(weight_id: str, body: ZooImportBody, session: DbSessi
 
 
 @router.delete("/model-zoo/{weight_id}", response_model=Ok, summary="從模型庫移除權重")
-async def model_zoo_delete(weight_id: str, session: DbSession, admin: AdminUser) -> Ok:
+async def model_zoo_delete(weight_id: str, session: DbSession, admin: ZooManager) -> Ok:
     zoo_svc.delete(weight_id)
     await audit_svc.record(session, admin.id, "model_zoo.delete", "model_zoo", None, {"weight": weight_id})
     await session.commit()

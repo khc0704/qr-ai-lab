@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from typing import Annotated
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from fastapi import APIRouter, Depends, Query
+
+from app.core.deps import CurrentUser, DbSession, require_perm
 from app.core.errors import forbidden
+from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.common import Page
 from app.schemas.issue import CommentCreate, CommentRead
@@ -20,6 +23,7 @@ from app.services import project_requests as requests_svc
 from app.services import settings as settings_svc
 
 router = APIRouter(prefix="/project-requests", tags=["project-requests"])
+Reviewer = Annotated[User, Depends(require_perm("requests.review"))]
 
 
 async def _one(session, r) -> ProjectRequestRead:
@@ -97,12 +101,12 @@ async def withdraw(request_id: int, session: DbSession, user: CurrentUser) -> Pr
 
 
 @router.post("/{request_id}/review", response_model=ProjectRequestRead, summary="開始審核（admin）")
-async def review(request_id: int, session: DbSession, admin: AdminUser) -> ProjectRequestRead:
+async def review(request_id: int, session: DbSession, admin: Reviewer) -> ProjectRequestRead:
     return await _one(session, await requests_svc.review(session, admin, await requests_svc.get(session, request_id)))
 
 
 @router.post("/{request_id}/approve", response_model=ProjectRead, status_code=201, summary="核准並建立專案（admin）")
-async def approve(request_id: int, body: ApproveBody, session: DbSession, admin: AdminUser) -> ProjectRead:
+async def approve(request_id: int, body: ApproveBody, session: DbSession, admin: Reviewer) -> ProjectRead:
     pool = await settings_svc.get_resource_pool(session)
     requests_svc.validate_quota_against_pool(body, len(pool.gpu_indices))
     project = await requests_svc.approve(session, admin, await requests_svc.get(session, request_id), body)
@@ -110,7 +114,7 @@ async def approve(request_id: int, body: ApproveBody, session: DbSession, admin:
 
 
 @router.post("/{request_id}/reject", response_model=ProjectRequestRead, summary="退回（admin）")
-async def reject(request_id: int, body: RejectBody, session: DbSession, admin: AdminUser) -> ProjectRequestRead:
+async def reject(request_id: int, body: RejectBody, session: DbSession, admin: Reviewer) -> ProjectRequestRead:
     return await _one(
         session, await requests_svc.reject(session, admin, await requests_svc.get(session, request_id), body)
     )

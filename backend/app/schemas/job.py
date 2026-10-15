@@ -30,6 +30,9 @@ class JobCreate(BaseModel):
     requested_gpu: int = Field(default=0, ge=0, le=64)
     requested_cpu: float = Field(default=1, ge=0.5)
     requested_memory_mb: int = Field(default=2048, ge=256)
+    # VRAM this job needs per GPU. Set → the scheduler may place it on a GPU another job is using as long as
+    # that much memory is free (and the trainer caps itself with set_per_process_memory_fraction). None → exclusive.
+    requested_gpu_memory_mb: int | None = Field(default=None, ge=256, le=1024 * 1024)
     timeout_minutes: int | None = Field(default=None, ge=1)
 
 
@@ -47,6 +50,7 @@ class JobRead(ORMModel):
     requested_gpu: int
     requested_cpu: float
     requested_memory_mb: int
+    requested_gpu_memory_mb: int | None = None
     timeout_minutes: int
     assigned_gpus: list[int] | None
     assigned_cpus: list[int] | None = None

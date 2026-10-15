@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import forbidden, not_found, unauthorized
+from app.core.permissions import PERMISSIONS
 from app.core.security import decode_access_token, decode_job_token, decode_keycloak_token
 from app.db.session import get_session
 from app.models import Job, Project, User
@@ -44,12 +45,30 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 async def require_admin(user: CurrentUser) -> User:
+    """admin or superadmin (read-only admin area, day-to-day operations)."""
     if not user.is_admin:
         raise forbidden("ADMIN_ONLY", "只有管理員可以執行")
     return user
 
 
 AdminUser = Annotated[User, Depends(require_admin)]
+
+
+def require_perm(perm: str):
+    """Dependency factory: the current user must hold ``perm`` (see ``app.core.permissions``)."""
+    if perm not in PERMISSIONS:
+        raise KeyError(perm)
+
+    async def dep(user: CurrentUser) -> User:
+        if not user.has_perm(perm):
+            raise forbidden("PERMISSION_DENIED", f"需要 {perm} 權限（{'、'.join(sorted(PERMISSIONS[perm]))}）")
+        return user
+
+    dep.__name__ = f"require_{perm.replace('.', '_')}"
+    return dep
+
+
+SuperAdminUser = Annotated[User, Depends(require_perm("users.manage"))]
 
 
 @dataclass

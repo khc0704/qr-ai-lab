@@ -16,6 +16,7 @@ os.environ.update(
         "DATA_ROOT": str(_TMP / "data"),
         "AUTH_SECRET": "test-secret-0123456789abcdef0123456789abcdef",
         "JOB_TOKEN_SECRET": "test-job-secret-0123456789abcdef0123456789abcdef",
+        "SEED_SUPERADMIN_PASSWORD": "superpw",
         "SEED_ADMIN_PASSWORD": "adminpw",
         "SEED_USER_PASSWORD": "userpw",
         "JOB_RUNNER": "subprocess",
@@ -48,7 +49,7 @@ async def db():
     shutil.rmtree(_TMP / "data", ignore_errors=True)  # job ids restart from 1: never reuse an old job dir
     reset_storage()
     async with get_sessionmaker()() as session:
-        await users_svc.seed_users(session, "adminpw", "userpw")
+        await users_svc.seed_users(session, "adminpw", "userpw", "superpw")
         await settings_svc.set_resource_pool(
             session,
             settings_svc.ResourcePool(
@@ -71,6 +72,11 @@ async def login(client: AsyncClient, username: str, password: str) -> dict[str, 
     r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+@pytest.fixture
+async def superadmin(client):
+    return await login(client, "superadmin", "superpw")
 
 
 @pytest.fixture

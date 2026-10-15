@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import forbidden, not_found
 from app.db.base import utcnow
-from app.models import Issue, Project, User
+from app.models import Comment, Issue, Project, User
 from app.schemas.issue import IssueCreate, IssueUpdate
-from app.services import comments
+from app.services import audit, comments
 
 
 async def _project_id(session: AsyncSession, slug: str | None) -> int | None:
@@ -131,3 +132,13 @@ async def reopen(session: AsyncSession, actor: User, issue: Issue) -> Issue:
     )
     await session.commit()
     return await get(session, issue.id)
+
+
+async def delete(session: AsyncSession, actor: User, issue: Issue) -> None:
+    """Moderators remove a thread together with its comments (polymorphic comments have no FK)."""
+    await session.execute(sql_delete(Comment).where(Comment.target_type == "issue", Comment.target_id == issue.id))
+    await audit.record(
+        session, actor.id, "issue.delete", "issue", issue.id, {"title": issue.title, "author_id": issue.author_id}
+    )
+    await session.delete(issue)
+    await session.commit()

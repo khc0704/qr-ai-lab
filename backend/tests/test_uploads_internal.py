@@ -61,7 +61,7 @@ async def test_upload_claimed_into_job_input(client, admin, user):
     assert r.status_code == 409
 
 
-async def test_internal_protocol(client, admin, user):
+async def test_internal_protocol(client, admin, user, superadmin):
     project, _up, job = await _upload_and_job(client, admin, user)
     token = {"Authorization": f"Bearer {create_job_token(job['id'], 'train', 3600)}"}
     wrong = {"Authorization": f"Bearer {create_job_token(job['id'] + 99, 'train', 3600)}"}
@@ -134,7 +134,7 @@ async def test_internal_protocol(client, admin, user):
 
     # storage quota: a 1024 MB quota cannot be exceeded with small files; the check path is exercised by the service
     (out / "big.bin").write_bytes(b"y" * 4096)
-    await client.patch(f"/api/v1/projects/{project['slug']}/quota", json={"storage_quota_mb": 1024}, headers=admin)
+    await client.patch(f"/api/v1/projects/{project['slug']}/quota", json={"storage_quota_mb": 1024}, headers=superadmin)
     r = await client.post(
         f"/api/v1/internal/jobs/{job['id']}/artifacts",
         json={"name": "big", "kind": "report", "path": "model/big.bin", "framework": "sklearn"},

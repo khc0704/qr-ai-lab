@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from typing import Annotated
 
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from fastapi import APIRouter, Depends, Query
+
+from app.core.deps import CurrentUser, DbSession, require_perm
+from app.models import User
 from app.routers import _serialize as ser
-from app.schemas.common import Page
+from app.schemas.common import Ok, Page
 from app.schemas.issue import CommentCreate, CommentRead, IssueClose, IssueCreate, IssueRead, IssueUpdate
 from app.services import comments as comments_svc
 from app.services import issues as issues_svc
 
 router = APIRouter(prefix="/issues", tags=["issues"])
+Moderator = Annotated[User, Depends(require_perm("issues.moderate"))]
 
 
 @router.get("", response_model=Page[IssueRead])
@@ -59,8 +63,14 @@ async def add_comment(issue_id: int, body: CommentCreate, session: DbSession, us
     return CommentRead.model_validate(c)
 
 
+@router.delete("/{issue_id}", response_model=Ok, summary="刪除討論串與留言（admin）")
+async def delete_issue(issue_id: int, session: DbSession, admin: Moderator) -> Ok:
+    await issues_svc.delete(session, admin, await issues_svc.get(session, issue_id))
+    return Ok()
+
+
 @router.post("/{issue_id}/close", response_model=IssueRead, summary="關閉（admin）")
-async def close_issue(issue_id: int, body: IssueClose, session: DbSession, admin: AdminUser) -> IssueRead:
+async def close_issue(issue_id: int, body: IssueClose, session: DbSession, admin: Moderator) -> IssueRead:
     issue = await issues_svc.get(session, issue_id)
     return (await ser.issues(session, [await issues_svc.close(session, admin, issue, body.resolution_note)]))[0]
 

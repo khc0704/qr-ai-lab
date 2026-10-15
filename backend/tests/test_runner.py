@@ -104,14 +104,14 @@ async def test_subprocess_runner_exit_code(tmp_path):
     assert "fake trainer done" in spec.log_path.read_text()
 
 
-async def test_memory_watchdog_stops_a_job_over_its_grant(client, admin, user, tmp_path, monkeypatch):
+async def test_memory_watchdog_stops_a_job_over_its_grant(client, admin, user, tmp_path, monkeypatch, superadmin):
     """subprocess runner cannot enforce memory, so the scheduler's watchdog must: 300 MB used vs 128 MB granted."""
     project = await make_project(client, admin, user)
     slug = project["slug"]
     await client.patch(
         f"/api/v1/projects/{slug}/quota",
         json={"gpu_limit": 0, "cpu_limit": 4, "memory_limit_mb": 8192, "max_concurrent_jobs": 1},
-        headers=admin,
+        headers=superadmin,
     )
     ds = await make_data_source(client, user, slug)
     body = {

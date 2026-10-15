@@ -70,13 +70,13 @@ async def _set_started_at(job_id: int, when) -> None:
         await s.commit()
 
 
-async def test_tick_launches_pumps_logs_and_finishes(client, admin, user):
+async def test_tick_launches_pumps_logs_and_finishes(client, admin, user, superadmin):
     project = await make_project(client, admin, user)
     slug = project["slug"]
     await client.patch(
         f"/api/v1/projects/{slug}/quota",
         json={"gpu_limit": 0, "cpu_limit": 8, "memory_limit_mb": 16384, "max_concurrent_jobs": 2},
-        headers=admin,
+        headers=superadmin,
     )
     ds = await make_data_source(client, user, slug)
     base = {
@@ -145,13 +145,13 @@ async def test_tick_launches_pumps_logs_and_finishes(client, admin, user):
     assert r2["status"] == "failed" and "exit code 1" in r2["error_message"]
 
 
-async def test_cancel_and_timeout_of_running_jobs(client, admin, user):
+async def test_cancel_and_timeout_of_running_jobs(client, admin, user, superadmin):
     project = await make_project(client, admin, user)
     slug = project["slug"]
     await client.patch(
         f"/api/v1/projects/{slug}/quota",
         json={"gpu_limit": 0, "cpu_limit": 8, "memory_limit_mb": 16384, "max_concurrent_jobs": 2},
-        headers=admin,
+        headers=superadmin,
     )
     ds = await make_data_source(client, user, slug)
     base = {

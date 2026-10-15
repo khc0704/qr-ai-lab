@@ -31,8 +31,15 @@ class Settings(BaseSettings):
     auth_mode: Literal["local", "keycloak"] = "local"
     auth_secret: str = "dev-secret-change-me"
     access_token_minutes: int = 12 * 60
-    keycloak_issuer: str | None = None
-    keycloak_audience: str | None = None
+    keycloak_issuer: str | None = None  # https://sso.example.com/realms/<realm>
+    keycloak_audience: str | None = None  # verify `aud` when set (Keycloak needs an audience mapper for that)
+    keycloak_client_id: str | None = None  # also look at resource_access[<client>].roles for the role map
+    # "<keycloak role>:<system role>" pairs. A login whose token carries a mapped role sets users.role to the most
+    # privileged match; a token without any mapped role leaves the role as managed in the UI.
+    keycloak_role_map: Annotated[list[str], NoDecode] = ["superadmin:superadmin", "admin:admin"]
+    # Bootstrap: these usernames (preferred_username / local username) are always superadmin after login.
+    superadmin_usernames: Annotated[list[str], NoDecode] = []
+    seed_superadmin_password: str = "superadmin1234"
     seed_admin_password: str = "admin1234"
     seed_user_password: str = "user1234"
 
@@ -48,21 +55,38 @@ class Settings(BaseSettings):
     trainer_python: Path | None = None  # default: <trainer_dir>/.venv/bin/python
     scheduler_embedded: bool = False  # run the scheduler loop inside the API process (single process, no Redis)
     memory_watchdog: bool = True  # kill a job that exceeds its memory grant when the runner cannot enforce it
-    gpu_busy_threshold: float = 0.10  # do not start a job on a GPU whose memory is already >10% used
+    gpu_busy_threshold: float = 0.10  # exclusive jobs: do not start on a GPU whose memory is already >10% used
+    gpu_reserve_mb: int = 512  # VRAM kept free per GPU when packing shared jobs (driver / context overhead)
+    gpu_reset_command: str | None = None  # e.g. "sudo -n nvidia-smi --gpu-reset -i {index}" (needs sudoers entry)
+    usage_sample_interval_s: int = 30
+    usage_retention_days: int = 90
     internal_backend_url: str = "http://localhost:8000"  # how a job reaches the backend
     scheduler_interval_s: float = 3.0
     upload_max_mb: int = 2048
     preview_timeout_s: float = 30.0  # preprocessing preview runs in a worker thread of the API process
+    tool_process_timeout_s: float = 600.0  # standalone preprocessing tool: whole-file run, same worker thread
     upload_ttl_minutes: int = 60
     log_max_mb: int = 50
     default_job_timeout_minutes: int = 240
 
-    @field_validator("cors_origins", "model_zoo_allowed_hosts", mode="before")
+    @field_validator(
+        "cors_origins", "model_zoo_allowed_hosts", "keycloak_role_map", "superadmin_usernames", mode="before"
+    )
     @classmethod
-    def _split_origins(cls, v: object) -> object:
+    def _split_list(cls, v: object) -> object:
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @property
+    def role_map(self) -> dict[str, str]:
+        """{keycloak role: system role} parsed from KEYCLOAK_ROLE_MAP."""
+        out: dict[str, str] = {}
+        for pair in self.keycloak_role_map:
+            k, _, v = pair.partition(":")
+            if k.strip() and v.strip():
+                out[k.strip()] = v.strip()
+        return out
 
     @property
     def zoo_root(self) -> Path:

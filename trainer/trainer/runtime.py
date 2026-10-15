@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from trainer import dataset
+from trainer import dataset, limits
 from trainer.api_client import Backend
 from trainer.config import Env
 from trainer.fetch import fetch_data_source
@@ -87,6 +87,7 @@ def run(backend: Backend | None = None) -> int:
         res = spec.get("resources") or {}
         ctx.cpu = max(1, int(float(res.get("cpu") or 1)))
         ctx.gpu = int(res.get("gpu") or 0)
+        limits.apply_from_env(ctx.cpu)  # clamp BLAS / OpenMP / torch pools to the grant, cap shared-GPU memory
         ctx.zoo = zoo.resolver(env.zoo_root, spec.get("zoo_weights") or {})
         info(
             f"job {spec['job_id']} kind={spec['kind']} project={spec['project_slug']} data_type={spec['data_type']} "

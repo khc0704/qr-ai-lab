@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 from app.schemas.job import JobRead
@@ -26,7 +26,69 @@ class NodeGpu(BaseModel):
     memory_total_mb: int
     memory_used_mb: int
     utilization: int
-    job_id: int | None = None
+    job_id: int | None = None  # first job on this GPU (compat)
+    job_ids: list[int] = []  # every job the scheduler placed on this GPU
+    reserved_mb: int | None = None  # Σ requested_gpu_memory_mb of those jobs; None = one of them holds it exclusively
+    processes: int | None = None  # compute processes seen by the driver (any user)
+
+
+class GpuResetBody(BaseModel):
+    """mode: jobs = force-stop our jobs on the GPU; all = also kill every other process using it;
+    device = all + run GPU_RESET_COMMAND (nvidia-smi --gpu-reset)."""
+
+    mode: Literal["jobs", "all", "device"] = "jobs"
+    reason: str = Field(min_length=2, max_length=255)
+
+
+class GpuResetResult(BaseModel):
+    index: int
+    mode: str
+    stopped_jobs: list[int]
+    killed_pids: list[int]
+    skipped_pids: list[int] = []
+    command: str | None = None
+    command_ok: bool | None = None
+    command_output: str | None = None
+    memory_used_mb_before: int | None = None
+    memory_used_mb_after: int | None = None
+
+
+class UsagePoint(BaseModel):
+    t: str  # ISO timestamp (bucket start)
+    cpu_pct: float | None = None
+    mem_used_mb: float | None = None
+    gpu_util: float | None = None  # average over the pool's GPUs
+    gpu_mem_used_mb: float | None = None  # Σ over the pool's GPUs
+    alloc_gpu: float | None = None
+    alloc_cpu: float | None = None
+    alloc_memory_mb: float | None = None
+    running_jobs: float | None = None
+    projects: dict[
+        str, dict[str, float]
+    ] = {}  # project_id → {gpu, cpu, memory_mb, running_jobs, cpu_actual, mem_actual_mb}
+
+
+class UsageProject(BaseModel):
+    id: int
+    slug: str
+    name: str
+    gpu_limit: int
+    cpu_limit: float
+    memory_limit_mb: int
+    status: str
+
+
+class UsageHistory(BaseModel):
+    range: str
+    bucket_s: int
+    sample_interval_s: int
+    points: list[UsagePoint]
+    totals: dict[
+        str, float
+    ]  # node: cpu_cores, memory_mb, gpu_count, gpu_memory_mb; pool: pool_gpu, pool_cpu, pool_memory_mb
+    projects: list[UsageProject]
+    # per-project share of the *window*: Σ(alloc × seconds) / (limit × window seconds), in percent
+    project_share: dict[str, dict[str, float]]
 
 
 class Allocated(BaseModel):

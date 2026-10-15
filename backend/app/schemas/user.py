@@ -19,8 +19,15 @@ class UserRead(ORMModel):
     last_login_at: datetime | None = None
 
 
+class MeRead(UserRead):
+    """`/me`: the user plus the resolved permission list (frontend hides UI from it; the backend still decides)."""
+
+    permissions: list[str] = []
+    auth_mode: str = "local"
+
+
 class UserUpdate(BaseModel):
-    role: Literal["admin", "user"] | None = None
+    role: Literal["superadmin", "admin", "user"] | None = None
     is_active: bool | None = None
     display_name: str | None = None
 

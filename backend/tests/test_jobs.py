@@ -122,12 +122,12 @@ async def test_viewer_cannot_create_jobs_and_members_api(client, admin, user, ot
     assert (await client.get(f"/api/v1/projects/{project['slug']}", headers=other)).status_code == 404
 
 
-async def test_data_source_credentials_hidden_and_quota(client, admin, user):
+async def test_data_source_credentials_hidden_and_quota(client, admin, user, superadmin):
     project = await make_project(client, admin, user)
     ds = await make_data_source(client, user, project["slug"])
     assert ds["has_credentials"] is True and "Authorization" not in str(ds)
     r = await client.patch(
-        f"/api/v1/projects/{project['slug']}/quota", json={"gpu_limit": 0, "cpu_limit": 1}, headers=admin
+        f"/api/v1/projects/{project['slug']}/quota", json={"gpu_limit": 0, "cpu_limit": 1}, headers=superadmin
     )
     assert r.json()["gpu_limit"] == 0
     assert (
@@ -136,7 +136,7 @@ async def test_data_source_credentials_hidden_and_quota(client, admin, user):
     r = await client.put(
         "/api/v1/admin/settings/resource-pool",
         json={"gpu_indices": [0], "cpu_cores": 4, "memory_mb": 8192, "max_running_jobs": 1, "allow_backfill": False},
-        headers=admin,
+        headers=superadmin,
     )
     assert r.status_code == 200 and r.json()["max_running_jobs"] == 1
-    assert (await client.get("/api/v1/admin/overview", headers=admin)).json()["pool_gpu_total"] == 1
+    assert (await client.get("/api/v1/admin/overview", headers=superadmin)).json()["pool_gpu_total"] == 1

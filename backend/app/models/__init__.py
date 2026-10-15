@@ -8,6 +8,7 @@ from app.models.issue import Issue
 from app.models.job import Job
 from app.models.project import Project, ProjectMember
 from app.models.project_request import ProjectRequest
+from app.models.resource_sample import ResourceSample
 from app.models.setting import SystemSetting
 from app.models.upload import Upload
 from app.models.user import User
@@ -22,6 +23,7 @@ __all__ = [
     "Project",
     "ProjectMember",
     "ProjectRequest",
+    "ResourceSample",
     "SystemSetting",
     "Upload",
     "User",

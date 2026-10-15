@@ -35,11 +35,14 @@ from app.scheduler.runner import (
     systemd_available,
 )
 from app.services import data_sources as ds_svc
+from app.services import gpu as gpu_svc
 from app.services import jobs as jobs_svc
 from app.services import node as node_svc
 from app.services import projects as projects_svc
 from app.services import settings as settings_svc
+from app.services import tools as tools_svc
 from app.services import uploads as uploads_svc
+from app.services import usage as usage_svc
 from app.storage.local import get_storage
 
 log = get_logger("scheduler")
@@ -85,6 +88,8 @@ class Scheduler:
         self.active: dict[int, ActiveJob] = {}
         self._ticks = 0
         self._gpu_wait_logged: dict[int, float] = {}
+        self._last_sample = 0.0
+        self.sampling = True  # usage history (tests switch it off)
 
     # --- lifecycle ---------------------------------------------------------------------------
 
@@ -109,8 +114,23 @@ class Scheduler:
         async with get_sessionmaker()() as session:
             await self.reconcile(session)
             await self.schedule(session)
+            await self.maybe_sample(session)
             if self._ticks % max(1, int(3600 / max(self.settings.scheduler_interval_s, 1))) == 1:
                 await self.cleanup(session)
+
+    async def maybe_sample(self, session: AsyncSession, *, force: bool = False) -> None:
+        """Usage history: one ResourceSample every USAGE_SAMPLE_INTERVAL_S (actual CPU / memory per job process)."""
+        if not self.sampling:
+            return
+        now = asyncio.get_running_loop().time()
+        if not force and now - self._last_sample < self.settings.usage_sample_interval_s:
+            return
+        self._last_sample = now
+        try:
+            pids = {job_id: self.runner.pids(a.handle) for job_id, a in self.active.items()}
+            await usage_svc.sample(session, pids)
+        except Exception as e:
+            log.warning("usage sample failed", error=repr(e))
 
     # --- job log: the trainer writes the file itself, the scheduler tails it ------------------
 
@@ -278,8 +298,9 @@ class Scheduler:
         alloc = await node_svc.allocated(session)
         if alloc.running_jobs >= pool.max_running_jobs:
             return
-        used_gpus = set((await node_svc.gpu_job_map(session)).keys())
-        free_gpus = [g for g in pool.gpu_indices if g not in used_gpus]
+        running_jobs = [j for jobs in (await node_svc.gpu_jobs_map(session)).values() for j in jobs]
+        readings = node_svc.detect_gpus() if pool.gpu_indices else []
+        gpu_slots = gpu_svc.slots_from(pool.gpu_indices, running_jobs, readings)
         used_cpus = await node_svc.cpu_core_map(session)
         free_cores = [c for c in pool_cores(pool.cpu_cores) if c not in used_cpus]
         free_cpu = pool.cpu_cores - alloc.cpu
@@ -305,19 +326,21 @@ class Scheduler:
                 and p.storage_used_bytes < p.storage_quota_mb * 1024 * 1024
                 and p.status == "active"
             )
+            gpus = gpu_svc.plan(
+                job,
+                gpu_slots,
+                share=pool.gpu_share,
+                busy_threshold=self.settings.gpu_busy_threshold,
+                reserve_mb=self.settings.gpu_reserve_mb,
+            )
             fits_pool = (
-                job.requested_gpu <= len(free_gpus)
+                (job.requested_gpu == 0 or len(gpus) == job.requested_gpu)
                 and float(job.requested_cpu) <= free_cpu
                 and job.requested_memory_mb <= free_mem
             )
             if not (fits_project and fits_pool) or p.id in launched_projects:
-                if not pool.allow_backfill:
-                    break
-                continue
-            gpus = free_gpus[: job.requested_gpu]
-            busy = node_svc.busy_gpus(gpus, self.settings.gpu_busy_threshold) if gpus else []
-            if busy:
-                await self._note_gpu_wait(job, busy)
+                if fits_project and job.requested_gpu > 0 and not gpus and p.id not in launched_projects:
+                    await self._note_gpu_wait(job, gpu_slots)
                 if not pool.allow_backfill:
                     break
                 continue
@@ -330,7 +353,7 @@ class Scheduler:
                 await self._system(job.id, jobs_svc.log_file(job), f"launch failed: {e!r}")
                 await jobs_svc.finish(session, job, "failed", error=f"launch failed: {e!r}"[:1000])
                 continue
-            free_gpus = free_gpus[job.requested_gpu :]
+            gpu_svc.place(job, gpus, gpu_slots)
             free_cores = [c for c in free_cores if c not in cpus]
             free_cpu -= float(job.requested_cpu)
             free_mem -= job.requested_memory_mb
@@ -341,16 +364,25 @@ class Scheduler:
             pu["memory_mb"] += job.requested_memory_mb
             launched_projects.add(p.id)
 
-    async def _note_gpu_wait(self, job: Job, busy: list[int]) -> None:
+    async def _note_gpu_wait(self, job: Job, slots: dict[int, gpu_svc.GpuSlot]) -> None:
         now = asyncio.get_running_loop().time()
         if now - self._gpu_wait_logged.get(job.id, -1e9) < 60:
             return
         self._gpu_wait_logged[job.id] = now
-        await self._system(
-            job.id,
-            jobs_svc.log_file(job),
-            f"GPU {busy} still has memory in use by another process, waiting before starting",
+        want = job.requested_gpu_memory_mb
+        state = ", ".join(
+            f"GPU {s.index}: "
+            + (
+                "exclusive job"
+                if s.exclusive
+                else f"{s.used_mb}/{s.total_mb} MB used, {s.reserved_mb} MB reserved by {len(s.jobs)} job(s)"
+                if s.total_mb
+                else f"{len(s.jobs)} job(s)"
+            )
+            for s in slots.values()
         )
+        need = f"{job.requested_gpu} GPU" + (f" with {want} MB free each" if want else " (exclusive)")
+        await self._system(job.id, jobs_svc.log_file(job), f"waiting for {need}; {state or 'no GPU in the pool'}")
 
     async def launch(self, session: AsyncSession, job: Job, gpus: list[int], cpus: list[int]) -> None:
         s = self.settings
@@ -406,16 +438,19 @@ class Scheduler:
             cpus=cpus,
             cpu=float(job.requested_cpu),
             memory_mb=job.requested_memory_mb,
+            gpu_memory_mb=job.requested_gpu_memory_mb,
             timeout_s=job.timeout_minutes * 60 + 60,
         )
         enf = self.runner.enforcement
         how_cpu = "cgroup" if enf.cpu else ("affinity" if (cpus and enf.cpuset) else "threads only")
         how_mem = "cgroup" if enf.memory else ("watchdog" if s.memory_watchdog else "not enforced")
         await jobs_svc.mark_scheduled(session, job, gpus, cpus)
+        shared = f" ({spec.gpu_memory_mb} MB VRAM each, shared)" if spec.gpu_memory_mb and gpus else ""
         await self._system(
             job.id,
             log_path,
-            f"scheduled: gpu={gpus or '[]'} cpu={spec.cpu:g} ({how_cpu}{', cores ' + str(cpus) if cpus else ''}) "
+            f"scheduled: gpu={gpus or '[]'}{shared} "
+            f"cpu={spec.cpu:g} ({how_cpu}{', cores ' + str(cpus) if cpus else ''}) "
             f"memory={spec.memory_mb}MB ({how_mem}) runner={self.runner.kind}",
         )
         handle = await self.runner.start(spec)
@@ -445,5 +480,13 @@ class Scheduler:
                 if job_id in terminal or stale:
                     storage.remove_tree(f"jobs/{d.name}")
                     removed += 1
-        if purged or removed:
-            log.info("cleanup", purged_uploads=purged, removed_input_dirs=removed)
+        purged_samples = await usage_svc.purge(session, self.settings.usage_retention_days)
+        purged_tools = tools_svc.purge_expired()
+        if purged or removed or purged_samples or purged_tools:
+            log.info(
+                "cleanup",
+                purged_uploads=purged,
+                removed_input_dirs=removed,
+                purged_samples=purged_samples,
+                purged_tool_uploads=purged_tools,
+            )
