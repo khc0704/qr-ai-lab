@@ -40,7 +40,13 @@
 
 ## 2. 認證與授權
 
-### 2.1 登入流程
+### 2.0 過渡期：本地帳號（Keycloak 尚未接上，目前的預設）
+- backend `AUTH_MODE=local`：`POST /api/v1/auth/login {username, password}` 驗 `users.password_hash`（argon2），回 HS256 access token（`AUTH_SECRET`，預設 12 小時）；`GET /api/v1/me` 取目前使用者。
+- 啟動（dev / test）自動建立兩個帳號：`admin / $SEED_ADMIN_PASSWORD`（預設 `admin1234`，系統角色 admin）與 `user / $SEED_USER_PASSWORD`（預設 `user1234`）。正式環境用 `uv run python -m app.cli seed` / `create-user` / `set-password`。
+- `users.auth_provider = local | keycloak`；切到 Keycloak 只要設 `AUTH_MODE=keycloak` + `KEYCLOAK_ISSUER` / `KEYCLOAK_AUDIENCE`，`get_current_user` 改驗 Keycloak JWT 並 upsert，業務表不變。
+- 前端目前仍是假資料；接 backend 時登入頁改打 `/auth/login` 並把 token 放在 httpOnly cookie（server-only 的 `src/lib/api` 帶 `Authorization`）。
+
+### 2.1 登入流程（Keycloak，目標狀態）
 1. 使用者在 frontend 點登入 → Auth.js 導向 Keycloak（Authorization Code + PKCE）。
 2. Keycloak 回呼 `/api/auth/callback/keycloak`；Auth.js 以 JWT session 保存 `access_token`、`refresh_token`、`expires_at`、`roles`（從 token 的 `realm_access.roles` 取）。
 3. `src/proxy.ts` 對 `(app)` 路由檢查 session，未登入導向 `/login`。
@@ -148,9 +154,17 @@ queued ──(scheduler 依 queue_rank 選中並分配資源)──► scheduled
 | log | stdout / stderr 即可；scheduler 以 `container.logs(stream=True)` 同時寫 log 檔與 Redis stream |
 | 產物 | 寫到 `/job/output/{model|preprocessor|report|metrics}/...`，再 `POST /internal/jobs/{id}/artifacts` `{name, kind, path, framework, metadata}`；backend `stat` 檔案取大小、登記 `artifacts`、檢查配額（超過 → 刪檔並回 `STORAGE_QUOTA_EXCEEDED`） |
 | 推論輸出 | 小結果 `POST /internal/jobs/{id}/result`（≤ 1 MB JSON）；大結果寫 `/job/output/output.*` 並回報路徑 |
-| 結束 | exit 0 = 成功（已先回報 succeeded）；非 0 = 失敗 |
+| 結束 | exit 0 = 成功（已先回報 succeeded）；非 0 = 失敗；143 = 收到 SIGTERM（取消 / 強制中斷 / 逾時） |
 
 per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/internal/*` 驗證 token 的 `sub` 等於路徑 id。
+
+補充（trainer 實作，`trainer/trainer/runtime.py`）：
+- spec 另帶 `families`（候選家族的 `defaults` / `search_space` / `inference_modes`）與 `zoo_weights`（權重 id → 模型庫檔名），trainer 不讀 yaml、不連網。
+- 模型庫：scheduler 以唯讀掛載 `MODEL_ZOO_ROOT` 到 `/job/zoo`，並設 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`；缺權重時 trainer 以清楚訊息失敗（見 `docs/MODEL_CATALOG.md` §9）。
+- `/job/input` 對 upload Job 是唯讀；data_source Job 可寫（trainer 下載到那裡）。zip 解壓與暫存寫到 `/job/output/_work`，trainer 結束時自刪，scheduler 在 Job 終態再保險刪一次。
+- 推論：`config.mode` 選推論模式（`predict | score | embed | retrieve | detect | segment | measure | extend`），輸出 `output/predictions.csv` + `.jsonl` + `summary.json`，並以 `kind=report` 登記；`result.preview` 存前 20 列。
+- 產物 `path` 可以是目錄（例如 `model/`）；`GET /artifacts/{id}/download` 會即時打包成 zip。
+- 執行環境：`JOB_RUNNER=docker`（伺服器）或 `subprocess`（開發機直接以 `trainer/.venv` 跑 `python -m trainer run`，無隔離）。
 
 ## 7. Log
 
@@ -166,14 +180,16 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 1. backend 依 `(data_type, task_type, input.spec.row_count / image_count)` 從 `model_catalog.yaml` 選候選 family（見 `docs/MODEL_CATALOG.md` §5），寫入 `config.search = {candidates, max_trials, time_budget_minutes, metric, direction}`。
 2. trainer 建一個 Optuna study：trial 先抽 family（categorical）再抽該 family 的搜尋空間；`MedianPruner`；超過時間或 trial 數即停。
 3. 每個 trial 結束回報 `{trial, family, params, metrics, duration_s}`；backend 累積到 `jobs.metrics.leaderboard`。
-4. 結束時以最佳 trial 的參數用完整訓練集重訓，匯出為 artifact（`metadata.automl = {best_trial, params}`），`jobs.model_family` 回填最佳家族，並建議設為預設模型。
-5. 單容器循序執行，資源配置與手動 Job 相同；候選含 GPU 家族時 Job 必須申請 GPU。
+4. 結束時最佳 trainer 執行 `finalize`（表格家族以全部資料重訓），匯出產物；`result.model_family` 回填 `jobs.model_family`，產物 `metadata.family` 記錄贏家；第一個模型自動成為專案預設模型。
+5. 單容器循序執行，資源配置與手動 Job 相同；沒申請 GPU 時需要 GPU 的候選會被剔除（全部被剔除 → `GPU_REQUIRED`）。時間預算 = min(`time_budget_minutes`, Job timeout × 0.85)。
 
 ## 9. 推論
 
 - v1：批次推論。`POST /projects/{slug}/jobs` 帶 `kind = inference`、`artifact_id`、`input`（inline JSON、一次性上傳、data_source）→ 同一條佇列、同一個 trainer image（`trainer infer`）。
 - 輸出：小結果寫 `jobs.result`，大結果寫 `output_path`（`DATA_ROOT/projects/{slug}/jobs/{id}/output/`），`GET /jobs/{id}/download` 串流下載。
 - 推論 Job 預設 GPU=0、CPU 1、Memory 2 GB；vision / text 家族可申請 GPU。
+- 推論模式 `config.mode`（模型 metadata 的 `inference_modes` 第一個為預設）：`predict`、`score`、`embed`、`retrieve`、`detect`、`segment`、`measure`、`extend`；情境說明見 `docs/USE_CASES.md` §1。
+- 產物目錄的模型（`/job/model/<file>`）由 scheduler 唯讀掛載該產物所在的 Job 輸出目錄。
 - v2 候選：常駐推論服務（模型暖載、同步 API）。先不做。
 
 ## 10. 儲存配置（`DATA_ROOT`）
@@ -185,8 +201,10 @@ DATA_ROOT/
 │     ├─ model/  preprocessor/  report/  metrics/   訓練產物（artifacts.path 相對於 DATA_ROOT）
 │     ├─ output/                                     推論輸出
 │     └─ logs/job.log                                 §7
+│     ├─ _work/                                       trainer 暫存（zip 解壓等），Job 結束即刪
 ├─ jobs/{job_id}/input/                              Job 執行期間的輸入（上傳或下載副本），結束即刪
-└─ uploads/{upload_id}/                              未綁定 Job 的一次性上傳，TTL 後清除
+├─ uploads/{upload_id}/                              未綁定 Job 的一次性上傳，TTL 後清除
+└─ model_zoo/                                        預訓練權重（MODEL_ZOO_ROOT；管理員放入，唯讀掛進 Job 容器）
 ```
 
 - 配額：`projects.storage_used_bytes` = `projects/{slug}/` 的實際大小，於 Job 終態、產物登記、產物刪除時重算（`os.scandir` 遞迴，backend `storage/local.py`）。超過 `storage_quota_mb` 時新 Job 不會被排程（UI 顯示原因）。
@@ -246,8 +264,10 @@ GET    /healthz  GET /readyz
 - 環境變數（`infra/.env.example`）：
   - 共用：`APP_ENV`、`PUBLIC_URL`
   - frontend：`AUTH_SECRET`、`AUTH_KEYCLOAK_ID`、`AUTH_KEYCLOAK_SECRET`、`AUTH_KEYCLOAK_ISSUER`、`BACKEND_URL`
-  - backend / scheduler：`DATABASE_URL`（`mariadb+asyncmy://…`）、`REDIS_URL`、`DATA_ROOT`（容器內 `/data`）、`DATA_ROOT_HOST`（主機路徑，scheduler 用於 bind mount）、`KEYCLOAK_ISSUER`、`KEYCLOAK_AUDIENCE`、`DATASET_SECRET_KEY`（Fernet）、`JOB_TOKEN_SECRET`、`TRAINER_IMAGE`、`UPLOAD_MAX_MB`、`UPLOAD_TTL_MINUTES`
-- 更新流程：`git pull` → `docker compose build frontend backend scheduler` → `docker compose run --rm backend uv run alembic upgrade head` → `docker compose up -d`。
+  - backend / scheduler：`DATABASE_URL`（`mariadb+asyncmy://…`）、`REDIS_URL`、`DATA_ROOT`（容器內 `/data`）、`DATA_ROOT_HOST`（主機路徑，scheduler 用於 bind mount）、`MODEL_ZOO_ROOT`、`AUTH_MODE`（`local` 過渡 / `keycloak`）、`AUTH_SECRET`、`SEED_ADMIN_PASSWORD`、`SEED_USER_PASSWORD`、`KEYCLOAK_ISSUER`、`KEYCLOAK_AUDIENCE`、`DATASET_SECRET_KEY`（Fernet）、`JOB_TOKEN_SECRET`、`JOB_RUNNER`、`TRAINER_IMAGE`、`JOB_NETWORK`、`INTERNAL_BACKEND_URL`、`SCHEDULER_INTERVAL_S`、`UPLOAD_MAX_MB`、`UPLOAD_TTL_MINUTES`、`LOG_MAX_MB`、`DEFAULT_JOB_TIMEOUT_MINUTES`
+- compose：`backend` 與 `scheduler` 在 profile `app`（`docker compose --profile app up -d`），image 由 `infra/backend/Dockerfile` 建置；frontend / nginx 待前端接上 backend 後加入。
+- 更新流程：`git pull` → `docker compose --profile app build backend scheduler` → `docker compose --profile app run --rm backend alembic upgrade head` → `docker compose --profile app up -d`。
+- 模型庫：在有網路的機器 `python3 scripts/fetch_model_zoo.py --dest model_zoo`，複製到 `${DATA_ROOT_HOST}/model_zoo`。
 - 磁碟：`DATA_ROOT` 放在大容量磁碟；admin Dashboard 顯示剩餘空間；低於 10% 時新 Job 不排程並告警。
 
 ## 14. 安全性注意事項

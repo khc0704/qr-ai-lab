@@ -1,152 +1,162 @@
 # 模型目錄與選型 SOP
 
 三個用途：
-1. 使用者 SOP 的底稿：API `GET /catalog` 把 §2、§3、§8 以結構化方式提供給前端的新建訓練精靈與 SOP 面板。
+1. 使用者 SOP 的底稿：API `GET /api/v1/catalog` 把 §1–§5、§8 以結構化方式提供給前端的新建訓練精靈與 SOP 面板。
 2. AutoML 候選來源：§5 的矩陣決定 `mode=auto` 時試哪些模型。
-3. 程式對照：`backend/app/catalog/model_catalog.yaml` 與 `trainer/trainer/models/registry.py` 的 family id 必須與本文件一致（CI 比對）。
+3. 程式對照：`backend/app/catalog/model_catalog.yaml`（唯一真相）與 `trainer/trainer/models/registry.py` 的 family id 必須一致（`backend/tests/test_catalog.py`、`trainer/tests/test_registry.py` 比對）。
+
+半導體 / 電子製造的情境對照（哪種機台資料用哪個模型、推論時要做什麼）在 `docs/USE_CASES.md`。
 
 ## 1. 資料類型
 
 | data_type | 白話 | 典型例子 |
 |---|---|---|
-| `TABULAR` | 表格：每列一筆、每欄一個特徵 | 製程參數 → 良率、客戶資料 → 流失 |
-| `IMAGE` | 圖片 | 外觀瑕疵、物件計數、區域分割 |
-| `SEQUENCE` | 隨時間變化的曲線 / 訊號 | 感測器時序、設備振動、圖表資料 |
-| `TEXT` | 文字 | 客訴分類、情緒、工單歸類 |
-| `SPECTRUM` | 光譜 / 頻譜（一筆樣本 = 一條曲線） | 拉曼、紅外、聲學頻譜 |
+| `TABULAR` | 表格：每列一筆、每欄一個特徵 | WAT / PCM 參數 → 良率、FDC 摘要 → 量測值 |
+| `IMAGE` | 圖片 | TEM / SEM 表面、AOI 外觀、wafer map |
+| `SEQUENCE` | 隨時間變化的曲線 / 訊號 | FDC trace、設備振動 |
+| `TEXT` | 文字 | 設備 log、工單、客訴 |
+| `SPECTRUM` | 光譜 / 頻譜（一筆樣本 = 一條曲線） | OCD、橢圓偏光、FTIR、Raman |
 
 ## 2. 資料格式要求（上傳前檢查）
 
-| data_type | 接受格式 | `spec` 必填 | 備註 |
+| data_type | 接受格式 | `spec` | 備註 |
 |---|---|---|---|
-| TABULAR | `csv`、`parquet` | `target`（目標欄）、可選 `features`、`categorical` | 表頭必填；缺值允許（自動補值）；≥ 100 列 |
-| IMAGE classification | `image_folder`（zip：`train/<class>/*.jpg`，可選 `val/`）或 `csv`（`path,label`） | `classes`（自動偵測） | jpg / png；建議每類 ≥ 50 張 |
-| IMAGE detection | `yolo`（`images/`、`labels/`、`data.yaml`）或 `coco`（`annotations.json`） | `classes` | 標註框 |
-| IMAGE segmentation | `yolo`（多邊形標註）或 `coco`（segmentation） | `classes` | |
-| SEQUENCE | `csv`（長表：`series_id,t,feature…[,label]`）或 `npy`（`N × T × C`） | `window`、`stride`、可選 `label` | 等間隔取樣；缺值先補 |
-| TEXT | `csv` / `jsonl`（`text,label`） | `text_column`、`label_column`、`language` | 建議每類 ≥ 100 筆 |
-| SPECTRUM | `spectrum_csv`（寬表：每列一筆樣本，欄 = 波數）或 `npy` | 可選 `label`、`patch_size` | 無標籤可做異常偵測 |
+| TABULAR | `csv`、`parquet` | `target`（目標欄，訓練必填）、可選 `features`、`categorical`、`drop_columns`、`id_column` | 表頭必填；缺值自動補（數值中位數、類別眾數）；類別欄自動 one-hot |
+| IMAGE classification | zip：`<class>/*.jpg`（可再分 `train/` `val/`）| 自動偵測 `classes`、`image_count` | jpg / png / bmp / tif；few-shot 每類 ≥ 3 張，YOLO 分類每類 ≥ 50 張 |
+| IMAGE detection / segmentation | zip：YOLO 格式（`images/`、`labels/`、`data.yaml`） | | 分割用多邊形標註 |
+| IMAGE anomaly_detection | zip：`good/`（或 `normal/`、`ok/`）為正常；其他資料夾視為異常（只用於評估） | | 沒有子資料夾時整包視為正常 |
+| SEQUENCE | `csv` 長表 `series_id,t,feature…[,label]` 或 `npy`（`N × T × C`） | `window`、`stride`、`series_id`、`time`、可選 `label` | 等間隔取樣 |
+| TEXT | `csv` / `jsonl`（`text,label`） | `text_column`、`label_column` | 建議每類 ≥ 100 筆 |
+| SPECTRUM | `spectrum_csv` 寬表（每列一筆樣本，欄 = 波長）或 `npy`（`N × T`） | 可選 `label`（異常標籤或迴歸目標） | 長度不同的光譜在推論時自動重取樣到訓練長度 |
+| 推論直接輸入 | `inline` JSON rows（表格 / 文字：欄位 = 特徵；序列 / 光譜：`{"id": …, "values": [...]}`） | | 小量即時推論用 |
+
+zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（不留存政策）。
 
 ## 3. 任務類型
 
-| task_type | 白話 | 需要標籤 | 主要指標 |
+| task_type | 白話 | 需要標籤 | 主要指標（第一個為 AutoML 目標） |
 |---|---|---|---|
-| `classification` | 預測類別（良 / 不良、A / B / C） | 是 | `f1_macro`、`accuracy`、`auroc`（二元） |
-| `regression` | 預測數值 | 是 | `rmse`、`mae`、`r2` |
+| `classification` | 預測類別（良 / 不良、bin code） | 是 | `f1_macro`、`accuracy`、`auroc`（二元） |
+| `regression` | 預測數值（CD、膜厚、良率） | 是 | `rmse`、`mae`、`r2` |
 | `detection` | 找出圖中物件位置與類別 | 是（框） | `map50_95`、`map50` |
-| `segmentation` | 標出像素區域 | 是（多邊形 / 遮罩） | `miou`、`mask_map50` |
-| `anomaly_detection` | 找出「不正常」的樣本 | 否（只需正常樣本）；有標籤可評估 | `auroc`、`f1@threshold` |
+| `segmentation` | 標出像素區域 | 是（多邊形） | `mask_map50_95`、`mask_map50` |
+| `anomaly_detection` | 找出「不正常」的樣本 | 否（只需正常樣本）；有標籤可算 `auroc` | `auroc`、`f1`（門檻 = 正常樣本分數的 P99） |
 
-## 4. 模型家族
+## 4. 模型家族與推論模式
 
-每個家族在 trainer 實作 `BaseTrainer` 與 `BaseInferencer`；id 為 `<group>.<name>`。
+每個家族在 trainer 實作 `BaseTrainer`（`fit / evaluate / finalize / export`）與 `BaseInferencer`（`load / predict`）。
+推論模式：`predict`（類別 / 數值）、`score`（異常分數 + 門檻判定）、`embed`（向量）、`retrieve`（對參考庫找最相似 / 最不相似）、
+`detect` / `segment`（框 / 遮罩）、`measure`（遮罩幾何量）、`extend`（免重訓新增類別）。
 
-| id | 支援 data_type × task | 白話說明 | 資料量 | 資源 | 產物 |
-|---|---|---|---|---|---|
-| `tabular.linear` | TABULAR × classification / regression | 線性 / 邏輯迴歸。最簡單、可解釋、訓練秒級；當基準線 | 任意 | CPU | sklearn pipeline（含前處理）`.joblib` |
-| `tabular.svm` | TABULAR × classification / regression | 支援向量機。小資料、特徵數多時表現好；> 50k 列會很慢 | ≤ 50k | CPU | `.joblib` |
-| `tabular.random_forest` | TABULAR × classification / regression | 隨機森林。穩健、不太需要調參、給特徵重要度 | 任意 | CPU | `.joblib` |
-| `tabular.xgboost` | TABULAR × classification / regression | 梯度提升樹。表格資料的預設首選，多數情況最準 | ≥ 1k | CPU（> 500k 列可用 GPU） | `.json` + 前處理 `.joblib` |
-| `vision.yolo` | IMAGE × detection / segmentation / classification | Ultralytics YOLO（預設 `yolo11n/s/m`）。即時物件偵測 / 分割的標準做法 | ≥ 200 張 | GPU | `.pt`（+ `.onnx` 匯出） |
-| `vision.dino` | IMAGE × classification / anomaly_detection | DINOv2 預訓練特徵 + 線性 / kNN 頭。少量標籤也能分得好；正常樣本的特徵距離可做異常偵測 | ≥ 20 張 / 類 | GPU | backbone 引用 + 頭 `.pt` + 特徵統計 |
-| `sequence.patch_autoencoder` | SEQUENCE / SPECTRUM × anomaly_detection / regression（重建）| 把曲線切成 patch 後做自編碼器；重建誤差大 = 異常。也可輸出 embedding 給下游 | ≥ 500 條 | GPU（小資料 CPU 可） | `.pt` + 正規化統計 + 門檻 |
-| `text.bert_classifier` | TEXT × classification | 預訓練 BERT（中文預設 `bert-base-chinese`，多語 `xlm-roberta-base`）接分類頭。語意理解 | ≥ 500 筆 | GPU | HF 格式目錄（`safetensors` + tokenizer） |
-
-預留（v2）：`tabular.lightgbm`、`vision.timm_classifier`、`sequence.tcn`、`text.embedding_classifier`。
+| id | 支援 | 推論模式 | 白話 | 資源 | 預訓練權重 | 產物 |
+|---|---|---|---|---|---|---|
+| `tabular.linear` | TABULAR × cls / reg；TEXT × cls（TF-IDF） | predict | 線性 / 邏輯迴歸，可解釋基準線 | CPU | 無 | `model/model.joblib` + `report/feature_importance.json` |
+| `tabular.svm` | TABULAR × cls / reg | predict | SVM，小資料、特徵多時好；≤ 50k 列 | CPU | 無 | `.joblib` |
+| `tabular.random_forest` | TABULAR × cls / reg | predict | 穩健、免調參、特徵重要度 | CPU | 無 | `.joblib` + 重要度 |
+| `tabular.xgboost` | TABULAR × cls / reg | predict | 表格預設首選 | CPU（可 GPU） | 無 | `.joblib` + 重要度 |
+| `tabular.isolation_forest` | TABULAR × anomaly | score | 多參數離群 | CPU | 無 | `.joblib`（含門檻） |
+| `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLO11，微調或從頭 | GPU | `yolo11n/s/m[-seg|-cls].pt` | `model/best.pt` + `report/training_curve.csv` |
+| `vision.dino_fewshot` | IMAGE × classification | predict / embed / retrieve / extend | 凍結 DINOv2 + 原型庫；新類別免重訓 | GPU | `dinov2-small/`、`dinov2-base/` | `model/prototypes.npz` |
+| `vision.dino_patchcore` | IMAGE × anomaly | score（熱圖）/ embed | 正常影像 patch 記憶庫 | GPU | `dinov2-small/` | `model/memory_bank.npz` |
+| `sequence.patch_autoencoder` | SEQUENCE / SPECTRUM × anomaly | score / embed / retrieve | patch 嵌入 + 位置編碼 + 視窗 latent | CPU / GPU | 無 | `model/model.pt` + `reference.npz` |
+| `spectrum.masked_autoencoder` | SPECTRUM × anomaly / regression | score / embed / retrieve / predict | 遮蔽重建的光譜鑑別器；可接迴歸頭 | CPU / GPU | 無 | `model/model.pt` + `reference.npz` + `head.joblib` |
+| `text.bert_classifier` | TEXT × classification | predict / embed | 預訓練 BERT 微調 | GPU | `bert-base-chinese/`、`xlm-roberta-base/` | `model/bert/`（HF 格式） |
 
 ### 4.1 預設超參數與搜尋空間（Optuna）
 
 | id | 預設 | 搜尋空間 |
 |---|---|---|
-| `tabular.linear` | `C=1.0`（cls）、`alpha=1.0`（reg，Ridge） | `C / alpha: log 1e-3 … 1e2`；`penalty: l2 / l1`（saga） |
-| `tabular.svm` | `kernel=rbf, C=1, gamma=scale` | `C: log 1e-2 … 1e2`；`gamma: log 1e-4 … 1`；`kernel: rbf / linear` |
-| `tabular.random_forest` | `n_estimators=300, max_depth=None` | `n_estimators: 100 … 800`；`max_depth: 4 … 32 / None`；`min_samples_leaf: 1 … 10`；`max_features: sqrt / 0.3 … 1.0` |
-| `tabular.xgboost` | `n_estimators=500, lr=0.05, max_depth=6, subsample=0.8, colsample=0.8`，early stopping 50 | `lr: log 0.01 … 0.3`；`max_depth: 3 … 10`；`min_child_weight: 1 … 10`；`subsample / colsample: 0.5 … 1`；`reg_lambda: log 1e-3 … 10`；`n_estimators` 由 early stopping 決定 |
-| `vision.yolo` | `model=yolo11s, imgsz=640, epochs=100, batch=auto, lr0=0.01` | `model: n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150`（pruner 看每 epoch `fitness`） |
-| `vision.dino` | `backbone=dinov2_vits14, head=linear, lr=1e-3, epochs=20, freeze_backbone=true` | `backbone: vits14 / vitb14`；`head: linear / knn(k=5…50)`；`lr: log 1e-4 … 1e-2`；anomaly：`k: 1 … 10`、`score: mean / max` |
-| `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2`；`dropout: 0 … 0.3` |
-| `text.bert_classifier` | `model=bert-base-chinese, max_len=256, lr=2e-5, epochs=3, batch=16` | `lr: log 1e-5 … 5e-5`；`epochs: 2 … 5`；`max_len: 128 / 256 / 512`；`warmup_ratio: 0 … 0.1`；`weight_decay: 0 … 0.1` |
+| `tabular.linear` | `C=1.0`（cls，LogisticRegression）、`alpha=1.0`（reg，Ridge） | `C: log 1e-3 … 1e2` |
+| `tabular.svm` | `C=1, kernel=rbf, gamma=scale` | `C: log 1e-2 … 1e2`；`gamma: log 1e-4 … 1`；`kernel: rbf / linear` |
+| `tabular.random_forest` | `n_estimators=300, max_depth=None, min_samples_leaf=1` | `n_estimators: 100 … 800`；`max_depth: 4 … 32`；`min_samples_leaf: 1 … 10` |
+| `tabular.xgboost` | `n_estimators=500, learning_rate=0.05, max_depth=6, subsample=0.8, colsample_bytree=0.8` | `learning_rate: log 0.01 … 0.3`；`max_depth: 3 … 10`；`min_child_weight: 1 … 10`；`subsample / colsample_bytree: 0.5 … 1`；`reg_lambda: log 1e-3 … 10` |
+| `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
+| `vision.yolo` | `model=yolo11s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolo11n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
+| `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base`；`k: 1 … 20` |
+| `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
+| `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2` |
+| `spectrum.masked_autoencoder` | `patch_size=16, mask_ratio=0.5, dim=64, depth=4, heads=4, lr=5e-4, epochs=100` | `patch_size: 8 / 16 / 32`；`mask_ratio: 0.3 … 0.75`；`dim: 32 / 64 / 128`；`depth: 2 … 6`；`lr: log 1e-4 … 5e-3` |
+| `text.bert_classifier` | `model=bert-base-chinese, max_len=256, lr=2e-5, epochs=3, batch=16` | `lr: log 1e-5 … 5e-5`；`epochs: 2 … 5`；`max_len: 128 / 256 / 512` |
 
-共通：`split` 預設 train 80 / val 20（有 `val/` 或 `split` 欄時用使用者的）；分類用 stratified；時序類不洗牌。
+共通：驗證集 = 20% 分層切分（分類）或隨機；異常偵測只用正常樣本訓練、異常樣本進驗證集；手動 Job 的 `config` 會覆蓋預設；
+AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial 抽到的參數（例如固定 `epochs`）。
 
 ## 5. AutoML 候選矩陣（`mode = auto`）
 
-| data_type | task_type | 候選（依序）| 條件 |
-|---|---|---|---|
-| TABULAR | classification / regression | `tabular.xgboost`、`tabular.random_forest`、`tabular.linear`、`tabular.svm` | `svm` 只在 `row_count ≤ 50k` 加入；`row_count < 1k` 時 `xgboost` 降為第二順位 |
-| IMAGE | classification | `vision.dino`、`vision.yolo` | `image_count < 100 / class` 只用 `dino` |
-| IMAGE | detection / segmentation | `vision.yolo`（n / s / m 當作搜尋維度） | |
-| IMAGE | anomaly_detection | `vision.dino` | |
-| SEQUENCE / SPECTRUM | anomaly_detection | `sequence.patch_autoencoder` | |
-| SEQUENCE / SPECTRUM | regression | `sequence.patch_autoencoder`（embedding）+ `tabular.xgboost` 頭 | v2 |
-| TEXT | classification | `text.bert_classifier`、`tabular.linear`（TF-IDF 基準線） | `row_count < 300` 只用 TF-IDF 基準線 |
+| data_type | task_type | 候選（依序） | 條件 | 預算 |
+|---|---|---|---|---|
+| TABULAR | classification / regression | `tabular.xgboost`、`tabular.random_forest`、`tabular.linear`、`tabular.svm` | `row_count > 50000` 剔除 svm；`row_count < 1000` 優先 random_forest | 20 trials / 60 min |
+| TABULAR | anomaly_detection | `tabular.isolation_forest` | | 10 / 20 |
+| IMAGE | classification | `vision.dino_fewshot`、`vision.yolo` | `row_count < 100` 剔除 yolo | 8 / 120 |
+| IMAGE | detection / segmentation | `vision.yolo` | | 8 / 120 |
+| IMAGE | anomaly_detection | `vision.dino_patchcore` | | 6 / 60 |
+| SEQUENCE | anomaly_detection | `sequence.patch_autoencoder` | | 10 / 60 |
+| SPECTRUM | anomaly_detection | `spectrum.masked_autoencoder`、`sequence.patch_autoencoder` | | 10 / 60 |
+| SPECTRUM | regression | `spectrum.masked_autoencoder` | | 10 / 60 |
+| TEXT | classification | `text.bert_classifier`、`tabular.linear`（TF-IDF） | `row_count < 300` 剔除 bert | 8 / 120 |
 
-預算預設：`max_trials = 20`、`time_budget_minutes = 60`（深度學習家族 `max_trials = 8`、`120` 分鐘）；metric 依 §3 第一個指標；`direction` 由 catalog 標示。
+Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 400 `GPU_REQUIRED`）。
 
-## 6. AutoML 流程
+## 6. AutoML 流程（trainer 實作）
 
-1. backend 依矩陣與 Job 輸入的 `spec`（`jobs.input.spec`，含 `row_count` / `image_count`）展開候選，寫入 `jobs.config.search`。
-2. trainer：Optuna `TPESampler(seed)` + `MedianPruner(n_startup_trials=3)`；每個 trial 先抽 family，再抽該家族的空間。
-3. 每個 trial 回報 leaderboard row：`{trial, family, params, metrics, duration_s, status}`。
-4. 時間 / 次數到 → 取最佳 trial，以完整訓練集重訓並匯出產物；`metadata.automl = {best_trial, params, leaderboard_ref}`。
-5. 前端在 job 詳情顯示 leaderboard（表 + 指標柱狀圖，顏色 `chart-1`），並提供「用此設定建立手動 job」捷徑。
+1. backend 展開候選寫入 `jobs.config.search = {candidates, metric, direction, max_trials, time_budget_minutes}`；spec 同時帶每個候選的 `defaults` / `search_space`。
+2. trainer：Optuna `TPESampler(seed=42)` + `MedianPruner(n_startup_trials=3)`，ask / tell 介面；每個 trial 先抽 `family`，再抽 `family.參數`。
+3. 深度學習家族每個 epoch 回報指標給 pruner（`ctx.epoch`），被剪掉的 trial 記為 pruned。
+4. 每個完成的 trial 回報 leaderboard row `{trial, family, params, metric, metrics, seconds}` → `jobs.metrics.leaderboard`（依指標排序）。
+5. 時間預算（取 `time_budget_minutes` 與 Job timeout 85% 的較小者）或 trial 數到 → 最佳 trainer `finalize`（表格家族以全部資料重訓）→ 匯出產物；`jobs.model_family` 回填最佳家族，`metrics/metrics.json` 含 leaderboard。
 
 ## 7. 選最佳與門檻
 
-- 分類：先看 `f1_macro`（不平衡資料更可靠），再看 `accuracy`；二元同時給 `auroc` 與預設門檻 0.5（anomaly 由驗證集的 F1 最大化決定門檻並存在產物）。
+- 分類：`f1_macro`（不平衡資料更可靠）；二元另給 `auroc`。
 - 迴歸：`rmse` 最小；報告 `mae`、`r2`。
-- 偵測 / 分割：`map50_95` 最大。
-- 所有報告都附：混淆矩陣（分類）、殘差圖（迴歸）、PR 曲線（偵測）、重建誤差分布（異常）。
+- 偵測 / 分割：`map50_95` / `mask_map50_95`。
+- 異常：`auroc`（有標籤時）；門檻 = 正常訓練樣本分數的 P99，存在模型 metadata，推論可用 `config.threshold` 覆寫。
 
 ## 8. SOP 決策樹（給不懂程式的使用者；前端 SOP 面板內容）
 
-1. **你的資料長什麼樣？**
-   - Excel / CSV 表格 → `TABULAR`
-   - 圖片 → `IMAGE`
-   - 隨時間變化的曲線、感測器紀錄 → `SEQUENCE`
-   - 光譜、頻譜（一筆樣本一條曲線）→ `SPECTRUM`
-   - 文字、句子、工單內容 → `TEXT`
-2. **你想得到什麼答案？**
-   - 分類別（良 / 不良、A / B / C）→ `classification`
-   - 一個數值（厚度、壽命、良率）→ `regression`
-   - 圖裡「東西在哪」→ `detection`
-   - 圖裡「哪些像素是什麼」→ `segmentation`
-   - 「有沒有怪怪的」且多半只有正常樣本 → `anomaly_detection`
-3. **你的資料有多少？有沒有標籤？**
-   - 沒有標籤 → 只能做 `anomaly_detection`（或先去標註）。
-   - 很少（表格 < 1k 列、每類圖片 < 100 張、文字 < 300 筆）→ 選「自動模式」，系統會偏向小資料友善的模型（線性、隨機森林、DINO、TF-IDF）。
-   - 足夠 → 選「自動模式」跑一輪，拿 leaderboard 第一名再做手動微調。
-4. **第一次就選「自動模式（AutoML）」**：預設預算 60 分鐘；結果頁會告訴你哪個模型最好、指標多少、下一步建議。
-5. **看指標怎麼讀**：分類看 `f1_macro`（越接近 1 越好，> 0.8 通常可用）；迴歸看 `rmse`（越小越好，要跟目標數值的範圍比）；偵測看 `map50`（> 0.5 可試用）；異常看 `auroc`（> 0.9 才算可靠）。
-6. **結果不好怎麼辦**：先檢查資料（標籤是否錯、類別是否極端不平衡、圖片是否太小）、增加資料量、再試手動模式調整搜尋空間或 epochs。
-7. **要用模型**：到「模型」頁把最好的設為預設 → 「推論」頁上傳新資料 → 下載結果。
+1. **你的資料長什麼樣？** 表格 → `TABULAR`；圖片 → `IMAGE`；感測器曲線 → `SEQUENCE`；光譜 → `SPECTRUM`；文字 → `TEXT`。
+2. **你想得到什麼答案？** 類別 → `classification`；數值 → `regression`；圖裡東西在哪 → `detection`；哪些像素 → `segmentation`；有沒有怪怪的（多半只有正常樣本）→ `anomaly_detection`。
+3. **推論時要做什麼？** 看 §4 的推論模式；例如光譜要「找最像的黃金樣本」就是 `retrieve`，影像類別會一直增加就選 `vision.dino_fewshot`（之後用 `extend` 加類別）。
+4. **資料有多少？有沒有標籤？** 沒標籤 → 只能做異常偵測；很少 → 自動模式會偏向小資料友善的模型（線性、隨機森林、DINO few-shot、TF-IDF）。
+5. **第一次就選自動模式**：看 leaderboard 第一名的家族與指標，再用「手動模式」微調。
+6. **看指標怎麼讀**：`f1_macro > 0.8` 通常可用；`rmse` 要跟目標範圍比；`map50 > 0.5` 可試用；`auroc > 0.9` 才算可靠。
+7. **結果不好**：先檢查資料（標籤錯、類別極端不平衡、圖片太小、光譜長度不一致）、增加資料、再調搜尋空間或 epochs。
+8. **要用模型**：到「模型」頁設預設 → 建立推論 Job（選模式、上傳 / 選資料來源 / 直接輸入）→ 下載 `predictions.csv`。
 
-## 9. `model_catalog.yaml` 結構
+## 9. 預訓練權重（模型庫）
+
+- `families.*.weights` 列出需要的檔案（`id`、`file`、`source`、`license`、`sha256`、`kind: file | hf_repo`）。
+- 伺服器不下載：管理員用 `scripts/fetch_model_zoo.py --dest <資料夾>` 在有網路的機器下載並產生 `manifest.json`，放到 `MODEL_ZOO_ROOT`；
+  Job 容器以唯讀掛載 `/job/zoo` 並設定 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`。
+- `GET /api/v1/admin/model-zoo`、`uv run python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在。
+- 新增需要權重的家族：先在 yaml 的 `weights` 登記，再實作 trainer（透過 `ctx.weight(id)` 取路徑，絕不自行下載）。
+
+## 10. `model_catalog.yaml` 結構（version 2）
 
 ```yaml
-version: 1
+version: 2
 data_types:
-  TABULAR: { label: 表格, formats: [csv, parquet], icon: Table2 }
-  # ...
+  TABULAR: { label: 表格, formats: [csv, parquet] }
 tasks:
-  classification: { label: 分類, metrics: [f1_macro, accuracy, auroc], direction: maximize }
-  # ...
+  classification: { label: 分類, metrics: [f1_macro, accuracy, auroc], direction: maximize, needs_labels: true }
 families:
-  tabular.xgboost:
-    label: XGBoost
-    group: tabular
-    supports: { TABULAR: [classification, regression] }
-    resources: { gpu: optional, cpu_min: 1, memory_mb_min: 2048 }
-    min_rows: 1000
-    defaults: { n_estimators: 500, learning_rate: 0.05, max_depth: 6, subsample: 0.8, colsample_bytree: 0.8 }
+  spectrum.masked_autoencoder:
+    label: 光譜 Masked Autoencoder
+    group: spectrum
+    framework: torch
+    supports: { SPECTRUM: [anomaly_detection, regression] }
+    inference_modes: [score, embed, retrieve, predict]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 4096 }
+    min_rows: 500
+    defaults: { patch_size: 16, mask_ratio: 0.5, dim: 64, depth: 4, heads: 4, lr: 0.0005, epochs: 100 }
     search_space:
-      learning_rate: { type: float, low: 0.01, high: 0.3, log: true }
-      max_depth: { type: int, low: 3, high: 10 }
-      # ...
-    sop: "梯度提升樹。表格資料的預設首選……"
+      mask_ratio: { type: float, low: 0.3, high: 0.75 }
+      dim: { type: categorical, choices: [32, 64, 128] }
+    weights: []            # 或 [{ id, file, source, license, sha256, kind }]
+    sop: 把光譜切 patch 隨機遮蔽再重建……
 automl:
-  - { data_type: TABULAR, task: classification, candidates: [tabular.xgboost, tabular.random_forest, tabular.linear, tabular.svm],
-      rules: [{ if: "row_count > 50000", drop: [tabular.svm] }, { if: "row_count < 1000", prefer: [tabular.random_forest] }],
-      budget: { max_trials: 20, time_budget_minutes: 60 } }
-  # ...
+  - data_type: SPECTRUM
+    tasks: [anomaly_detection]
+    candidates: [spectrum.masked_autoencoder, sequence.patch_autoencoder]
+    budget: { max_trials: 10, time_budget_minutes: 60 }
 ```

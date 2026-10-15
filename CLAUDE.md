@@ -19,13 +19,13 @@
 | 層 | 選型 |
 |---|---|
 | Frontend | Next.js 16（App Router、Turbopack、`proxy.ts`）+ React 19 + TypeScript strict + Tailwind CSS v4 + shadcn/ui + next-themes + Auth.js（next-auth v5，Keycloak provider）+ npm |
-| Backend API | Python 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`）+ Alembic + Pydantic v2 + uv + Ruff + pytest |
+| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + uv + Ruff + pytest；過渡期本地帳號（argon2 + HS256，`AUTH_MODE=local`），Keycloak 之後接 |
 | Scheduler | 與 backend 同一套件（`app/scheduler`）：Redis（事件 / log stream）+ Docker SDK 啟動 Job 容器並套用 GPU / CPU / Memory 限制；容量上限 = 管理員設定的總資源池 |
-| Trainer | 獨立套件 `trainer/` 打成 CUDA Docker image：scikit-learn、XGBoost、PyTorch、ultralytics、transformers、timm、Optuna；自行從使用者的 MinIO / URL 抓資料 |
+| Trainer | 獨立套件 `trainer/` 打成 CUDA Docker image：scikit-learn、XGBoost、PyTorch、ultralytics、transformers、Optuna；自行從使用者的 MinIO / URL 抓資料；**容器離線，預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入** |
 | DB | MariaDB 11（Docker）、utf8mb4、InnoDB |
 | Storage | 本機磁碟 `DATA_ROOT`（產物、log、暫存輸入）；`backend/app/storage/` 抽象成介面，未來可換自有 MinIO |
 | 外部資料來源 | 使用者的 MinIO / S3 相容服務、HTTP(S) URL；憑證 Fernet 加密存 DB，只在 Job 容器內解密使用 |
-| Auth | 外部 Keycloak（OIDC）；本地只存 `users`（id、角色）與專案 / 成員等業務表 |
+| Auth | 目前：本地帳號 `admin` / `user`（`POST /auth/login`）；目標：外部 Keycloak（OIDC），只存 `users`（id、角色）與專案 / 成員等業務表 |
 | Infra | docker compose、nginx、NVIDIA Container Toolkit |
 
 ## Monorepo 結構
@@ -36,15 +36,15 @@ qr-ai-lab/
 ├─ .claude/rules/      路徑觸發的規則：frontend.md、backend.md、database.md
 ├─ .claude/skills/     /design-review
 ├─ .claude/settings.json  PostToolUse hook → scripts/design_lint.py
-├─ docs/               ARCHITECTURE.md、DATABASE.md、MODEL_CATALOG.md
-├─ scripts/            design_lint.py 等工具腳本
+├─ docs/               ARCHITECTURE.md、DATABASE.md、MODEL_CATALOG.md、USE_CASES.md、GETTING_STARTED.md
+├─ scripts/            design_lint.py、fetch_model_zoo.py（在有網路的機器下載預訓練權重）
 ├─ frontend/           Next.js 16（src/app、src/components/{ui,layout,features}、src/lib、src/proxy.ts）
-├─ backend/            FastAPI：app/{core,db,models,schemas,routers,services,scheduler,storage,catalog,utils}、alembic/、tests/
-├─ trainer/            訓練 / 推論 runtime：trainer/{data,models,automl,reporting}、Dockerfile
-└─ infra/              docker-compose.yml、mariadb/、keycloak/、nginx/、trainer/
+├─ backend/            FastAPI：app/{core,db,events,models,schemas,routers,services,scheduler,storage,catalog}、alembic/、tests/
+├─ trainer/            訓練 / 推論 runtime：trainer/{runtime,automl,dataset,fetch,metrics}.py、trainer/{data,models}/、tests/
+└─ infra/              docker-compose.yml（mariadb、redis、backend、scheduler）、backend/Dockerfile、trainer/Dockerfile、mariadb/
 ```
 
-frontend（第一版頁面，假資料，`src/lib/api` 為資料層）與 infra（mariadb、redis compose）已建立；backend / trainer 尚未建立。建立時依上述結構與 `docs/ARCHITECTURE.md`，不要自創頂層目錄。
+frontend（第一版頁面，假資料，`src/lib/api` 為資料層，尚未接 backend）、backend、trainer、infra 都已建立。不要自創頂層目錄。
 
 ## 常用指令
 
@@ -54,13 +54,19 @@ cd frontend && npm install && npm run dev        # http://localhost:3000
 npm run lint && npm run typecheck && npm test     # 提交前
 npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts（backend 建立後）
 npm run build && npm run start                    # 正式建置；npm run screenshots 需要已啟動的 server
-# backend
+# backend（dev：SQLite 自動建表並建立 admin/admin1234、user/user1234）
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
-uv run ruff check . && uv run ruff format . && uv run pytest
-uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head
-uv run python -m app.scheduler                    # 排程器（需要 docker socket 與 DATA_ROOT）
+uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
+uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head   # MariaDB
+uv run python -m app.scheduler                    # 排程器：JOB_RUNNER=subprocess（開發）或 docker（伺服器）
+uv run python -m app.cli seed|create-user|set-password|model-zoo [--verify]
+# trainer
+cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
+# model zoo（在有網路的機器）
+python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
-docker compose -f infra/docker-compose.yml up -d mariadb redis
+docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis
+docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d   # + backend、scheduler
 docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
@@ -70,7 +76,8 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 
 - `data_type`：`TABULAR | IMAGE | SEQUENCE | TEXT | SPECTRUM`
 - `task_type`：`classification | regression | detection | segmentation | anomaly_detection`
-- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | vision.yolo | vision.dino | sequence.patch_autoencoder | text.bert_classifier`
+- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_patchcore | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
+- 推論模式（推論 Job 的 `config.mode`）：`predict | score | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
 - ProjectRequest（專案申請）`status`：`submitted | in_review | approved | rejected | withdrawn`；核准才建立 project
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
 - Project `status`：`active | archived`
@@ -79,11 +86,11 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
 - Artifact `kind`：`model | weights | preprocessor | report | metrics`；存 `DATA_ROOT/projects/{slug}/jobs/{job_id}/`
-- 角色：系統角色 `admin | user`（來自 Keycloak realm role）；專案角色 `owner | maintainer | member | viewer`
+- 角色：系統角色 `admin | user`（過渡期存在 `users.role`，之後來自 Keycloak realm role）；專案角色 `owner | maintainer | member | viewer`
 
 ## 全域工作規則
 
-1. 先讀再做：動 UI 前讀 `DESIGN.md`；動 API / DB 前讀 `docs/ARCHITECTURE.md`、`docs/DATABASE.md`；新增模型種類先改 `docs/MODEL_CATALOG.md` 與 `backend/app/catalog/model_catalog.yaml`。
+1. 先讀再做：動 UI 前讀 `DESIGN.md`；動 API / DB 前讀 `docs/ARCHITECTURE.md`、`docs/DATABASE.md`；新增模型家族依序改 `backend/app/catalog/model_catalog.yaml`（含 `weights`）→ `docs/MODEL_CATALOG.md` → `trainer/trainer/models/registry.py` 與實作 → 測試（`test_catalog.py` / `test_registry.py` 會比對）。
 2. 大改動（新頁面、新 router、schema 變更、排程邏輯）先列計畫：檔案清單 + 資料流 + 要跑的測試，再動手。
 3. 後端是權限的唯一真相：授權在 FastAPI dependency 判斷；前端只負責隱藏 UI。
 4. 不留存使用者資料：上傳檔只能寫到 `DATA_ROOT/uploads/` 與 Job 的 `input/`，Job 結束（任何狀態）必刪；使用者 MinIO / URL 的憑證只在 Job 容器的環境變數出現，不回前端、不進 log。
@@ -95,12 +102,14 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
+13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，容器設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記並更新 `scripts/fetch_model_zoo.py` 能處理的 `kind`。
 
 ## 文件地圖
 
 - `DESIGN.md`：設計系統（token、字體、元件、版面、dark mode、檢查清單）。前端設計一致性的真相來源。
 - `docs/ARCHITECTURE.md`：系統架構、認證流程、申請審批、資料不留存政策、Job 生命週期與佇列、資源池、log、儲存配置、API 清單、部署。
 - `docs/DATABASE.md`：資料表定義、索引、狀態機。
-- `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × AutoML 搜尋空間；也是給使用者看的 SOP 底稿。
+- `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫；也是給使用者看的 SOP 底稿。
+- `docs/USE_CASES.md`：半導體 / 電子製造的機台資料 → 模型 → 推論目的（OCD 光譜鑑別器、TEM few-shot bin code、PatchCore、FDC、WAT…）。
 - `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/`：各頁截圖。
 - `.claude/rules/frontend.md`、`backend.md`、`database.md`：動到對應路徑時自動載入的細部慣例。

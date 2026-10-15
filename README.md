@@ -4,7 +4,7 @@
 
 本服務不保存使用者的資料集；只保存訓練產物、log 與指標。管理員可設定所有專案合計的總資源池、重排佇列、強制中斷 Job；每個 Job 都有 log。
 
-前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy；MariaDB、Redis；本機磁碟 `DATA_ROOT`；Keycloak 登入；單台 Ubuntu GPU 伺服器以 docker compose 部署。
+前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy（排程器以 Docker 啟動硬化的訓練容器）；trainer 套件涵蓋 sklearn / XGBoost / YOLO / DINOv2 / 光譜與序列自編碼器 / BERT，預訓練權重只從離線模型庫載入；MariaDB、Redis；本機磁碟 `DATA_ROOT`；過渡期本地帳號，之後接 Keycloak；單台 Ubuntu GPU 伺服器以 docker compose 部署。
 
 ## 文件
 
@@ -14,7 +14,9 @@
 | [DESIGN.md](DESIGN.md) | 前端設計系統：token、字體、元件、版面、dark mode、檢查清單 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系統架構、認證、申請審批、資料不留存政策、Job 生命週期與佇列、資源池、log、儲存、API、部署 |
 | [docs/DATABASE.md](docs/DATABASE.md) | 資料表定義與索引 |
-| [docs/MODEL_CATALOG.md](docs/MODEL_CATALOG.md) | 資料類型 × 任務 × 模型 × AutoML 搜尋空間（使用者 SOP 底稿） |
+| [docs/MODEL_CATALOG.md](docs/MODEL_CATALOG.md) | 資料類型 × 任務 × 模型 × 推論模式 × AutoML 搜尋空間 × 模型庫（使用者 SOP 底稿） |
+| [docs/USE_CASES.md](docs/USE_CASES.md) | 半導體 / 電子製造情境：機台資料 → 模型 → 推論目的 |
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | 從 `git pull` 到前端、後端、排程器、模型庫、compose 的啟動 SOP |
 
 ## 設計一致性如何被維持
 
@@ -25,4 +27,7 @@
 
 ## 狀態
 
-前端第一版頁面已完成（Next.js 16、假資料；見 `docs/screenshots/`），`infra/` 有 MariaDB 與 Redis 的 compose；`backend/`、`trainer/` 尚未建立。本地啟動流程見 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
+- 前端第一版頁面已完成（Next.js 16、假資料；見 `docs/screenshots/`），尚未接 backend。
+- backend 已完成：本地帳號 `admin` / `user`、專案申請與審批、討論區、資料來源（憑證加密）、一次性上傳、Job 佇列與資源池、管理員 API（資源池、重排、強制中斷、稽核、模型庫）、SSE 事件、log；排程器（Docker / subprocess runner）。
+- trainer 已完成 11 個模型家族與 AutoML、推論模式；sklearn 家族與 PyTorch 家族（CPU、小型權重）皆有測試，YOLO 需在有 GPU 與 ultralytics 的環境驗證。
+- 本地啟動流程見 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
