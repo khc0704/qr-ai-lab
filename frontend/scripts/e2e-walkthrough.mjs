@@ -16,7 +16,7 @@ const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = process.env.API_URL ?? "http://localhost:8000/api/v1";
 const DATA = process.env.DATA_DIR ?? path.resolve("datasets");
 const ZOO = process.env.ZOO_DIR ?? path.join(DATA, "zoo"); // yolo11n.pt for the browser-upload demo
-const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
+const OUT = process.env.OUT_DIR ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
 const PHASES = (process.env.PHASES ?? "all").split(",");
 const want = (p) => PHASES.includes("all") || PHASES.includes(p);
 const VIEWPORT = { width: 1440, height: 900 };
@@ -81,6 +81,10 @@ function watch(page, label) {
   page.on("pageerror", (e) => errors.push(`${label} ${page.url()}: ${e.message}`));
   page.on("console", (m) => {
     if (m.type() === "error" && !/favicon|ERR_ABORTED/.test(m.text())) errors.push(`${label} ${page.url()}: ${m.text()}`);
+  });
+  // Name the resource behind a "Failed to load resource" console error (the console message only has the page URL).
+  page.on("response", (r) => {
+    if (r.status() >= 400 && !/favicon/.test(r.url())) errors.push(`${label} ${page.url()}: ${r.status()} ${r.url()}`);
   });
 }
 
@@ -798,6 +802,8 @@ try {
     phase = "tool";
     console.log("▶ tool");
     const page = await uiLogin(userCtx, "user", "user1234");
+    await goto(page, "/tools");
+    await shot(page, "tool-hub", "工具首頁：資料前處理與資料分析兩個不需專案的工具、個人工作區的配額（管理員「工具預設」）、我的工具任務");
     await goto(page, "/tools/preprocess");
     await shot(page, "tool-empty", "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在個人工作區排隊執行）；不保存資料");
     await page.fill("#tool-spec-target", "yield_pct");

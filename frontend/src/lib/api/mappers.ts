@@ -149,7 +149,7 @@ export function toJob(j: J): Job {
     projectId: num(j.project_id),
     projectSlug: str(j.project_slug),
     projectName: str(j.project_name),
-    kind: j.kind === "inference" ? "inference" : "train",
+    kind: (["inference", "preprocess", "analysis"].includes(String(j.kind)) ? j.kind : "train") as Job["kind"],
     name: str(j.name),
     status: j.status as Job["status"],
     queueRank: num(j.queue_rank),

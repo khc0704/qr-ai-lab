@@ -20,11 +20,18 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { artifactKindLabel, familyLabel, inferenceModeLabel, jobKindLabel, jobModeLabel } from "@/i18n/zh-TW";
+import {
+  analysisKindLabel,
+  artifactKindLabel,
+  familyLabel,
+  inferenceModeLabel,
+  jobKindLabel,
+  jobModeLabel,
+} from "@/i18n/zh-TW";
 import { getArtifact, getJob, getJobLog, listArtifactsForJob } from "@/lib/api";
 import { formatBytes, formatMetric } from "@/lib/format";
 import { can, getCurrentUser } from "@/lib/session";
-import type { InferenceMode, PreprocessStep } from "@/types/domain";
+import type { AnalysisKind, InferenceMode, PreprocessStep } from "@/types/domain";
 
 async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: string }> }) {
   const { slug, jobId } = await params;
@@ -62,19 +69,35 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
     (/(rmse|mae|mse|loss|error|distance|reconstruction)/i.test(metricName) ? "minimize" : "maximize");
   const preprocess = (job.input.spec?.preprocess ?? []) as PreprocessStep[];
   const inferenceMode = job.config?.mode as InferenceMode | undefined;
+  const isTool = job.kind === "preprocess" || job.kind === "analysis";
+  const analysisKind = job.config?.analysis as AnalysisKind | undefined;
 
   const overview = (
     <>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label={job.kind === "train" ? "模型家族" : "推論模式"}
+          label={
+            job.kind === "train"
+              ? "模型家族"
+              : job.kind === "inference"
+                ? "推論模式"
+                : job.kind === "analysis"
+                  ? "分析類型"
+                  : "前處理步驟"
+          }
           value={
             <span className="text-base">
               {job.kind === "train"
                 ? familyLabel(job.modelFamily)
-                : inferenceMode
-                  ? (inferenceModeLabel[inferenceMode] ?? inferenceMode)
-                  : "—"}
+                : job.kind === "inference"
+                  ? inferenceMode
+                    ? (inferenceModeLabel[inferenceMode] ?? inferenceMode)
+                    : "—"
+                  : job.kind === "analysis"
+                    ? analysisKind
+                      ? (analysisKindLabel[analysisKind] ?? analysisKind)
+                      : "—"
+                    : `${preprocess.length} 步`}
             </span>
           }
           hint={
@@ -82,6 +105,8 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
               <span className="font-mono">{job.modelFamily}</span>
             ) : job.mode === "auto" ? (
               "AutoML 完成後回填最佳家族"
+            ) : isTool ? (
+              "個人工作區工具任務；輸入檔於任務結束後刪除"
             ) : undefined
           }
         />
@@ -311,12 +336,14 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {controlsJobs ? <AdminJobActions job={job} /> : null}
-            <Button variant="outline" size="sm" asChild>
-              <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>
-                <Copy />
-                複製設定
-              </Link>
-            </Button>
+            {isTool ? null : (
+              <Button variant="outline" size="sm" asChild>
+                <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>
+                  <Copy />
+                  複製設定
+                </Link>
+              </Button>
+            )}
           </div>
         }
       />
@@ -328,6 +355,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
         results={results}
         resultsLabel={job.kind === "train" ? "產物" : job.kind === "analysis" ? "報告" : "結果"}
         config={config}
+        defaultTab={isTool && (job.status === "succeeded" || job.status === "failed") ? "results" : "overview"}
       />
     </>
   );
