@@ -27,7 +27,9 @@ if [ "$UPDATE" = 0 ]; then
   sudo loginctl enable-linger "$APP_USER"          # systemd --user manager for the job scopes
   sudo mkdir -p "$DATA_ROOT/model_zoo" /srv/qr-ai-lab/transfer /etc/qr-ai-lab
   sudo chown -R "$APP_USER:$APP_USER" /srv/qr-ai-lab
-  [ -f "$ENV_FILE" ] || { sudo cp "$ROOT/infra/systemd/qrlab.env.example" "$ENV_FILE"; sudo chmod 640 "$ENV_FILE"; sudo chown root:"$APP_USER" "$ENV_FILE"; echo ">> edit $ENV_FILE (secrets, DB, mirrors) then re-run"; }
+  [ -f "$ENV_FILE" ] || { sudo cp "$ROOT/infra/systemd/qrlab.env.example" "$ENV_FILE"; sudo chmod 640 "$ENV_FILE"; sudo chown root:"$APP_USER" "$ENV_FILE"; echo ">> edit $ENV_FILE (secrets, DB, Keycloak, mirrors) then re-run"; }
+  FRONT_ENV="/etc/qr-ai-lab/frontend.env"
+  [ -f "$FRONT_ENV" ] || { sudo cp "$ROOT/infra/systemd/frontend.env.example" "$FRONT_ENV"; sudo chmod 640 "$FRONT_ENV"; sudo chown root:"$APP_USER" "$FRONT_ENV"; echo ">> edit $FRONT_ENV (AUTH_MODE, AUTH_KEYCLOAK_*, AUTH_URL) then re-run"; }
 fi
 
 echo ">> backend venv"
@@ -35,7 +37,7 @@ echo ">> backend venv"
 echo ">> trainer venv (torch + CUDA wheels from the mirror; several GB)"
 (cd "$ROOT/trainer" && uv sync --frozen --no-dev --extra dl)
 echo ">> frontend build"
-(cd "$ROOT/frontend" && npm ci --no-audit --no-fund && NEXT_TELEMETRY_DISABLED=1 npm run build)
+(cd "$ROOT/frontend" && npm ci --no-audit --no-fund && rm -rf .next && NEXT_TELEMETRY_DISABLED=1 npm run build)   # clean: a stale Turbopack cache can keep old prerendered shells
 
 echo ">> database migration"
 (cd "$ROOT/backend" && set -a && . "$ENV_FILE" && set +a && .venv/bin/alembic upgrade head && [ "$UPDATE" = 1 ] || .venv/bin/python -m app.cli seed)

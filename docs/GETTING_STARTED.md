@@ -72,7 +72,7 @@ uv sync                               # 建立 .venv 並安裝依賴（Python �
 uv run uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
-- `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立兩個帳號：`admin / admin1234`、`user / user1234`（`SEED_*` 可改）。
+- `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立三個帳號：`superadmin / superadmin1234`（什麼都能改：資源池、配額、刪專案、模型庫、使用者角色、GPU 重置）、`admin / admin1234`（日常營運：審核、中斷 / 重啟 / 重排任務、討論區）、`user / user1234`（沒有管理操作）。密碼由 `SEED_*_PASSWORD` 改；角色可在 **管理 → 使用者** 調整或 `uv run python -m app.cli set-role --username alice --role admin`。
 - `.env.example` 預設 `SCHEDULER_EMBEDDED=true`：排程器迴圈跑在這個程序裡，不用 Redis、不用第二個終端，任務頁的即時 log 照常。要測兩個程序的正式拓樸再照 §4.2 分開跑。
 - 登入拿 token，之後所有 API 帶 `Authorization: Bearer <token>`：
 
@@ -98,7 +98,8 @@ REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
 - 每個任務 = `trainer/.venv/bin/python -m trainer run` 的主機子程序，環境變數帶 `JOB_*`、`CUDA_VISIBLE_DEVICES` 與離線旗標（`HF_HUB_OFFLINE=1`、`YOLO_OFFLINE=1`…）。
 - `JOB_RUNNER=auto`（預設）：啟動時試跑 `systemd-run --user --scope`，成功就用 **systemd**（cgroup 強制 MemoryMax / CPUQuota / AllowedCPUs，`systemctl stop` 殺整棵程序樹，排程器重啟後靠 unit 名接回）；失敗就用 **subprocess**（process group、`cpu_affinity` 釘核心、執行緒數上限，記憶體由排程器每 3 秒的 watchdog 監看，超過申請量就停止並寫明原因）。管理員 Dashboard 的「任務執行方式」會顯示實際偵測結果。
 - systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
-- GPU：`CUDA_VISIBLE_DEVICES` 指定；啟動前用 pynvml 檢查那顆 GPU 顯存是否被別的程序占用（`GPU_BUSY_THRESHOLD`），忙就先等。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
+- CPU 限制對原生函式庫也有效：runner 把 `OMP / MKL / OPENBLAS / NUMEXPR / TBB / NUMBA / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS…` 全設成申請的核數，trainer 啟動時再用 threadpoolctl + torch 夾一次並把實際 affinity / 執行緒數印進任務 log（搜 `limits:`）。所以 sklearn 的 TSNE / HistGradientBoosting、numpy BLAS、torch 都只會用到分到的核心，不會把 88 核全吃掉。
+- GPU：`CUDA_VISIBLE_DEVICES` 指定。任務可填「每張 GPU 需要的顯存」→ 多個任務依 pynvml 的剩餘顯存共用一張（資源池的「依顯存共用 GPU」開關；子程序以 `set_per_process_memory_fraction` 自限）；沒填就要整張空卡（`GPU_BUSY_THRESHOLD`）。Dashboard 的 GPU 卡片顯示顯存 / 保留量 / 任務，superadmin 可「重置」（中斷本系統任務 → kill 所有程序 → `GPU_RESET_COMMAND`）。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
 - 深度學習家族：`cd trainer && uv sync --extra dl`（CUDA 版 torch，走公司 PyPI 鏡像：`UV_INDEX_URL=https://mirror.example.com/pypi/simple`）；開發機只想裝 CPU torch 見 §7。
 
 ### 4.3 模型庫（預訓練權重；伺服器不連外）
@@ -147,16 +148,48 @@ sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo 
 - 沒有 TLS 憑證前要在 `qrlab-frontend.service` 加 `Environment=COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
 - 上線後第一件事：Dashboard 看「任務執行方式」是不是 systemd 且記憶體 / CPU 都是 cgroup；`app.cli set-password` 改掉兩個預設密碼；在資源池勾選可用的 GPU。
 
-### 4.7 使用手冊（DOCX / PDF）
+### 4.7 使用率歷史與資料前處理服務
+
+- **管理 → 使用率歷史**（`/admin/usage`）：排程器每 30 秒（`USAGE_SAMPLE_INTERVAL_S`）寫一筆 `resource_samples`；頁面可切 1h / 6h / 24h / 7d / 30d，分母可切「專案配額 / 資源池 / 系統總量」；下方表格是各專案在該區間的時間加權配置（相對分母的百分比）與實測 CPU / 記憶體。保留 `USAGE_RETENTION_DAYS`（預設 90 天）。
+- **資料前處理**（`/tools/preprocess`，所有登入者）：不需要專案；選資料類型 → 上傳 → 挑步驟 → 抽樣預覽 → 整檔執行 → 下載 zip（`processed.*`、`pipeline.json`、`summary.json`）。檔案只在 `DATA_ROOT/tools/<id>/`，沒有資料庫列，下載 / 刪除 / 逾時（`UPLOAD_TTL_MINUTES`）即刪；整檔執行上限 `TOOL_PROCESS_TIMEOUT_S`（預設 600 秒）。
+
+### 4.8 使用手冊（DOCX / PDF）
 
 ```bash
 node scripts/build_manual.js                                                   # docs/manuals/QR-AI-Lab-使用手冊.docx
 soffice --headless --convert-to pdf --outdir docs/manuals "docs/manuals/QR-AI-Lab-使用手冊.docx"
 ```
 
-## 5. Keycloak（外部）
+## 5. Keycloak（正式環境的登入）
 
-公司既有的 Keycloak。需要向管理 Keycloak 的人取得：realm 名稱、client id / secret（confidential client，Authorization Code + PKCE）、允許的 redirect URI `http://localhost:3000/api/auth/callback/keycloak`、realm role `admin` 與 `user`。填入 `frontend/.env.local`（`AUTH_*`）與 backend 的 `KEYCLOAK_*`。接上前用 backend 的本地帳號（`AUTH_MODE=local`）。
+dev 用本地帳號（`AUTH_MODE=local`）；正式環境把前後端都切到 `AUTH_MODE=keycloak`，不用改任何業務表。
+
+1. 向 Keycloak 管理員要一個 **confidential client**（Standard flow / Authorization Code + PKCE）：
+   - Valid redirect URIs：`https://<你的網址>/api/auth/callback/keycloak`
+   - Valid post logout redirect URIs：`https://<你的網址>/login`
+   - 角色：realm role 或這個 client 的 client role 皆可，例如 `superadmin`、`admin`（名稱可自訂，用 `KEYCLOAK_ROLE_MAP` 對應）。沒有任何對應 role 的人登入後是 `user`。
+2. 前端（`/etc/qr-ai-lab/frontend.env`，或開發時 `frontend/.env.local`）：
+   ```
+   AUTH_MODE=keycloak
+   AUTH_SECRET=<openssl rand -base64 32>
+   AUTH_URL=https://<你的網址>
+   AUTH_KEYCLOAK_ID=<client id>
+   AUTH_KEYCLOAK_SECRET=<client secret>
+   AUTH_KEYCLOAK_ISSUER=https://<sso>/realms/<realm>
+   ```
+3. backend（`/etc/qr-ai-lab/qrlab.env` 或 `backend/.env`）：
+   ```
+   AUTH_MODE=keycloak
+   KEYCLOAK_ISSUER=https://<sso>/realms/<realm>        # 要和 token 的 iss 一字不差
+   KEYCLOAK_CLIENT_ID=<client id>
+   KEYCLOAK_ROLE_MAP=superadmin:superadmin,admin:admin  # <Keycloak role>:<系統角色>
+   SUPERADMIN_USERNAMES=<你的帳號>                        # 第一位 superadmin；之後其他人在 UI 調整即可
+   ```
+   `KEYCLOAK_AUDIENCE` 只有在 Keycloak 加了 audience mapper 時才設。
+4. 重啟三個服務。登入頁變成「使用公司帳號登入（Keycloak）」；第一次登入會自動在 `users` 建立帳號（同名的本地帳號會被接管）。切換期間要保留本地登入的話前端設 `AUTH_LOCAL_FALLBACK=1`。
+5. 沒有公司 Keycloak 也能先測整條流程：`backend/.venv/bin/python scripts/fake_keycloak.py` 跑一個模擬 realm（`http://127.0.0.1:8089/realms/qr`，client `qr-ai-lab` / `dev-secret`，帳號 superadmin / admin / user / alice），前後端照上面設定指向它，再 `cd frontend && npm run screenshots:keycloak` 看截圖。
+
+角色與權限的完整表在 `docs/ARCHITECTURE.md` §2.3；UI 只負責隱藏按鈕，真正的判斷在 backend 的 `require_perm`。
 
 ## 6. 推薦的日常流程
 
@@ -173,7 +206,44 @@ cd backend && uv run ruff check . && uv run pytest
 cd trainer && uv run ruff check . && uv run pytest
 ```
 
-## 7. 常見問題
+## 7. WSL 與 Ubuntu：完整的 dev / prod 啟動
+
+### 7.1 開發（WSL2 或 Ubuntu 桌機；本地帳號、SQLite、內嵌排程器、不需要 Docker）
+
+```bash
+# 一次性
+sudo apt install -y python3.12 python3.12-venv nodejs npm git     # Node ≥ 20.9（建議 nvm install 22）；uv：curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone <repo> && cd qr-ai-lab
+cd trainer && uv sync && cd ..                      # trainer venv（CPU 家族）；要 GPU / 深度學習：uv sync --extra dl
+cd backend && cp .env.example .env && uv sync && cd ..   # .env 預設 AUTH_MODE=local、SQLite、SCHEDULER_EMBEDDED=true
+cd frontend && cp .env.local.example .env.local && npm ci && cd ..   # AUTH_MODE=local、BACKEND_URL=http://localhost:8000
+# 每天
+cd backend && uv run uvicorn app.main:app --reload   # 終端 1：API + 內嵌排程器 + 使用率取樣（http://localhost:8000/docs）
+cd frontend && npm run dev                           # 終端 2：http://localhost:3000，superadmin / admin / user
+```
+
+- WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 `--extra dl` 的 CUDA torch。
+- 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6379/0`、`SCHEDULER_EMBEDDED=false`，`uv run alembic upgrade head && uv run python -m app.cli seed`，再開第三個終端 `uv run python -m app.scheduler`。
+- 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm。
+
+### 7.2 正式（Ubuntu GPU 伺服器；Keycloak、MariaDB + Redis in Docker、三個 systemd 服務、nginx）
+
+```bash
+sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
+cp infra/.env.example infra/.env                      # DOCKER_REGISTRY=公司 image 鏡像、DB 密碼
+docker compose -f infra/docker-compose.yml --env-file infra/.env up -d      # 只有 mariadb、redis
+PIP_INDEX_URL=https://<pypi 鏡像>/simple NPM_REGISTRY=https://<npm 鏡像> ./infra/install.sh   # 第一次：建 qrlab 使用者、venv、build、複製兩個 env 範本後停下
+sudo nano /etc/qr-ai-lab/qrlab.env      # DATABASE_URL、REDIS_URL、AUTH_MODE=keycloak、KEYCLOAK_*、SUPERADMIN_USERNAMES、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、MODEL_ZOO_*、GPU_RESET_COMMAND
+sudo nano /etc/qr-ai-lab/frontend.env   # AUTH_MODE=keycloak、AUTH_SECRET、AUTH_URL、AUTH_KEYCLOAK_ID / SECRET / ISSUER
+./infra/install.sh                      # 第二次：alembic upgrade head、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
+sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -s reload
+```
+
+- 之後更新：`git pull && ./infra/install.sh --update`（重 sync venv、重建前端、migration、重啟三個服務；執行中的任務不受影響）。
+- 上線檢查：Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；GPU 卡片列出所有卡；資源池勾選要開放的 GPU；用 `SUPERADMIN_USERNAMES` 的帳號登入一次，再到 **使用者** 頁把其他人設成 admin。
+- dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）。任務本身、權限判斷、資料不留存政策在兩邊完全相同。
+
+## 8. 常見問題
 
 - **`EADDRINUSE: 3000`**：有別的 dev server 在跑；`npm run dev -- -p 3001` 換 port，或關掉舊的。
 - **Node 版本太舊**：Next.js 16 需要 ≥ 20.9；`nvm install 22 && nvm use 22`。

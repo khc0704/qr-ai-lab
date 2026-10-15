@@ -20,12 +20,14 @@ system_settings（key / value，資源池等）
 | 欄位 | 型別 | 說明 |
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
-| keycloak_sub | CHAR(36) NOT NULL | Keycloak `sub`；`uq_users_keycloak_sub` |
-| username | VARCHAR(100) NOT NULL | `preferred_username` |
+| keycloak_sub | CHAR(36) NULL | Keycloak `sub`；`uq_users_keycloak_sub`；本地帳號為 NULL（Keycloak 第一次登入時同名本地帳號會被接管） |
+| username | VARCHAR(100) NOT NULL | `preferred_username` / 本地帳號名 |
 | email | VARCHAR(255) NOT NULL | `ix_users_email` |
 | display_name | VARCHAR(100) NULL | |
-| role | VARCHAR(32) NOT NULL DEFAULT 'user' | `admin \| user`；每次登入從 realm role 同步 |
-| is_active | BOOL NOT NULL DEFAULT 1 | admin 可停用（停用者 API 全拒） |
+| role | VARCHAR(32) NOT NULL DEFAULT 'user' | `superadmin \| admin \| user`；superadmin 在 UI 調整；Keycloak 登入時 token 帶 `KEYCLOAK_ROLE_MAP` 對應的 role 才覆蓋 |
+| is_active | BOOL NOT NULL DEFAULT 1 | superadmin 可停用（停用者 API 全拒）；不能停用自己或最後一位 superadmin |
+| auth_provider | VARCHAR(16) NOT NULL DEFAULT 'local' | `local \| keycloak` |
+| password_hash | VARCHAR(255) NULL | argon2；只有 local |
 | last_login_at | DATETIME(6) NULL | |
 | created_at / updated_at | DATETIME(6) | |
 
@@ -198,6 +200,7 @@ system_settings（key / value，資源池等）
 | requested_gpu | SMALLINT UNSIGNED NOT NULL DEFAULT 0 | |
 | requested_cpu | DECIMAL(5,2) NOT NULL DEFAULT 1 | |
 | requested_memory_mb | INT UNSIGNED NOT NULL DEFAULT 2048 | |
+| requested_gpu_memory_mb | INT UNSIGNED NULL | 每張 GPU 需要的顯存；有值 = 可依剩餘顯存與其他任務共用一張 GPU（資源池 `gpu_share`），NULL = 獨占整張 |
 | timeout_minutes | INT UNSIGNED NOT NULL | 建立時從專案或 job_defaults 決定 |
 | assigned_gpus | JSON NULL | 例 `[0]` |
 | assigned_cpus | JSON NULL | 排程器配給的邏輯 CPU 編號，例 `[0, 1]`（affinity / cgroup cpuset） |
@@ -224,6 +227,18 @@ system_settings（key / value，資源池等）
 | created_at / updated_at | DATETIME(6) | |
 
 索引：`ix_jobs_status_queue_rank (status, queue_rank, created_at)`、`ix_jobs_project_id_created_at`、`ix_jobs_kind_status`、`ix_jobs_data_source_id`、`ix_jobs_artifact_id`。
+
+## resource_samples（使用率歷史）
+
+排程器每 `USAGE_SAMPLE_INTERVAL_S`（預設 30）秒寫一筆；`USAGE_RETENTION_DAYS`（預設 90）後由排程器的每小時清理刪除。
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| id | BIGINT UNSIGNED PK | |
+| sampled_at | DATETIME(6) NOT NULL | `ix_resource_samples_sampled_at` |
+| payload | JSON NOT NULL | `{node: {cpu_pct, cpu_cores, mem_used_mb, mem_total_mb, gpus: [{index, util, mem_used_mb, mem_total_mb}]}, pool: {gpu, cpu, memory_mb, running_jobs, gpu_total, cpu_total, memory_total_mb}, projects: {"<project_id>": {gpu, cpu, memory_mb, running_jobs, cpu_actual, mem_actual_mb}}}` |
+
+`GET /admin/usage?range=1h|6h|24h|7d|30d` 依區間分桶平均（60 s / 5 min / 15 min / 1 h / 4 h）並算各專案的時間加權平均配置相對配額 / 資源池 / 系統總量的百分比。
 
 ## artifacts（訓練產物，存於本機 `DATA_ROOT`）
 
@@ -267,6 +282,10 @@ system_settings（key / value，資源池等）
 - projects：`active → archived`。
 - jobs：`queued → scheduled → running → succeeded | failed`；`queued | scheduled | running → cancelled`（成員取消、admin 強制中斷、逾時）。
 - uploads：`pending → claimed`（建立 Job）；`pending → purged`（過期）。
+
+## 遷移注意事項
+
+`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
 
 ## 初始化
 

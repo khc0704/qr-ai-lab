@@ -40,35 +40,49 @@
 
 ## 2. 認證與授權
 
-### 2.0 過渡期：本地帳號（Keycloak 尚未接上，目前的預設）
-- backend `AUTH_MODE=local`：`POST /api/v1/auth/login {username, password}` 驗 `users.password_hash`（argon2），回 HS256 access token（`AUTH_SECRET`，預設 12 小時）；`GET /api/v1/me` 取目前使用者。
-- 啟動（dev / test）自動建立兩個帳號：`admin / $SEED_ADMIN_PASSWORD`（預設 `admin1234`，系統角色 admin）與 `user / $SEED_USER_PASSWORD`（預設 `user1234`）。正式環境用 `uv run python -m app.cli seed` / `create-user` / `set-password`。
-- `users.auth_provider = local | keycloak`；切到 Keycloak 只要設 `AUTH_MODE=keycloak` + `KEYCLOAK_ISSUER` / `KEYCLOAK_AUDIENCE`，`get_current_user` 改驗 Keycloak JWT 並 upsert，業務表不變。
-- 前端（已實作）：登入頁的 Server Action `loginAction` 打 `/auth/login`，把 access token 放在 httpOnly cookie `qr_token`（與 `expires_in` 同步到期）；`src/proxy.ts` 只看 cookie 有無：未登入導向 `/login?next=`、已登入離開 `/login`。所有讀取走 `src/lib/api`（`server-only` fetch，帶 `Authorization`，snake_case → camelCase 在 `mappers.ts`），寫入走 `src/lib/actions.ts`（Server Actions，回傳 `{ok, data | error}` 並 `revalidatePath`）；401 / 403 由 `getCurrentUser` 清 cookie 並導向 `/login?reason=expired`。瀏覽器需要直接串流 / 傳檔的三件事由 Route Handler 代理（token 不出伺服器）：`POST /api/upload/[slug]`（multipart → backend uploads）、`GET /api/stream/jobs/[id]`（SSE 轉發，含 `Last-Event-ID`）、`GET /api/download/[...path]`（白名單：artifacts / job logs / job output）。
+### 2.0 兩種模式（`AUTH_MODE`，前後端要一致）
+- **local（開發 / 過渡期）**：backend `POST /api/v1/auth/login {username, password}` 驗 `users.password_hash`（argon2），回 HS256 access token（`AUTH_SECRET`，預設 12 小時）。前端 Server Action `loginAction` 把 token 放在 httpOnly cookie `qr_token`。dev / test 啟動自動建立三個帳號：`superadmin / $SEED_SUPERADMIN_PASSWORD`（預設 `superadmin1234`）、`admin / $SEED_ADMIN_PASSWORD`（`admin1234`）、`user / $SEED_USER_PASSWORD`（`user1234`）；正式環境用 `uv run python -m app.cli seed | create-user | set-password | set-role`。
+- **keycloak（正式）**：前端用 Auth.js（next-auth v5，`frontend/src/auth.ts`）的 Keycloak provider 登入，backend 只驗 Keycloak 發的 access token。`POST /auth/login` 回 401 `LOCAL_LOGIN_DISABLED`；`GET /auth/config` 告訴前端目前模式。
+- 兩種模式下 `GET /api/v1/me` 都回使用者 + `permissions`（後端算好的權限名稱清單）+ `auth_mode`；所有讀取走 `src/lib/api`（`server-only` fetch，`getToken()` 依模式從 cookie 或 Auth.js session 取 token），寫入走 `src/lib/actions.ts`；瀏覽器需要直接串流 / 傳檔的事由 Route Handler 代理（`/api/upload/[slug]`、`/api/stream/jobs/[id]`、`/api/download/[...path]`、`/api/admin/model-zoo/[id]/upload`、`/api/tools/upload`、`/api/tools/download/[id]`），token 不出伺服器。
 
-### 2.1 登入流程（Keycloak，目標狀態）
-1. 使用者在 frontend 點登入 → Auth.js 導向 Keycloak（Authorization Code + PKCE）。
-2. Keycloak 回呼 `/api/auth/callback/keycloak`；Auth.js 以 JWT session 保存 `access_token`、`refresh_token`、`expires_at`、`roles`（從 token 的 `realm_access.roles` 取）。
-3. `src/proxy.ts` 對 `(app)` 路由檢查 session，未登入導向 `/login`。
-4. Server Component / Server Action 透過 `@/lib/api`（`server-only`）呼叫 backend，自動帶 `Authorization: Bearer <access_token>`；到期前 60 秒用 refresh token 向 Keycloak 換新（Auth.js `jwt` callback）。
-5. 瀏覽器端只有 SSE 需要直接連 backend：由 Route Handler `/api/stream/jobs/[id]` 代理（server 端帶 token）。
+### 2.1 Keycloak 登入流程（已實作）
+1. `/login` 的「使用公司帳號登入」按鈕在瀏覽器端呼叫 Auth.js `signIn("keycloak")`（`next-auth/react`：取 csrf → `POST /api/auth/signin/keycloak`）→ 以 Authorization Code + PKCE + state 導到 realm 的登入頁（`AUTH_KEYCLOAK_ISSUER` 的 `.well-known/openid-configuration`）；PKCE / state cookie 因此和回呼在同一個 origin。
+2. 回呼 `${AUTH_URL}/api/auth/callback/keycloak`（Route Handler `src/app/api/auth/[...nextauth]/route.ts`；local 模式時回 404）。Auth.js 驗 id_token（JWKS）後在 **加密的 session cookie（jwt strategy）** 內保存 `access_token`、`refresh_token`、`id_token`、`expires_at`；`AUTH_SESSION_MAX_AGE` 決定 cookie 壽命（預設 12 小時）。
+3. `src/proxy.ts` 只看 cookie 有無（`qr_token` 或 `authjs.session-token*`）：未登入導向 `/login?next=`；帶 `?reason=` / `?error=` 的 `/login` 不會被彈回首頁（避免 session 失效時的迴圈）。
+4. 每次 Server Component / Server Action 呼叫 backend 前 `getToken()` 執行 `auth()`：access token 到期前 30 秒用 refresh token 向 `<issuer>/protocol/openid-connect/token` 換新（`jwt` callback）；換不到就標 `error=RefreshTokenError` → `getOptionalUser` 回 null → 導向 `/login?reason=expired`。
+5. 登出：`logoutAction` 先 `signOut`（清 cookie），再把瀏覽器導到 `<issuer>/protocol/openid-connect/logout?id_token_hint=…&post_logout_redirect_uri=$AUTH_URL/login` 結束 SSO。
+6. Keycloak client 需要：confidential client、Standard flow、Valid redirect URI `$AUTH_URL/api/auth/callback/keycloak`、Valid post logout redirect URI `$AUTH_URL/login`；role 用 realm role 或 client role 都可（見 2.2）。所有值放在 `/etc/qr-ai-lab/frontend.env`（前端）與 `/etc/qr-ai-lab/qrlab.env`（backend），不進 git。
 
-### 2.2 backend 驗證
-- `core/security.py`：PyJWT + `PyJWKClient`（JWKS 快取 1 小時），驗 `iss`、`aud`（或 `azp`）、`exp`。
-- `get_current_user`：以 `sub` upsert `users`（同步 `email`、`preferred_username`、display name、`role` = realm role 含 `admin` ? admin : user、`last_login_at`）。
-- `require_admin`、`require_project_role(min_role)`：以 `project_members` 判斷；admin 隱含所有專案的 owner 權限。
+### 2.2 backend 驗證與角色對應
+- `core/security.py`：PyJWT + `PyJWKClient`（`<KEYCLOAK_ISSUER>/protocol/openid-connect/certs`，快取 1 小時），驗簽章、`iss`、`exp`；`KEYCLOAK_AUDIENCE` 有設才驗 `aud`（Keycloak 要加 audience mapper）。
+- `services/users.upsert_keycloak_user`：以 `sub` 找 `users`；找不到時若有同名（`preferred_username`）的本地帳號就接管它（`auth_provider=keycloak`、清掉密碼），否則新建。每次登入同步 email / display name / `last_login_at`。
+- 系統角色：`KEYCLOAK_ROLE_MAP=<keycloak role>:<系統角色>,…`（預設 `superadmin:superadmin,admin:admin`；realm role 與 `resource_access[KEYCLOAK_CLIENT_ID].roles` 都看）。token 帶到對應的 role → `users.role` 設為最高的那個；**沒帶任何對應 role → 維持 UI 設定的角色**（所以 superadmin 可以在 `/admin/users` 直接調整）。`SUPERADMIN_USERNAMES` 列出的帳號登入即為 superadmin（引導第一位管理員，不需要動 Keycloak）。
+- `require_admin`（admin 以上）、`require_perm("<perm>")`（見 2.3）、`project_access(min_role)`：以 `project_members` 判斷；admin 以上隱含所有專案的 owner 權限（可看、可管成員），但配額 / 刪除仍看系統權限。
 
-### 2.3 權限矩陣
+### 2.3 權限矩陣（`backend/app/core/permissions.py`；前端 `can(user, perm)` 只負責隱藏 UI）
 
-| 動作 | admin | owner | maintainer | member | viewer |
+| 權限名稱 | superadmin | admin | user | 說明 |
+|---|---|---|---|---|
+| `admin.view`、`audit.view`、`usage.view`、`users.view` | ✓ | ✓ | | 進管理區：Dashboard、佇列、稽核、使用率歷史、使用者列表（唯讀） |
+| `requests.review` | ✓ | ✓ | | 開始審核 / 核准 / 退回專案申請 |
+| `jobs.control` | ✓ | ✓ | | 強制中斷、重新執行、刪除任何任務、重排佇列 |
+| `issues.moderate` | ✓ | ✓ | | 關閉 / 重開 / 指派 / 刪除討論串 |
+| `pool.manage` | ✓ | | | 總資源池、Job 預設值（admin 看到的是唯讀表單） |
+| `quota.manage` | ✓ | | | 專案配額 |
+| `projects.delete` | ✓ | | | 刪除專案（任務、產物、資料來源、資料夾） |
+| `users.manage` | ✓ | | | 改系統角色、停用帳號（不能降級 / 停用自己，不能移除最後一位 superadmin，`SUPERADMIN_USERNAMES` 內的不能降級） |
+| `model_zoo.manage` | ✓ | | | 上傳 / 匯入 / 移除預訓練權重 |
+| `gpu.reset` | ✓ | | | 強制釋放 GPU 顯存 |
+
+專案內角色不變：
+
+| 動作 | admin 以上 | owner | maintainer | member | viewer |
 |---|---|---|---|---|---|
-| 審核專案申請、調配額、改系統角色 | ✓ | | | | |
-| 設定總資源池、重排佇列、強制中斷任何 Job、看所有 Job log | ✓ | | | | |
 | 封存專案、改專案設定 | ✓ | ✓ | | | |
 | 管理成員 | ✓ | ✓ | ✓ | | |
 | 新增 / 刪除資料來源、建立 / 取消本專案的 Job、設預設模型 | ✓ | ✓ | ✓ | ✓ | |
 | 讀取專案、下載產物、看本專案 Job 的 log | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 提出專案申請、在討論區開單與回覆 | 所有登入者 | | | | |
+| 提出專案申請、在討論區開單與回覆、使用資料前處理服務 | 所有登入者 | | | | |
 
 ## 3. 討論區
 
@@ -174,6 +188,19 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 隔離等級：任務與排程器是同一個 OS 使用者（`qrlab`），彼此可讀對方的產物目錄；使用者只提交資料與設定、不提交程式碼，因此先以 cgroup 限資源為主。要升級隔離時改用 system 層的 `systemd-run`（`DynamicUser=`、`ProtectSystem=strict`、`ReadWritePaths=`），介面不變。
 - 前處理：`input.spec.preprocess` 的步驟由共用套件 `libs/preprocess`（`qrlab_preprocess`）定義；backend 用它做上傳抽樣預覽與驗證，trainer 在訓練時 fit 並把狀態存成 `model/preprocess.json` + 產物 metadata，推論時 replay。
 
+### 6.5 GPU 配置（依剩餘顯存共用）
+- 任務可填 `requested_gpu_memory_mb`（精靈「每張 GPU 需要的顯存」）。排程器每個 tick 以 pynvml 讀每張資源池 GPU 的已用顯存，加上本系統任務的保留量（Σ `requested_gpu_memory_mb`），`total − max(已用, 保留) − GPU_RESERVE_MB ≥ 需要量` 的卡才候選，best-fit（剩最少的先用）讓任務集中；沒填的任務要整張空卡（沒有任何任務、已用顯存 < `GPU_BUSY_THRESHOLD`）。資源池的 `gpu_share=false` 關閉共用，一律獨占。沒有 NVIDIA driver 時退化成按張數（共用任務平均分散）。
+- 子程序拿到 `JOB_GPU_MEMORY_MB`，trainer `limits.py` 以 `torch.cuda.set_per_process_memory_fraction` 自限；Dashboard 的 GPU 卡片顯示驅動程式讀數、保留量、放在上面的任務與程序數。
+- `POST /admin/gpus/{index}/reset`（superadmin）：`jobs` 強制中斷本系統放在那張卡的任務；`all` 再 SIGKILL 驅動程式看到的所有程序；`device` 再執行 `GPU_RESET_COMMAND`（如 `sudo -n nvidia-smi --gpu-reset -i {index}`）。都寫稽核紀錄。
+
+### 6.6 資源限制如何真的生效
+- 外層：systemd scope（`AllowedCPUs` / `CPUQuota` / `MemoryMax`）或 `sched_setaffinity` + 記憶體 watchdog。
+- 子程序環境：`OMP / MKL / OPENBLAS / BLIS / VECLIB / NUMEXPR / TBB / NUMBA / RAYON / POLARS / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS` 全部 = ceil(cpu)，`JOB_CPU_LIMIT`、`JOB_CPU_CORES`、`JOB_MEMORY_MB`、`JOB_GPU_MEMORY_MB`。
+- 程序內：`trainer/limits.py` 在讀完 spec 後 `threadpoolctl.threadpool_limits(cpu)`（已載入的 BLAS / OpenMP）、`torch.set_num_threads(cpu)`、`set_num_interop_threads(1)`，並把實際 affinity、各執行緒池大小、torch threads 印進 job log（`limits: cpu=1 affinity=1 cores [3] threadpools[openmp/openmp=1, blas/openblas=1] torch_threads=1`）。sklearn 的 `n_jobs` 一律取 `ctx.cpu`。
+
+### 6.7 使用率歷史
+排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`：節點（CPU%、記憶體、每張 GPU 的使用率與顯存）、資源池（已配置的 GPU / CPU / 記憶體、執行中任務數、池總量）、各專案（配置量，以及用 psutil 量到任務程序樹的實際 CPU 核數與 PSS 記憶體）。`GET /admin/usage?range=` 分桶平均並算各專案的時間加權占用；保留 `USAGE_RETENTION_DAYS`。
+
 ## 7. Log
 
 - 每個 Job 一個檔：`DATA_ROOT/projects/{slug}/jobs/{job_id}/logs/job.log`（`jobs.log_path`），由 scheduler 寫入：容器 stdout / stderr 逐行加時間戳，加上 `[system]` 行（排程、啟動、取消、中斷理由、逾時、結束碼）。
@@ -267,11 +294,19 @@ GET    /internal/jobs/{id}/spec  POST …/status  POST …/metrics  POST …/art
 GET    /healthz  GET /readyz
 ```
 
+### 12.1 這一輪新增的端點
+- `GET /auth/config`（不需登入）、`GET /me`（含 `permissions`、`auth_mode`）
+- `DELETE /projects/{slug}`（superadmin）、`DELETE /issues/{id}`（admin 以上）、`POST /admin/jobs/{id}/restart`（admin 以上，回 202 新任務）
+- `PATCH /users/{id}`（superadmin；role `superadmin|admin|user`、`is_active`）
+- `POST /admin/gpus/{index}/reset`（superadmin）、`GET /admin/usage?range=1h|6h|24h|7d|30d`（admin 以上）
+- `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`、`POST /tools/uploads/{id}/process`、`GET /tools/uploads/{id}/download`、`DELETE /tools/uploads/{id}`（所有登入者；資料前處理服務）
+- 資源池多了 `gpu_share`；Job 多了 `requested_gpu_memory_mb`；`/admin/node` 的 GPU 多了 `job_ids`、`reserved_mb`、`processes`
+
 ## 13. 部署（公司 Ubuntu GPU 伺服器，不連外網）
 
 - 前置：Ubuntu 22.04 / 24.04、NVIDIA driver（只要 driver；CUDA 函式庫隨 torch wheel 來）、Docker Engine + Compose plugin（只跑 MariaDB / Redis）、Python 3.12 + uv、Node ≥ 20.9、nginx。套件來源：公司的 PyPI 鏡像（`UV_INDEX_URL` / `PIP_INDEX_URL`）、npm 鏡像（`npm config set registry`）、image 鏡像（`infra/.env` 的 `DOCKER_REGISTRY`）。
 - 程式放 `/opt/qr-ai-lab`（git checkout），資料放 `/srv/qr-ai-lab/data`（`DATA_ROOT`，含 `model_zoo/`），權重傳輸資料夾 `/srv/qr-ai-lab/transfer`（`MODEL_ZOO_IMPORT_ROOT`）。專用使用者 `qrlab`，`loginctl enable-linger qrlab`（任務的 systemd scope 跑在它的 user slice）。
-- `infra/install.sh`：建 venv（backend `--extra gpu`、trainer `--extra dl`）、`next build`、`alembic upgrade head` + `app.cli seed`、安裝 `infra/systemd/qrlab-{backend,scheduler,frontend}.service` 並啟動；`--update` 在 `git pull` 後重跑。環境變數在 `/etc/qr-ai-lab/qrlab.env`（範本 `infra/systemd/qrlab.env.example`）。
+- `infra/install.sh`：建 venv（backend `--extra gpu`、trainer `--extra dl`）、`next build`、`alembic upgrade head` + `app.cli seed`、安裝 `infra/systemd/qrlab-{backend,scheduler,frontend}.service` 並啟動；`--update` 在 `git pull` 後重跑。環境變數：backend / scheduler 讀 `/etc/qr-ai-lab/qrlab.env`（範本 `infra/systemd/qrlab.env.example`，含 `AUTH_MODE=keycloak`、`KEYCLOAK_*`、`KEYCLOAK_ROLE_MAP`、`SUPERADMIN_USERNAMES`、`GPU_RESET_COMMAND`），frontend 讀 `/etc/qr-ai-lab/frontend.env`（範本 `infra/systemd/frontend.env.example`，含 `AUTH_MODE`、`AUTH_SECRET`、`AUTH_URL`、`AUTH_KEYCLOAK_*`）。公司私有的值只放在這兩個檔案。
 - nginx：`infra/nginx/qr-ai-lab.conf`（TLS 用公司 CA；`/api/v1` 轉 8000、其餘轉 3000；關閉 buffering 讓 SSE 與上傳串流）。沒有 TLS 時前端要設 `COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
 - 任務執行：`JOB_RUNNER=auto`（systemd cgroup；Dashboard 會顯示實際偵測結果）。沒有任何容器，也不需要 NVIDIA Container Toolkit。
 - 模型庫：管理員在 `/admin/model-zoo` 用三種方式之一把權重帶進來：瀏覽器上傳、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）。有網路的機器可先用 `scripts/fetch_model_zoo.py` 抓好再整個資料夾放到傳輸資料夾。
@@ -280,7 +315,8 @@ GET    /healthz  GET /readyz
 
 ## 14. 安全性注意事項
 
-- scheduler 持有 docker socket 等同主機 root：只跑受信任的 trainer image；Job 容器非 root、`cap_drop ALL`、`no-new-privileges`、唯讀 rootfs、只掛自己的 input（ro）與 output（rw）。
+- 任務是 `qrlab` 使用者的主機子程序（沒有容器、沒有 docker socket）：trainer venv 只裝公司鏡像的套件；子程序只拿到自己的 input / output / 模型庫路徑與該 Job 的 token，看不到 DB 與其他 Job；`GPU_RESET_COMMAND` 若用 `sudo -n nvidia-smi --gpu-reset` 要在 sudoers 只開放這一條指令。
+- Keycloak 的 client secret 與 `AUTH_SECRET` 只在 `/etc/qr-ai-lab/*.env`（root:qrlab 640）；session cookie 加密、httpOnly；access token 只在伺服器端轉給 backend。
 - 使用者資料集憑證：加密儲存、不入 log、不回前端；只以環境變數進入該 Job 容器。
 - 上傳：大小上限、副檔名白名單、串流寫檔、路徑由伺服器產生（不用使用者檔名當路徑）。
 - 所有管理員操作與 Job 狀態變更寫 `audit_logs`；UI 二次確認。

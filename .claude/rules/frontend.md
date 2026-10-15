@@ -29,7 +29,8 @@ paths:
 - 請求攔截用 `src/proxy.ts`（Next.js 16 改名，不再用 `middleware.ts`），只做未登入導向與輕量 header 處理。
 - 資料取得：Server Component 直接呼叫 `@/lib/api`（`server-only` 的 fetch wrapper，自動帶 Keycloak access token 到 FastAPI）。寫入用 Server Actions（`"use server"`，zod 驗證輸入，回傳可序列化結果，之後 `revalidatePath` / `revalidateTag`）。
 - 即時資料（job 進度、log）：client component 用 `EventSource` 訂閱 backend `/api/v1/jobs/{id}/events`（SSE）。
-- 路由分組：`(auth)` 未登入頁；`(app)` 登入後的 AppShell；admin 頁在 `(app)/admin/**`，其 layout 檢查 `role === "admin"`，否則 `notFound()`。
+- 路由分組：`(auth)` 未登入頁；`(app)` 登入後的 AppShell；admin 頁在 `(app)/admin/**`，其 layout 用 `isAdmin(user)`（admin 或 superadmin）否則 `notFound()`；頁面內更細的按鈕用 `can(user, "<perm>")`（`src/lib/roles.ts`，權限清單來自 `/me`），不要再寫 `role === "admin"`。
+- 認證：`AUTH_MODE=local` 走 `loginAction` + cookie `qr_token`；`AUTH_MODE=keycloak` 走 `src/auth.ts`（Auth.js Keycloak provider）+ 瀏覽器端 `signIn("keycloak")`（`next-auth/react`）/ `logoutAction`（server：signOut + Keycloak end-session）；`getToken()`（`src/lib/backend.ts`）依模式取 token，Route Handler 與 `apiFetch` 都只用它。登入頁上和 `AUTH_MODE` 有關的內容要放在讀 `searchParams` 的動態子樹，不能進 prerender 的殼。
 - 狀態管理：伺服器狀態靠 RSC，client 端互動列表用 TanStack Query；表單 react-hook-form + zod；不引入全域 store。
 - 型別：TypeScript strict；API 型別從 `src/types/api.ts` 取得（`npm run gen:api` 由 backend OpenAPI 產生），不手寫重複型別。
 - 檔名：所有元件與檔案 kebab-case（`status-badge.tsx` 匯出 `StatusBadge`）；hooks `use-xxx.ts`；路由資料夾 kebab-case。

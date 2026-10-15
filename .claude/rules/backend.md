@@ -14,7 +14,7 @@ paths:
 - `services/`：業務邏輯與交易邊界（一個 service 函式 = 一個 use case）。可呼叫其他 service、storage、queue。
 - `models/`：SQLAlchemy ORM（`Mapped[]` 註記 + `mapped_column`），每個聚合一個檔案；所有表繼承 `Base`（含 `id`、`created_at`、`updated_at`）。
 - `schemas/`：Pydantic v2，命名 `XxxCreate | XxxUpdate | XxxRead | XxxList`；`model_config = ConfigDict(from_attributes=True)`。
-- `core/`：`config.py`（pydantic-settings，只從環境變數讀）、`security.py`（Keycloak JWT 驗證，PyJWT + JWKS 快取；per-job token）、`deps.py`（`get_db`、`get_current_user`、`require_admin`、`require_project_role`）。
+- `core/`：`config.py`（pydantic-settings，只從環境變數讀）、`security.py`（本地 HS256 token、Keycloak JWT 驗證 PyJWT + JWKS 快取；per-job token）、`permissions.py`（三種系統角色 × 權限名稱的矩陣，唯一真相）、`deps.py`（`get_db`、`get_current_user`、`require_admin`（admin 以上）、`require_perm("<perm>")`、`project_access(min_role)`）。
 - `scheduler/`：佇列迴圈（`queue_rank`）、總資源池與配額檢查、GPU / CPU 核心分配、以主機子程序啟動（`runner.py`：systemd cgroup scope 或 subprocess + affinity）/ 監看（watchdog）/ 強制中斷 / 重啟後接回、tail log 檔推事件、清理任務；不被 routers import。
 - `storage/`：`base.py` 定義 `Storage` 介面，`local.py` 實作本機 `DATA_ROOT`（上傳串流寫檔、產物 stat / 讀取 / 刪除、目錄用量、Job 目錄準備）；所有路徑以相對 `DATA_ROOT` 儲存，絕不把使用者檔名當路徑。
 - `catalog/`：`model_catalog.yaml`（資料類型 × 任務 × 模型 × 搜尋空間）與載入器。
@@ -25,9 +25,11 @@ paths:
 - 前綴 `/api/v1`；資源複數名詞 kebab-case；列表回 `{"items": [...], "total": n, "page": p, "page_size": s}`。
 - 錯誤：`HTTPException(detail={"code": "PROJECT_NOT_FOUND", "message": "..."})`，code 用 UPPER_SNAKE；422 交給 FastAPI 預設。
 - 每個 endpoint 都要 `response_model`、`status_code`、`tags`、docstring；`tests/` 至少一個 happy path + 一個權限拒絕測試。
-- 授權順序：驗 JWT（Keycloak JWKS，快取 1 小時）→ upsert `users`（同步 realm role）→ 查專案角色。admin 可做任何事；owner / maintainer 管成員；member 建資料來源 / Job、取消本專案 Job；viewer 只讀（含看 log）。
+- 授權順序：驗 token（local HS256 或 Keycloak JWKS，快取 1 小時）→ upsert `users`（Keycloak：只有 token 帶 `KEYCLOAK_ROLE_MAP` 對應的 role 才覆蓋 `users.role`；`SUPERADMIN_USERNAMES` 永遠 superadmin）→ `require_perm` / 專案角色。superadmin 什麼都能做；admin 只有日常營運（`requests.review`、`jobs.control`、`issues.moderate`、唯讀的管理頁）；user 沒有管理操作。新 endpoint 屬於管理操作時一律用 `require_perm`，並在 `tests/test_permissions.py` 加一個 admin 被拒的案例。owner / maintainer 管成員；member 建資料來源 / Job、取消本專案 Job；viewer 只讀（含看 log）。
 - 長任務永遠非同步：endpoint 只建立 `jobs` row（status=queued，`queue_rank = max + 1000`）並回 202 + job id。
-- 管理員操作（資源池、佇列重排、強制中斷、刪 Job、改配額、改角色）只在 `/admin/*`，一律寫 `audit_logs` 並記 reason。
+- 管理員操作（資源池、佇列重排、強制中斷 / 重啟、刪 Job、GPU 重置、改配額、改角色、刪專案 / 討論串）一律寫 `audit_logs` 並記 reason。
+- 資源：Job 的 `requested_gpu_memory_mb` 決定獨占或依顯存共用（`services/gpu.py` 的 `plan` / `place`，排程器每 tick 重算）；runner 的 `thread_env()` 是原生執行緒池的唯一來源，新增變數加在那裡；使用率取樣只在排程器（`usage_svc.sample`）。
+- 資料前處理服務（`services/tools.py`）：檔案只在 `DATA_ROOT/tools/<id>/`（meta.json + data + result.zip），不建 DB 列，下載 / 刪除 / 逾時即刪；整檔處理用 `qrlab_preprocess.process.run_full`。
 - SSE：`GET /jobs/{id}/events` 從 Redis stream `job:{id}:events` 讀取；斷線可用 `Last-Event-ID` 續讀。log 歷史走 `GET /jobs/{id}/logs`（讀檔分頁）。
 - Trainer → backend 的 `/internal/*` 端點只接受 per-job token（HS256，`JOB_TOKEN_SECRET`），並驗證 token 的 job id 與路徑一致。
 

@@ -19,13 +19,13 @@
 | 層 | 選型 |
 |---|---|
 | Frontend | Next.js 16（App Router、Turbopack、`proxy.ts`）+ React 19 + TypeScript strict + Tailwind CSS v4 + shadcn/ui + next-themes + Auth.js（next-auth v5，Keycloak provider）+ npm |
-| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + uv + Ruff + pytest；過渡期本地帳號（argon2 + HS256，`AUTH_MODE=local`），Keycloak 之後接 |
+| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + uv + Ruff + pytest；`AUTH_MODE=local`（dev：argon2 + HS256 本地帳號）或 `keycloak`（prod：驗 realm JWKS、`KEYCLOAK_ROLE_MAP` 對應角色）；權限矩陣在 `app/core/permissions.py`（`require_perm`） |
 | Scheduler | 與 backend 同一套件（`app/scheduler`）：Job 是主機子程序（trainer venv），`JOB_RUNNER=auto` 優先用 `systemd-run --scope`（cgroup 限 Memory / CPU / 核心），否則 subprocess + affinity + 記憶體 watchdog；GPU 以 `CUDA_VISIBLE_DEVICES` 分配並用 pynvml 預檢；事件走 Redis（兩個程序）或記憶體（`SCHEDULER_EMBEDDED=true` 單程序）；容量上限 = 管理員設定的總資源池 |
 | Trainer | 獨立套件 `trainer/`，裝在主機的 `trainer/.venv`（torch CUDA wheel、ultralytics、transformers、Optuna、scikit-learn、XGBoost）：自行從使用者的 MinIO / URL 抓資料；**離線執行（runner 設 HF_HUB_OFFLINE 等），預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入**，由管理員經「模型庫」頁上傳 / 路徑匯入 / 內網 URL 帶進來 |
 | DB | MariaDB 11（Docker）、utf8mb4、InnoDB |
 | Storage | 本機磁碟 `DATA_ROOT`（產物、log、暫存輸入）；`backend/app/storage/` 抽象成介面，未來可換自有 MinIO |
 | 外部資料來源 | 使用者的 MinIO / S3 相容服務、HTTP(S) URL；憑證 Fernet 加密存 DB，只在 Job 容器內解密使用 |
-| Auth | 目前：本地帳號 `admin` / `user`（`POST /auth/login`）；目標：外部 Keycloak（OIDC），只存 `users`（id、角色）與專案 / 成員等業務表 |
+| Auth | dev：本地帳號 `superadmin` / `admin` / `user`（`POST /auth/login`，cookie `qr_token`）；prod：公司 Keycloak（前端 Auth.js `src/auth.ts`，登入按鈕用 `next-auth/react` 的 `signIn` 走 Authorization Code + PKCE，session cookie 內存 access / refresh / id token，`getToken()` 把 access token 轉給 FastAPI）。兩邊都用 `AUTH_MODE` 切換；只存 `users`（id、角色）與專案 / 成員等業務表。系統角色可在 `/admin/users` 調整（superadmin） |
 | Infra | docker compose 只跑 MariaDB / Redis（image 來自公司鏡像）；backend / scheduler / frontend 是 systemd 服務（`infra/systemd/`）；nginx 原生；伺服器不連外，套件來自 PyPI / npm 鏡像 |
 
 ## Monorepo 結構
@@ -56,12 +56,13 @@ npm run lint && npm run typecheck && npm test     # 提交前
 npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts（backend 建立後）
 npm run build && npm run start                    # 正式建置（BACKEND_URL 預設 http://localhost:8000）
 npm run screenshots && npm run screenshots:report  # 端到端串接測試 + 截圖 + PDF 報告（需要 backend、排程器、前端、Redis 都在跑）
-# backend（dev：SQLite 自動建表並建立 admin/admin1234、user/user1234）
+# backend（dev：SQLite 自動建表並建立 superadmin/superadmin1234、admin/admin1234、user/user1234）
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
 uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
 uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head   # MariaDB
 uv run python -m app.scheduler                    # 排程器（或 SCHEDULER_EMBEDDED=true 讓 backend 內嵌，開發時不用 Redis）；JOB_RUNNER=auto|systemd|subprocess
-uv run python -m app.cli seed|create-user|set-password|model-zoo [--verify]
+uv run python -m app.cli seed|create-user|set-password|set-role|model-zoo [--verify]
+npm run screenshots:keycloak                      # 以 AUTH_MODE=keycloak 啟動的前後端 + 假 Keycloak 跑登入 / 登出截圖
 # trainer
 cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest             # 共用前處理套件
@@ -90,7 +91,9 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
 - Artifact `kind`：`model | weights | preprocessor | report | metrics`；存 `DATA_ROOT/projects/{slug}/jobs/{job_id}/`
-- 角色：系統角色 `admin | user`（過渡期存在 `users.role`，之後來自 Keycloak realm role）；專案角色 `owner | maintainer | member | viewer`
+- 角色：系統角色 `superadmin | admin | user`（`users.role`；Keycloak 登入時依 `KEYCLOAK_ROLE_MAP` 覆蓋，否則以 UI 設定為準）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`
+- Job 的 `requested_gpu_memory_mb`：有值 = 可與其他任務依剩餘顯存共用一張 GPU（資源池 `gpu_share`，trainer 以 `set_per_process_memory_fraction` 自限）；`null` = 獨占整張
+- 前處理工具（不需專案）：`POST /tools/uploads` → `/preview` → `/process` → `/download`，檔案只在 `DATA_ROOT/tools/<id>/`，無資料庫列，下載即刪
 
 ## 全域工作規則
 
@@ -100,12 +103,14 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 4. 不留存使用者資料：上傳檔只能寫到 `DATA_ROOT/uploads/` 與 Job 的 `input/`，Job 結束（任何狀態）必刪；使用者 MinIO / URL 的憑證只在 Job 容器的環境變數出現，不回前端、不進 log。
 5. 秘密只從環境變數讀（Keycloak client secret、DB、`DATASET_SECRET_KEY`、`JOB_TOKEN_SECRET`）；log 不得含 token / 密碼。
 6. 長任務（訓練、推論）一律非同步：API 只建立 `jobs` row 並回 202，由 scheduler 依 `queue_rank` 與總資源池執行；每個 Job 都要有 log 檔與即時事件，缺一不可。
-7. 管理員能力不能繞過：總資源池、佇列重排、強制中斷都只走 `/admin/*` API 並寫 `audit_logs`。
+7. 管理員能力不能繞過：總資源池、佇列重排、強制中斷 / 重啟、GPU 重置、刪專案 / 討論串都只走對應 API、以 `require_perm` 判斷並寫 `audit_logs`；superadmin 與 admin 的差別見 `app/core/permissions.py`，前端只能隱藏按鈕。
 8. 提交前必跑：前端 `npm run lint && npm run typecheck`；後端 `uv run ruff check . && uv run pytest`；有 UI 變更再跑 `python3 scripts/design_lint.py frontend/src`。
 9. Next.js 16：用 `src/proxy.ts`（不是 `middleware.ts`）；`params`、`searchParams`、`cookies()`、`headers()` 都要 `await`；不用 Pages Router；Tailwind v4 用 CSS `@theme`，不建 `tailwind.config.js`。
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
+15. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`。
+16. 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`（節點 / 資源池 / 各專案配置與實測），管理員「使用率歷史」頁讀 `GET /admin/usage?range=`；取樣與清理都在 `app/scheduler/loop.py`，不要在 API 程序另外採樣。
 13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 14. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
