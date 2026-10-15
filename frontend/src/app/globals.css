@@ -1,0 +1,266 @@
+/* QR AI Lab design tokens — Tailwind CSS v4. Source of truth: DESIGN.md */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* 1. Raw brand scale: only this file and components/ui may reference brand-* */
+:root {
+  --brand-50: #fff5ec;
+  --brand-100: #ffe8d2;
+  --brand-200: #ffcda3;
+  --brand-300: #ffab6a;
+  --brand-400: #ff8a3d;
+  --brand-500: #ff6b1a;
+  --brand-600: #e8570d;
+  --brand-700: #c2450a;
+  --brand-800: #9a370c;
+  --brand-900: #7c2f0e;
+  --brand-950: #431505;
+  --radius: 0.625rem;
+}
+
+/* 2. Semantic tokens — light */
+:root {
+  --background: #f6f7f9;
+  --foreground: #0f1420;
+  --card: #ffffff;
+  --card-foreground: #0f1420;
+  --popover: #ffffff;
+  --popover-foreground: #0f1420;
+  --muted: #f1f3f6;
+  --muted-foreground: #525c6e;
+  --subtle-foreground: #7c8699;
+  --accent: #f1f3f6;
+  --accent-foreground: #0f1420;
+  --primary: var(--brand-500);
+  --primary-hover: var(--brand-600);
+  --primary-foreground: #1a0b02;
+  --brand-ink: var(--brand-700);
+  --secondary: #e9ecf1;
+  --secondary-foreground: #0f1420;
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+  --success: #15803d;
+  --success-foreground: #ffffff;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+  --info: #0369a1;
+  --info-foreground: #ffffff;
+  --signal: #0e7490;
+  --signal-foreground: #ffffff;
+  --border: #e3e7ee;
+  --border-strong: #cbd2dd;
+  --input: #e3e7ee;
+  --ring: var(--brand-500);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0f1420;
+  --sidebar-primary: var(--brand-500);
+  --sidebar-primary-foreground: #1a0b02;
+  --sidebar-accent: #f1f3f6;
+  --sidebar-accent-foreground: #0f1420;
+  --sidebar-border: #e3e7ee;
+  --sidebar-ring: var(--brand-500);
+  --chart-1: var(--brand-500);
+  --chart-2: #0e7490;
+  --chart-3: #6d28d9;
+  --chart-4: #15803d;
+  --chart-5: #b45309;
+}
+
+/* 3. Semantic tokens — dark (default theme) */
+.dark {
+  --background: #0a0d13;
+  --foreground: #e6eaf2;
+  --card: #10141c;
+  --card-foreground: #e6eaf2;
+  --popover: #161b25;
+  --popover-foreground: #e6eaf2;
+  --muted: #161b25;
+  --muted-foreground: #9aa4b8;
+  --subtle-foreground: #6b7589;
+  --accent: #1c2230;
+  --accent-foreground: #e6eaf2;
+  --primary: var(--brand-500);
+  --primary-hover: var(--brand-400);
+  --primary-foreground: #1a0b02;
+  --brand-ink: var(--brand-400);
+  --secondary: #1c2230;
+  --secondary-foreground: #e6eaf2;
+  --destructive: #fb7185;
+  --destructive-foreground: #0a0d13;
+  --success: #34d399;
+  --success-foreground: #0a0d13;
+  --warning: #fbbf24;
+  --warning-foreground: #0a0d13;
+  --info: #38bdf8;
+  --info-foreground: #0a0d13;
+  --signal: #22d3ee;
+  --signal-foreground: #0a0d13;
+  --border: #232a38;
+  --border-strong: #2f3849;
+  --input: #2f3849;
+  --ring: var(--brand-400);
+  --sidebar: #0d1118;
+  --sidebar-foreground: #c9d1e0;
+  --sidebar-primary: var(--brand-500);
+  --sidebar-primary-foreground: #1a0b02;
+  --sidebar-accent: #161b25;
+  --sidebar-accent-foreground: #e6eaf2;
+  --sidebar-border: #1c2230;
+  --sidebar-ring: var(--brand-400);
+  --chart-1: var(--brand-400);
+  --chart-2: #22d3ee;
+  --chart-3: #a78bfa;
+  --chart-4: #34d399;
+  --chart-5: #fbbf24;
+}
+
+/* 4. Expose tokens as Tailwind utilities (bg-card, text-brand-ink, border-border-strong, ...) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-brand-ink: var(--brand-ink);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+  --color-brand-950: var(--brand-950);
+
+  --font-sans:
+    var(--font-geist-sans), "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
+
+  --shadow-elevated: 0 1px 2px rgb(0 0 0 / 0.06), 0 12px 32px -12px rgb(0 0 0 / 0.28);
+  --shadow-glow-sm: 0 0 18px -6px color-mix(in oklab, var(--primary) 65%, transparent);
+  --shadow-glow:
+    0 0 0 1px color-mix(in oklab, var(--primary) 45%, transparent),
+    0 0 32px -6px color-mix(in oklab, var(--primary) 75%, transparent);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.8s linear infinite;
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.55;
+      transform: scale(0.85);
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -200% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+}
+
+/* 5. Base */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background font-sans text-sm text-foreground antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply tracking-tight;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 35%, transparent);
+  }
+}
+
+/* 6. Project utilities */
+@utility text-label {
+  @apply text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase;
+}
+@utility glass {
+  background-color: color-mix(in oklab, var(--background) 80%, transparent);
+  backdrop-filter: blur(12px);
+}
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--border) 70%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--border) 70%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+@utility bg-dots {
+  background-image: radial-gradient(color-mix(in oklab, var(--border-strong) 80%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+@utility skeleton {
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--muted) 25%, var(--accent) 50%, var(--muted) 75%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}

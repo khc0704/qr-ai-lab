@@ -1,0 +1,49 @@
+# 本地開發與單機部署的基礎服務。前端 / 後端 / scheduler 的 service 會在 backend 建立後加入（見 docs/ARCHITECTURE.md §13）。
+# 使用：cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml up -d
+name: qr-ai-lab
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set in infra/.env}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-qr_ai_lab}
+      MARIADB_USER: ${MARIADB_USER:-qr}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set in infra/.env}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${MARIADB_PORT:-3306}:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  # backend / scheduler / frontend / nginx：backend 建立後加入。
+
+volumes:
+  mariadb-data:
+  redis-data:
+
+networks:
+  internal:

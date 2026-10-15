@@ -44,7 +44,7 @@ qr-ai-lab/
 └─ infra/              docker-compose.yml、mariadb/、keycloak/、nginx/、trainer/
 ```
 
-frontend / backend / trainer / infra 尚未建立；建立時依上述結構與 `docs/ARCHITECTURE.md`，不要自創頂層目錄。
+frontend（第一版頁面，假資料，`src/lib/api` 為資料層）與 infra（mariadb、redis compose）已建立；backend / trainer 尚未建立。建立時依上述結構與 `docs/ARCHITECTURE.md`，不要自創頂層目錄。
 
 ## 常用指令
 
@@ -52,7 +52,8 @@ frontend / backend / trainer / infra 尚未建立；建立時依上述結構與 
 # frontend（npm，提交 package-lock.json）
 cd frontend && npm install && npm run dev        # http://localhost:3000
 npm run lint && npm run typecheck && npm test     # 提交前
-npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts
+npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts（backend 建立後）
+npm run build && npm run start                    # 正式建置；npm run screenshots 需要已啟動的 server
 # backend
 cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
 uv run ruff check . && uv run ruff format . && uv run pytest
@@ -101,4 +102,5 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - `docs/ARCHITECTURE.md`：系統架構、認證流程、申請審批、資料不留存政策、Job 生命週期與佇列、資源池、log、儲存配置、API 清單、部署。
 - `docs/DATABASE.md`：資料表定義、索引、狀態機。
 - `docs/MODEL_CATALOG.md`：資料類型 × 任務 × 模型 × AutoML 搜尋空間；也是給使用者看的 SOP 底稿。
+- `docs/GETTING_STARTED.md`：pull 之後從零啟動前端、基礎服務、後端的 SOP；`docs/screenshots/`：各頁截圖。
 - `.claude/rules/frontend.md`、`backend.md`、`database.md`：動到對應路徑時自動載入的細部慣例。

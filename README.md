@@ -25,4 +25,4 @@
 
 ## 狀態
 
-規劃階段。`frontend/`、`backend/`、`trainer/`、`infra/` 尚未建立，依 CLAUDE.md 的結構逐步建立。
+前端第一版頁面已完成（Next.js 16、假資料；見 `docs/screenshots/`），`infra/` 有 MariaDB 與 Redis 的 compose；`backend/`、`trainer/` 尚未建立。本地啟動流程見 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。

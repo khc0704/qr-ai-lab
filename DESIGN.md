@@ -188,12 +188,12 @@
 ├──────────────┤                                                │
 │ ● 王小明 admin│                                                │ ← Sidebar footer 使用者卡
 └──────────────┴────────────────────────────────────────────────┘
-   w-64 ⇄ w-14（收合只剩 icon + tooltip）
+   w-64 ⇄ w-12（收合只剩 icon + tooltip）
 ```
 
 ### 7.1 Sidebar（shadcn `Sidebar`，`collapsible="icon"`）
 
-- 寬度：展開 `16rem`、收合 `3.5rem`。狀態存 cookie（名稱取安裝後 `sidebar.tsx` 的 `SIDEBAR_COOKIE_NAME`），`(app)/layout.tsx` 讀 cookie 設 `defaultOpen`，避免 SSR 閃爍；快捷鍵 `⌘B` / `Ctrl+B`。
+- 寬度：展開 `16rem`、收合 `3rem`（shadcn 預設）。狀態由 `SidebarProvider` 寫入 cookie `sidebar_state`；Cache Components 下 layout 不能讀 `cookies()`（會讓整個 app 阻塞），所以由 `components/layout/sidebar-state-sync.tsx` 在 client 掛載後讀同一個 cookie 還原（已收合的使用者會有一次展開→收合的閃動，可接受）。快捷鍵 `⌘B` / `Ctrl+B`。
 - 底色 `bg-sidebar`，右側 `border-sidebar-border`。
 - Header：品牌標誌（`size-8 rounded-md bg-primary text-primary-foreground shadow-glow-sm` 內放簡寫符號）+ 「QR AI Lab」（`font-semibold tracking-tight`，收合時隱藏）。
 - 群組：`主選單`（首頁、討論區、專案申請、專案）、`管理`（Dashboard、申請審核、佇列、使用者、專案配額、稽核紀錄；僅 admin 可見）。群組名用 `text-label`。
@@ -355,6 +355,7 @@
 - 主題切換 UI：sidebar 使用者選單 + topbar 按鈕（`Sun` / `Moon` / `Monitor`）。
 - 圖表：Recharts 顏色一律 `var(--chart-1)`…`var(--chart-5)`，格線 `var(--border)`，tooltip 用 `bg-popover`。
 - 品牌標誌 SVG 用 `currentColor` 或 token；不內嵌固定色。
+- Cache Components（`next.config.ts` 的 `cacheComponents: true`）：任何讀 `params` / `searchParams` / `cookies()` / `headers()` 的 Server Component，以及呼叫 `usePathname()` / `useSearchParams()` 的 Client Component，都必須包在 `<Suspense>` 裡，fallback 用 Skeleton 或「無作用中狀態」的同一個元件（範例：`components/layout/breadcrumbs.tsx`、`app-sidebar.tsx` 的 `NavGroup`、`projects/[slug]/project-tabs.tsx`）。伺服器端渲染不能讀時鐘或亂數（`new Date()`、`Math.random()` 會讓 build 失敗），改放 client 元件並用 `useSyncExternalStore` 給伺服器一個穩定值（範例：`components/features/greeting.tsx`）。
 
 ## 11. 無障礙
 
@@ -704,19 +705,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-`src/app/(app)/layout.tsx` 骨架：
+`src/app/(app)/layout.tsx` 骨架（不讀 cookie；見 §10 Cache Components）：
 
 ```tsx
-import { cookies } from "next/headers";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
+import { SidebarStateSync } from "@/components/layout/sidebar-state-sync";
 import { Topbar } from "@/components/layout/topbar";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const cookieStore = await cookies();
-  const defaultOpen = cookieStore.get("sidebar_state")?.value !== "false"; // 名稱以 sidebar.tsx 的 SIDEBAR_COOKIE_NAME 為準
   return (
-    <SidebarProvider defaultOpen={defaultOpen}>
+    <SidebarProvider>
+      <SidebarStateSync />
       <AppSidebar />
       <SidebarInset>
         <Topbar />
