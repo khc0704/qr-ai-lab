@@ -11,7 +11,15 @@ import { RelativeTime } from "@/components/features/time";
 import { updateUserAction } from "@/lib/actions";
 import type { User } from "@/types/domain";
 
-export function UsersTable({ users, currentUserId }: { users: User[]; currentUserId: number }) {
+export function UsersTable({
+  users,
+  currentUserId,
+  canManage,
+}: {
+  users: User[];
+  currentUserId: number;
+  canManage: boolean;
+}) {
   const [pending, startTransition] = useTransition();
   const update = (u: User, body: { role?: string; is_active?: boolean }, done: string) =>
     startTransition(async () => {
@@ -38,20 +46,26 @@ export function UsersTable({ users, currentUserId }: { users: User[]; currentUse
               <TableCell>
                 <UserInline user={u} />
               </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">{u.username}</TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {u.username}
+                {u.authProvider === "keycloak" ? (
+                  <span className="ml-1 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">keycloak</span>
+                ) : null}
+              </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground">{u.email}</TableCell>
               <TableCell>
                 <Select
                   value={u.role}
-                  disabled={pending || u.id === currentUserId}
+                  disabled={pending || !canManage || u.id === currentUserId}
                   onValueChange={(v) =>
                     update(u, { role: v }, `${u.displayName} → ${systemRoleLabel[v as User["role"]]}`)
                   }
                 >
-                  <SelectTrigger size="sm" className="w-28">
+                  <SelectTrigger size="sm" className="w-32" aria-label={`${u.displayName} 的系統角色`}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="superadmin">{systemRoleLabel.superadmin}</SelectItem>
                     <SelectItem value="admin">{systemRoleLabel.admin}</SelectItem>
                     <SelectItem value="user">{systemRoleLabel.user}</SelectItem>
                   </SelectContent>
@@ -60,7 +74,7 @@ export function UsersTable({ users, currentUserId }: { users: User[]; currentUse
               <TableCell>
                 <Switch
                   checked={u.isActive}
-                  disabled={pending || u.id === currentUserId}
+                  disabled={pending || !canManage || u.id === currentUserId}
                   aria-label={`啟用 ${u.displayName}`}
                   onCheckedChange={(c) => update(u, { is_active: c }, `${u.displayName} 已${c ? "啟用" : "停用"}`)}
                 />

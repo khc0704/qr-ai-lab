@@ -13,13 +13,18 @@ import type { Upload } from "@/types/domain";
 
 export function Dropzone({
   slug,
+  endpoint,
   onUploaded,
   accept,
   hint,
   className,
 }: {
-  slug: string;
-  onUploaded: (upload: Upload | null) => void;
+  /** Project upload (default endpoint /api/upload/{slug}). */
+  slug?: string;
+  /** Override the upload URL (the standalone preprocessing tool posts to /api/tools/upload). */
+  endpoint?: string;
+  /** `raw` is the backend's JSON as-is (the tool endpoint returns a string id the Upload type cannot hold). */
+  onUploaded: (upload: Upload | null, raw?: Record<string, unknown>) => void;
   accept?: string;
   hint?: string;
   className?: string;
@@ -36,7 +41,8 @@ export function Dropzone({
     try {
       const form = new FormData();
       form.append("file", f);
-      const res = await fetch(`/api/upload/${encodeURIComponent(slug)}`, { method: "POST", body: form });
+      const url = endpoint ?? `/api/upload/${encodeURIComponent(slug ?? "")}`;
+      const res = await fetch(url, { method: "POST", body: form });
       const json = (await res.json()) as Record<string, unknown>;
       if (!res.ok) {
         const d = json.detail as { message?: string } | string | undefined;
@@ -44,7 +50,7 @@ export function Dropzone({
       }
       const up = toUpload(json);
       setUpload(up);
-      onUploaded(up);
+      onUploaded(up, json);
       toast.success(`已上傳 ${up.originalFilename}`);
     } catch (e) {
       setFile(null);

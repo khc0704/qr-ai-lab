@@ -17,6 +17,7 @@ import {
   toPreprocessOp,
   toProject,
   toRequest,
+  toUsageHistory,
   toUser,
   toZooEntry,
   toZooTask
@@ -39,6 +40,8 @@ import type {
   Project,
   ProjectRequest,
   ResourcePool,
+  UsageHistory,
+  UsageRange,
   User,
   ZooTask
 } from "@/types/domain";
@@ -167,6 +170,11 @@ export async function getResourcePool(): Promise<ResourcePool> {
 
 export async function getNodeStatus(): Promise<NodeStatus> {
   return toNode(await apiFetch<J>("/admin/node"));
+}
+
+/** Sampled node / pool / per-project usage for the admin history page. */
+export async function getUsageHistory(range: UsageRange = "24h"): Promise<UsageHistory> {
+  return toUsageHistory(await apiFetch<J>(`/admin/usage${q({ range })}`));
 }
 
 export async function listAuditLogs(limit = 50): Promise<AuditLog[]> {

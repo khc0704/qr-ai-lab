@@ -1,6 +1,16 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, CircleX, Download, FolderInput, LoaderCircle, RefreshCw, Trash2, Upload } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleAlert,
+  CircleX,
+  Download,
+  FolderInput,
+  LoaderCircle,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
@@ -27,7 +37,11 @@ import type { ModelZooEntry, ZooStatus } from "@/types/domain";
 const statusMeta: Record<ZooStatus, { label: string; className: string; icon: typeof CheckCircle2 }> = {
   present: { label: "已就緒", className: "bg-success/10 text-success border-success/30", icon: CheckCircle2 },
   missing: { label: "缺少", className: "bg-muted text-muted-foreground border-border", icon: CircleAlert },
-  mismatch: { label: "sha256 不符", className: "bg-destructive/10 text-destructive border-destructive/30", icon: CircleX },
+  mismatch: {
+    label: "sha256 不符",
+    className: "bg-destructive/10 text-destructive border-destructive/30",
+    icon: CircleX,
+  },
   importing: { label: "匯入中", className: "bg-info/10 text-info border-info/30", icon: LoaderCircle },
   error: { label: "匯入失敗", className: "bg-destructive/10 text-destructive border-destructive/30", icon: CircleX },
 };
@@ -36,14 +50,24 @@ function StatusPill({ status }: { status: ZooStatus }) {
   const m = statusMeta[status];
   const Icon = m.icon;
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", m.className)}>
+    <span
+      className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", m.className)}
+    >
       <Icon className={cn("size-3.5", status === "importing" && "animate-spin")} />
       {m.label}
     </span>
   );
 }
 
-export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; verified: boolean }) {
+export function ZooTable({
+  entries,
+  verified,
+  canManage = true,
+}: {
+  entries: ModelZooEntry[];
+  verified: boolean;
+  canManage?: boolean;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [uploading, setUploading] = useState<string | null>(null);
@@ -66,7 +90,10 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
     try {
       const form = new FormData();
       form.append("file", file, file.name);
-      const res = await fetch(`/api/admin/model-zoo/${encodeURIComponent(entry.id)}/upload`, { method: "POST", body: form });
+      const res = await fetch(`/api/admin/model-zoo/${encodeURIComponent(entry.id)}/upload`, {
+        method: "POST",
+        body: form,
+      });
       const data = (await res.json()) as { detail?: { message?: string } };
       if (!res.ok) throw new Error(data.detail?.message ?? `HTTP ${res.status}`);
       toast.success(`${entry.id} 已匯入模型庫`);
@@ -81,7 +108,11 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
   const submitImport = () =>
     startTransition(async () => {
       if (!importTarget) return;
-      const r = await importWeightAction(importTarget.id, { source, url: source === "url" ? url.trim() : undefined, path: source === "path" ? path.trim() : undefined });
+      const r = await importWeightAction(importTarget.id, {
+        source,
+        url: source === "url" ? url.trim() : undefined,
+        path: source === "path" ? path.trim() : undefined,
+      });
       if (!r.ok) toast.error(r.error);
       else {
         toast.success("已開始匯入，完成後會更新狀態");
@@ -147,59 +178,74 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
                       <span className="text-[11px] text-destructive">{e.task.message}</span>
                     ) : null}
                     {e.sha256Actual ? (
-                      <span className="font-mono text-[11px] text-muted-foreground">sha256 {e.sha256Actual.slice(0, 12)}…</span>
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        sha256 {e.sha256Actual.slice(0, 12)}…
+                      </span>
                     ) : null}
                   </div>
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs tabular-nums">
                   {e.sizeBytes ? formatBytes(e.sizeBytes) : "—"}
                 </TableCell>
-                <TableCell className="truncate font-mono text-xs text-muted-foreground" title={e.importedFrom ?? e.source}>
+                <TableCell
+                  className="truncate font-mono text-xs text-muted-foreground"
+                  title={e.importedFrom ?? e.source}
+                >
                   {e.importedFrom ?? e.source ?? "—"}
                   {e.importedAt ? <div>{e.importedAt.slice(0, 16).replace("T", " ")}</div> : null}
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="flex justify-end gap-1">
-                    <input
-                      type="file"
-                      className="hidden"
-                      ref={(el) => {
-                        inputs.current[e.id] = el;
-                      }}
-                      accept={e.kind === "hf_repo" ? ".zip,.tar,.tar.gz,.tgz" : undefined}
-                      onChange={(ev) => {
-                        const f = ev.target.files?.[0];
-                        if (f) void upload(e, f);
-                        ev.target.value = "";
-                      }}
-                      data-testid={`zoo-upload-${e.id}`}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="上傳"
-                      title="從瀏覽器上傳"
-                      disabled={uploading === e.id || e.status === "importing"}
-                      onClick={() => inputs.current[e.id]?.click()}
-                    >
-                      {uploading === e.id ? <LoaderCircle className="animate-spin" /> : <Upload />}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="匯入"
-                      title="從伺服器路徑或內網 URL 匯入"
-                      disabled={e.status === "importing"}
-                      onClick={() => setImportTarget(e)}
-                    >
-                      <FolderInput />
-                    </Button>
-                    {e.present ? (
-                      <Button variant="ghost" size="icon-sm" aria-label="移除" disabled={pending} onClick={() => remove(e)}>
-                        <Trash2 />
+                  {!canManage ? (
+                    <span className="text-xs text-muted-foreground">僅 superadmin</span>
+                  ) : (
+                    <div className="flex justify-end gap-1">
+                      <input
+                        type="file"
+                        className="hidden"
+                        ref={(el) => {
+                          inputs.current[e.id] = el;
+                        }}
+                        accept={e.kind === "hf_repo" ? ".zip,.tar,.tar.gz,.tgz" : undefined}
+                        onChange={(ev) => {
+                          const f = ev.target.files?.[0];
+                          if (f) void upload(e, f);
+                          ev.target.value = "";
+                        }}
+                        data-testid={`zoo-upload-${e.id}`}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="上傳"
+                        title="從瀏覽器上傳"
+                        disabled={uploading === e.id || e.status === "importing"}
+                        onClick={() => inputs.current[e.id]?.click()}
+                      >
+                        {uploading === e.id ? <LoaderCircle className="animate-spin" /> : <Upload />}
                       </Button>
-                    ) : null}
-                  </div>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="匯入"
+                        title="從伺服器路徑或內網 URL 匯入"
+                        disabled={e.status === "importing"}
+                        onClick={() => setImportTarget(e)}
+                      >
+                        <FolderInput />
+                      </Button>
+                      {e.present ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="移除"
+                          disabled={pending}
+                          onClick={() => remove(e)}
+                        >
+                          <Trash2 />
+                        </Button>
+                      ) : null}
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

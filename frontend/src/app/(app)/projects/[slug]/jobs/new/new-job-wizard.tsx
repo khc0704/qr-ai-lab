@@ -118,11 +118,14 @@ export function NewJobWizard({
 }) {
   const router = useRouter();
   const isTrain = kind === "train";
-  const steps = isTrain ? ["資料", "欄位與前處理", "模式", "模型與參數", "資源", "確認"] : ["模型", "輸入", "資源", "確認"];
+  const steps = isTrain
+    ? ["資料", "欄位與前處理", "模式", "模型與參數", "資源", "確認"]
+    : ["模型", "輸入", "資源", "確認"];
   const compatible = familiesFor(catalog, project.dataType, project.taskType);
   const auto = automlCandidates(catalog, project.dataType, project.taskType);
   const cloneSpec = (cloneFrom?.input.spec ?? {}) as Record<string, unknown>;
-  const cloneSearch = cloneFrom?.config?.search as { candidates?: string[]; max_trials?: number; time_budget_minutes?: number } | undefined;
+  const cloneSearch = cloneFrom?.config?.search as
+    { candidates?: string[]; max_trials?: number; time_budget_minutes?: number } | undefined;
 
   const [step, setStep] = useState(0);
   const [name, setName] = useState(cloneFrom ? `${cloneFrom.name}-copy` : "");
@@ -131,7 +134,9 @@ export function NewJobWizard({
   );
   const [sourceId, setSourceId] = useState<number | null>(cloneFrom?.dataSourceId ?? sources[0]?.id ?? null);
   const [upload, setUpload] = useState<Upload | null>(null);
-  const [inlineText, setInlineText] = useState(cloneFrom?.input.rows ? JSON.stringify(cloneFrom.input.rows, null, 1) : "");
+  const [inlineText, setInlineText] = useState(
+    cloneFrom?.input.rows ? JSON.stringify(cloneFrom.input.rows, null, 1) : "",
+  );
   const [spec, setSpec] = useState<Record<string, string>>(
     Object.fromEntries(
       Object.entries(cloneSpec)
@@ -139,7 +144,9 @@ export function NewJobWizard({
         .map(([k, v]) => [k, String(v)]),
     ),
   );
-  const [preprocess, setPreprocess] = useState<PreprocessStep[]>((cloneSpec.preprocess as PreprocessStep[] | undefined) ?? []);
+  const [preprocess, setPreprocess] = useState<PreprocessStep[]>(
+    (cloneSpec.preprocess as PreprocessStep[] | undefined) ?? [],
+  );
   const [mode, setMode] = useState<"auto" | "manual">(cloneFrom?.mode ?? (auto ? "auto" : "manual"));
   const [family, setFamily] = useState<string>(cloneFrom?.modelFamily ?? compatible[0] ?? "");
   const [candidates, setCandidates] = useState<string[]>(cloneSearch?.candidates ?? auto?.candidates ?? compatible);
@@ -158,9 +165,12 @@ export function NewJobWizard({
     cloneFrom?.artifactId ?? models.find((m) => m.isDefault)?.id ?? models[0]?.id ?? null,
   );
   const selectedModel = models.find((m) => m.id === modelId);
-  const inferenceModes = (selectedModel?.inferenceModes.length ? selectedModel.inferenceModes : ["predict"]) as InferenceMode[];
+  const inferenceModes = (
+    selectedModel?.inferenceModes.length ? selectedModel.inferenceModes : ["predict"]
+  ) as InferenceMode[];
   const [inferMode, setInferMode] = useState<string>((cloneFrom?.config?.mode as string | undefined) ?? "");
-  const effectiveMode = inferMode && inferenceModes.includes(inferMode as InferenceMode) ? inferMode : inferenceModes[0];
+  const effectiveMode =
+    inferMode && inferenceModes.includes(inferMode as InferenceMode) ? inferMode : inferenceModes[0];
   const [pending, startTransition] = useTransition();
 
   const gpuOf = (f: string) => catalog.families[f]?.resources.gpu === "required";
@@ -174,6 +184,7 @@ export function NewJobWizard({
     gpu: cloneFrom?.requestedGpu ?? Math.min(needsGpu ? 1 : 0, project.gpuLimit),
     cpu: cloneFrom?.requestedCpu ?? Math.min(2, project.cpuLimit),
     memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(4096, project.memoryLimitMb),
+    gpuMemoryMb: cloneFrom?.requestedGpuMemoryMb ?? 0,
     timeout: cloneFrom?.timeoutMinutes ?? project.defaultTimeout,
   });
   const overQuota = res.gpu > project.gpuLimit || res.cpu > project.cpuLimit || res.memoryMb > project.memoryLimitMb;
@@ -197,7 +208,7 @@ export function NewJobWizard({
           rows = JSON.parse(inlineText || "[]") as unknown[];
           if (!Array.isArray(rows) || rows.length === 0) throw new Error("rows");
         } catch {
-          toast.error("直接輸入必須是 JSON 陣列，例如 [{\"x1\": 1.2}]");
+          toast.error('直接輸入必須是 JSON 陣列，例如 [{"x1": 1.2}]');
           return;
         }
       }
@@ -230,6 +241,7 @@ export function NewJobWizard({
         requested_gpu: res.gpu,
         requested_cpu: res.cpu,
         requested_memory_mb: res.memoryMb,
+        requested_gpu_memory_mb: res.gpu > 0 && res.gpuMemoryMb > 0 ? res.gpuMemoryMb : null,
         timeout_minutes: res.timeout,
       };
       const r = await createJobAction(project.slug, body);
@@ -243,7 +255,11 @@ export function NewJobWizard({
 
   const canProceed = () => {
     const dataOk =
-      inputKind === "upload" ? Boolean(upload) : inputKind === "data_source" ? Boolean(sourceId) : inlineText.trim().length > 0;
+      inputKind === "upload"
+        ? Boolean(upload)
+        : inputKind === "data_source"
+          ? Boolean(sourceId)
+          : inlineText.trim().length > 0;
     if (isTrain) {
       if (step === 0) return dataOk;
       if (step === 3) return mode === "auto" ? candidates.length > 0 : Boolean(family);
@@ -302,7 +318,13 @@ export function NewJobWizard({
                   sourceId === s.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
                 )}
               >
-                <input type="radio" name="source" className="accent-current" checked={sourceId === s.id} onChange={() => setSourceId(s.id)} />
+                <input
+                  type="radio"
+                  name="source"
+                  className="accent-current"
+                  checked={sourceId === s.id}
+                  onChange={() => setSourceId(s.id)}
+                />
                 <span className="font-medium">{s.name}</span>
                 <SourceKindChip kind={s.kind} />
                 <span className="font-mono text-xs text-muted-foreground">{s.format}</span>
@@ -412,8 +434,18 @@ export function NewJobWizard({
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2">
         {[
-          { v: "auto" as const, t: "自動（AutoML）", d: "推薦。候選模型 + Optuna 搜尋，結束後給 leaderboard 與最佳模型。", disabled: !auto },
-          { v: "manual" as const, t: "手動", d: "指定一個模型家族與參數。適合已經知道要什麼的時候。", disabled: compatible.length === 0 },
+          {
+            v: "auto" as const,
+            t: "自動（AutoML）",
+            d: "推薦。候選模型 + Optuna 搜尋，結束後給 leaderboard 與最佳模型。",
+            disabled: !auto,
+          },
+          {
+            v: "manual" as const,
+            t: "手動",
+            d: "指定一個模型家族與參數。適合已經知道要什麼的時候。",
+            disabled: compatible.length === 0,
+          },
         ].map((o) => (
           <button
             key={o.v}
@@ -434,7 +466,10 @@ export function NewJobWizard({
   );
 
   const familyParams = (f: string) =>
-    Object.entries(catalog.families[f]?.defaults ?? {}).map(([key, def]) => ({ key, def: def === null ? "" : String(def) }));
+    Object.entries(catalog.families[f]?.defaults ?? {}).map(([key, def]) => ({
+      key,
+      def: def === null ? "" : String(def),
+    }));
 
   const modelStep =
     mode === "auto" ? (
@@ -457,7 +492,9 @@ export function NewJobWizard({
                   onClick={() => setCandidates(on ? candidates.filter((c) => c !== f) : [...candidates, f])}
                   className={cn(
                     "rounded-md border px-3 py-1.5 text-sm transition-colors",
-                    on ? "border-primary/50 bg-primary/10 text-brand-ink" : "border-border text-muted-foreground hover:bg-accent",
+                    on
+                      ? "border-primary/50 bg-primary/10 text-brand-ink"
+                      : "border-border text-muted-foreground hover:bg-accent",
                   )}
                 >
                   {familyLabel(f)}
@@ -470,11 +507,25 @@ export function NewJobWizard({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="trials">最多 trial 數</Label>
-              <Input id="trials" type="number" min={1} className="text-right font-mono" value={budget.trials} onChange={(e) => setBudget({ ...budget, trials: Number(e.target.value) })} />
+              <Input
+                id="trials"
+                type="number"
+                min={1}
+                className="text-right font-mono"
+                value={budget.trials}
+                onChange={(e) => setBudget({ ...budget, trials: Number(e.target.value) })}
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="minutes">時間預算（分鐘）</Label>
-              <Input id="minutes" type="number" min={1} className="text-right font-mono" value={budget.minutes} onChange={(e) => setBudget({ ...budget, minutes: Number(e.target.value) })} />
+              <Input
+                id="minutes"
+                type="number"
+                min={1}
+                className="text-right font-mono"
+                value={budget.minutes}
+                onChange={(e) => setBudget({ ...budget, minutes: Number(e.target.value) })}
+              />
             </div>
           </div>
         </CardContent>
@@ -534,7 +585,9 @@ export function NewJobWizard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-2">
-          {models.length === 0 ? <p className="text-sm text-muted-foreground">還沒有模型，先完成一個訓練任務。</p> : null}
+          {models.length === 0 ? (
+            <p className="text-sm text-muted-foreground">還沒有模型，先完成一個訓練任務。</p>
+          ) : null}
           {models.map((m) => (
             <label
               key={m.id}
@@ -543,12 +596,20 @@ export function NewJobWizard({
                 modelId === m.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
               )}
             >
-              <input type="radio" name="model" className="accent-current" checked={modelId === m.id} onChange={() => setModelId(m.id)} />
+              <input
+                type="radio"
+                name="model"
+                className="accent-current"
+                checked={modelId === m.id}
+                onChange={() => setModelId(m.id)}
+              />
               <span className="font-medium">{m.name}</span>
               <span className="font-mono text-xs text-muted-foreground">
                 v{m.version} · {m.family}
               </span>
-              {m.isDefault ? <span className="ml-auto rounded-sm bg-primary/10 px-1.5 text-[11px] text-brand-ink">預設</span> : null}
+              {m.isDefault ? (
+                <span className="ml-auto rounded-sm bg-primary/10 px-1.5 text-[11px] text-brand-ink">預設</span>
+              ) : null}
             </label>
           ))}
         </div>
@@ -589,7 +650,15 @@ export function NewJobWizard({
       <CardContent className="grid gap-4 sm:grid-cols-4">
         <div className="grid gap-2">
           <Label htmlFor="r-gpu">GPU</Label>
-          <Input id="r-gpu" type="number" min={0} className="text-right font-mono" value={res.gpu} onChange={(e) => setRes({ ...res, gpu: Number(e.target.value) })} aria-invalid={res.gpu > project.gpuLimit || (needsGpu && res.gpu === 0)} />
+          <Input
+            id="r-gpu"
+            type="number"
+            min={0}
+            className="text-right font-mono"
+            value={res.gpu}
+            onChange={(e) => setRes({ ...res, gpu: Number(e.target.value) })}
+            aria-invalid={res.gpu > project.gpuLimit || (needsGpu && res.gpu === 0)}
+          />
           {res.gpu > project.gpuLimit ? (
             <p className="text-xs text-destructive">超過配額 {project.gpuLimit}</p>
           ) : needsGpu && res.gpu === 0 ? (
@@ -598,17 +667,67 @@ export function NewJobWizard({
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-cpu">CPU 核</Label>
-          <Input id="r-cpu" type="number" min={1} className="text-right font-mono" value={res.cpu} onChange={(e) => setRes({ ...res, cpu: Number(e.target.value) })} aria-invalid={res.cpu > project.cpuLimit} />
+          <Input
+            id="r-cpu"
+            type="number"
+            min={1}
+            className="text-right font-mono"
+            value={res.cpu}
+            onChange={(e) => setRes({ ...res, cpu: Number(e.target.value) })}
+            aria-invalid={res.cpu > project.cpuLimit}
+          />
           {res.cpu > project.cpuLimit ? <p className="text-xs text-destructive">超過配額 {project.cpuLimit}</p> : null}
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-mem">Memory (MB)</Label>
-          <Input id="r-mem" type="number" step={1024} className="text-right font-mono" value={res.memoryMb} onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })} aria-invalid={res.memoryMb > project.memoryLimitMb} />
-          <p className={cn("text-xs", res.memoryMb > project.memoryLimitMb ? "text-destructive" : "text-muted-foreground")}>{formatMb(res.memoryMb || 0)}</p>
+          <Input
+            id="r-mem"
+            type="number"
+            step={1024}
+            className="text-right font-mono"
+            value={res.memoryMb}
+            onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })}
+            aria-invalid={res.memoryMb > project.memoryLimitMb}
+          />
+          <p
+            className={cn(
+              "text-xs",
+              res.memoryMb > project.memoryLimitMb ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {formatMb(res.memoryMb || 0)}
+          </p>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="r-vram">每張 GPU 需要的顯存（MB，選填）</Label>
+          <Input
+            id="r-vram"
+            type="number"
+            step={1024}
+            min={0}
+            className="text-right font-mono"
+            value={res.gpuMemoryMb}
+            disabled={res.gpu === 0}
+            onChange={(e) => setRes({ ...res, gpuMemoryMb: Number(e.target.value) })}
+          />
+          <p className="text-xs text-muted-foreground">
+            {res.gpu === 0
+              ? "不用 GPU。"
+              : res.gpuMemoryMb > 0
+                ? `只要 GPU 還有 ${formatMb(res.gpuMemoryMb)} 顯存就能排上去，可與其他任務共用同一張；程序內會以此為上限。`
+                : "留 0 = 獨占整張 GPU（等到有整張空的才開始）。"}
+          </p>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-to">逾時（分鐘）</Label>
-          <Input id="r-to" type="number" min={1} className="text-right font-mono" value={res.timeout} onChange={(e) => setRes({ ...res, timeout: Number(e.target.value) })} />
+          <Input
+            id="r-to"
+            type="number"
+            min={1}
+            className="text-right font-mono"
+            value={res.timeout}
+            onChange={(e) => setRes({ ...res, timeout: Number(e.target.value) })}
+          />
         </div>
       </CardContent>
     </Card>
@@ -625,7 +744,9 @@ export function NewJobWizard({
           <Label htmlFor="job-name">任務名稱</Label>
           <Input
             id="job-name"
-            placeholder={isTrain ? (mode === "auto" ? "automl-run-1" : `${family.split(".")[1]}-run-1`) : "batch-infer-1"}
+            placeholder={
+              isTrain ? (mode === "auto" ? "automl-run-1" : `${family.split(".")[1]}-run-1`) : "batch-infer-1"
+            }
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -668,7 +789,8 @@ export function NewJobWizard({
           )}
           <dt className="text-label">資源</dt>
           <dd className="font-mono text-xs tabular-nums">
-            {res.gpu} GPU · {res.cpu} CPU · {formatMb(res.memoryMb)} · 逾時 {res.timeout} 分鐘
+            {res.gpu} GPU{res.gpu > 0 && res.gpuMemoryMb > 0 ? `（各 ${formatMb(res.gpuMemoryMb)} 顯存，可共用）` : ""}{" "}
+            · {res.cpu} CPU · {formatMb(res.memoryMb)} · 逾時 {res.timeout} 分鐘
           </dd>
         </dl>
       </CardContent>

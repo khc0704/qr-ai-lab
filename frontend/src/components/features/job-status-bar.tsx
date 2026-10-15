@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { jobStageLabel } from "@/i18n/zh-TW";
 import { cancelJobAction } from "@/lib/actions";
+import { isAdminRole } from "@/lib/roles";
 import { Duration } from "@/components/features/time";
 import { formatMb } from "@/lib/format";
 import type { Job } from "@/types/domain";
@@ -57,6 +58,7 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
           <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5">
             <HardDrive className="size-3" />
             {job.requestedGpu} GPU{job.assignedGpus?.length ? ` [${job.assignedGpus.join(",")}]` : ""}
+            {job.requestedGpu > 0 && job.requestedGpuMemoryMb ? ` · ${formatMb(job.requestedGpuMemoryMb)} VRAM` : ""}
           </span>
           <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5">
             <Cpu className="size-3" />
@@ -78,7 +80,7 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
         <Alert className="border-warning/30 bg-warning/10 text-warning">
           <Ban />
           <AlertTitle>
-            此任務由{job.cancelRequestedBy?.role === "admin" ? "管理員" : ""}
+            此任務由{isAdminRole(job.cancelRequestedBy?.role) ? "管理員" : ""}
             {job.cancelRequestedBy ? ` ${job.cancelRequestedBy.displayName}` : ""} 取消
           </AlertTitle>
           <AlertDescription className="text-warning/90">{job.cancelReason}</AlertDescription>

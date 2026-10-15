@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { issueTypeLabel } from "@/i18n/zh-TW";
 import { getIssue, listComments } from "@/lib/api";
-import { getCurrentUser, isAdmin } from "@/lib/session";
+import { can, getCurrentUser, isAdmin } from "@/lib/session";
 import Link from "next/link";
 
 async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -46,10 +46,7 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
         <span className="text-subtle-foreground">無</span>
       ),
     ],
-    [
-      "建立",
-      <RelativeTime key="c" iso={issue.createdAt} className="font-mono text-xs" />,
-    ],
+    ["建立", <RelativeTime key="c" iso={issue.createdAt} className="font-mono text-xs" />],
   ];
 
   return (
@@ -58,7 +55,9 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
         eyebrow={`#${issue.id} · ${issueTypeLabel[issue.type]}`}
         title={issue.title}
         actions={
-          admin ? <IssueAdminActions id={issue.id} status={issue.status} /> : null
+          admin ? (
+            <IssueAdminActions id={issue.id} status={issue.status} canDelete={can(user, "issues.moderate")} />
+          ) : null
         }
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">

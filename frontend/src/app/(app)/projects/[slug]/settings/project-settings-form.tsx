@@ -1,6 +1,7 @@
 "use client";
 
-import { Archive, Save } from "lucide-react";
+import { Archive, Save, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
@@ -18,23 +19,37 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { archiveProjectAction, updateProjectAction } from "@/lib/actions";
+import { archiveProjectAction, deleteProjectAction, updateProjectAction } from "@/lib/actions";
 
 export function ProjectSettingsForm({
   name,
   description,
   slug,
   archived,
+  canDelete = false,
 }: {
   name: string;
   description: string;
   slug: string;
   archived: boolean;
+  canDelete?: boolean;
 }) {
+  const router = useRouter();
   const [n, setN] = useState(name);
   const [d, setD] = useState(description);
   const [open, setOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [typed, setTyped] = useState("");
   const [pending, startTransition] = useTransition();
+  const remove = () =>
+    startTransition(async () => {
+      const r = await deleteProjectAction(slug);
+      if (!r.ok) toast.error(r.error);
+      else {
+        toast.success(`專案 ${name} 已刪除`);
+        router.push("/projects");
+      }
+    });
   const dirty = n !== name || d !== description;
   const save = () =>
     startTransition(async () => {
@@ -86,6 +101,43 @@ export function ProjectSettingsForm({
           </Button>
         </CardContent>
       </Card>
+      {canDelete ? (
+        <Card className="border-destructive/50">
+          <CardHeader>
+            <CardTitle>刪除專案</CardTitle>
+            <CardDescription>
+              superadmin 專用。刪除任務、產物、log、資料來源設定與成員，資料夾一併移除，無法復原；還有未結束的任務時會拒絕。
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button variant="destructive" onClick={() => setConfirmDelete(true)} data-testid="delete-project">
+              <Trash2 />
+              刪除專案
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+      <AlertDialog open={confirmDelete} onOpenChange={(o) => (setConfirmDelete(o), setTyped(""))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>刪除 {name}？</AlertDialogTitle>
+            <AlertDialogDescription>
+              請輸入專案 slug <span className="font-mono text-foreground">{slug}</span> 確認。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={slug} aria-label="輸入 slug 確認" />
+          <AlertDialogFooter>
+            <AlertDialogCancel>返回</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={pending || typed !== slug}
+              onClick={remove}
+            >
+              永久刪除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

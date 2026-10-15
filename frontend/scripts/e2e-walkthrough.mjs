@@ -146,7 +146,9 @@ const INLINE_ROWS = [
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const userCtx = await browser.newContext({ viewport: VIEWPORT, locale: "zh-TW", colorScheme: "light" });
 const adminCtx = await browser.newContext({ viewport: VIEWPORT, locale: "zh-TW", colorScheme: "light" });
-const adminTok = await login("admin", "admin1234");
+const superCtx = await browser.newContext({ viewport: VIEWPORT, locale: "zh-TW", colorScheme: "light" });
+const superTok = await login("superadmin", "superadmin1234"); // resource pool, quotas, model zoo, roles, delete project
+const adminTok = await login("admin", "admin1234"); // day-to-day: review, jobs, discussions
 const userTok = await login("user", "user1234");
 
 try {
@@ -155,11 +157,11 @@ try {
     phase = "request";
     console.log("▶ request");
     // the lab's total pool (admin setting) bounds what a request may ask for
-    await api(adminTok, "PUT", "/admin/settings/resource-pool", { gpu_indices: [], cpu_cores: 4, memory_mb: 12288, max_running_jobs: 1, allow_backfill: true });
+    await api(superTok, "PUT", "/admin/settings/resource-pool", { gpu_indices: [], cpu_cores: 4, memory_mb: 12288, max_running_jobs: 1, allow_backfill: true, gpu_share: true });
     const page = await userCtx.newPage();
     watch(page, "user");
     await goto(page, "/login");
-    await shot(page, "login", "登入頁：過渡期本地帳號（admin / user），Keycloak 之後接上", { fullPage: false });
+    await shot(page, "login", "登入頁（AUTH_MODE=local）：開發環境用後端建立的本地帳號 superadmin / admin / user；正式環境改為 Keycloak 按鈕", { fullPage: false });
     await page.fill("#username", "user");
     await page.fill("#password", "user1234");
     await shot(page, "login-filled", "以一般使用者 user 登入", { fullPage: false });
@@ -278,19 +280,20 @@ try {
 
     await goto(page, "/admin/quotas");
     await shot(page, "admin-quotas", "管理員：各專案配額一覽（合計超過資源池時提示；排程仍以資源池為準）");
-    await goto(page, "/admin");
-    await shot(page, "admin-dashboard-pool", "管理員 Dashboard：總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數）、節點狀態、任務執行方式（runner）");
-    await fillNumber(page, "input[name=memoryMb]", 14336);
-    await fillNumber(page, "input[name=maxRunningJobs]", 2);
-    await page.getByRole("button", { name: "儲存資源池" }).click();
-    await page.getByRole("alertdialog").waitFor();
-    await shot(page, "admin-pool-confirm", "更新總資源池前的確認（寫入 audit_logs）", { fullPage: false });
-    await page.getByRole("button", { name: "確認更新" }).click();
-    await settle(page, 1500);
-    await shot(page, "admin-pool-saved", "總資源池已更新：14 GB、最多 2 個同時任務（寫入 audit_logs）");
-    await goto(page, "/admin/users");
-    await shot(page, "admin-users", "管理員：使用者列表（系統角色 admin / user、啟用狀態）");
     await page.close();
+    // the total pool is superadmin territory (admin only reads it)
+    const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
+    await goto(sa, "/admin");
+    await shot(sa, "admin-dashboard-pool", "superadmin 的 Dashboard：GPU 卡片、總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數、依顯存共用 GPU）、節點狀態、任務執行方式（runner）");
+    await fillNumber(sa, "input[name=memoryMb]", 14336);
+    await fillNumber(sa, "input[name=maxRunningJobs]", 2);
+    await sa.getByRole("button", { name: "儲存資源池" }).click();
+    await sa.getByRole("alertdialog").waitFor();
+    await shot(sa, "admin-pool-confirm", "更新總資源池前的確認（寫入 audit_logs）", { fullPage: false });
+    await sa.getByRole("button", { name: "確認更新" }).click();
+    await settle(sa, 1500);
+    await shot(sa, "admin-pool-saved", "總資源池已更新：14 GB、最多 2 個同時任務（寫入 audit_logs）");
+    await sa.close();
   }
 
 
@@ -298,9 +301,9 @@ try {
   if (want("zoo")) {
     phase = "zoo";
     console.log("▶ zoo");
-    const page = await uiLogin(adminCtx, "admin", "admin1234");
+    const page = await uiLogin(superCtx, "superadmin", "superadmin1234");
     await goto(page, "/admin/model-zoo");
-    await shot(page, "zoo-empty", "管理員模型庫：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來");
+    await shot(page, "zoo-empty", "模型庫（superadmin 才能上傳 / 匯入 / 移除）：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來");
     // 1) browser upload
     await page.setInputFiles('[data-testid="zoo-upload-yolo11n"]', path.join(ZOO, "yolo11n.pt"));
     await page.getByText("yolo11n 已匯入模型庫").waitFor({ timeout: 120_000 });
@@ -684,7 +687,18 @@ try {
     await goto(page, "/admin/audit");
     await shot(page, "admin-audit", "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由");
     await goto(page, "/admin");
-    await shot(page, "admin-dashboard", "管理員儀表板：資源池、節點狀態，以及「任務執行方式」（這台機器用哪種 runner、哪些限制由 cgroup 強制、哪些由 watchdog 補）");
+    await shot(page, "admin-dashboard", "admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」");
+    // restart: a finished job is re-queued as a new job with the same input / settings (admin: jobs.control)
+    await waitJob(adminTok, second.id);
+    await goto(page, `/projects/${slug}/jobs/${second.id}`, 1200);
+    await shot(page, "admin-job-actions", "管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行");
+    await page.getByTestId("admin-restart").click();
+    await page.getByRole("alertdialog").waitFor();
+    await page.getByRole("alertdialog").getByRole("button", { name: "重新排入佇列" }).click();
+    await page.waitForURL((u) => /\/jobs\/\d+$/.test(u.pathname) && !u.pathname.endsWith(`/${second.id}`), { timeout: 30_000 });
+    await settle(page, 1200);
+    state.restartedJob = Number(page.url().split("/").pop());
+    await shot(page, "admin-job-restarted", "重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留");
     await page.close();
 
     const user = await uiLogin(userCtx, "user", "user1234");
@@ -694,6 +708,118 @@ try {
     await goto(user, `/projects/${slug}/jobs`, 1200);
     await shot(user, "jobs-list-final", "任務列表：成功 / 已取消 / 推論任務一覽");
     await user.close();
+  }
+
+  // =====================================================================================================
+  if (want("roles")) {
+    phase = "roles";
+    console.log("▶ roles");
+    const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
+    await goto(sa, "/admin/users");
+    await shot(sa, "roles-users", "superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用");
+    const row = sa.locator("tr", { hasText: "一般使用者" });
+    await row.getByRole("combobox").click();
+    await sa.getByRole("option", { name: "管理員", exact: true }).click();
+    await settle(sa, 1500);
+    await shot(sa, "roles-promoted", "把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄");
+    await row.getByRole("combobox").click();
+    await sa.getByRole("option", { name: "使用者", exact: true }).click();
+    await settle(sa, 1200);
+    await goto(sa, "/admin");
+    await shot(sa, "roles-superadmin-dashboard", "superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）");
+    // a throwaway project so the delete can be shown end to end
+    const tmpReq = await api(userTok, "POST", "/project-requests", {
+      title: "暫時專案（示範刪除）",
+      purpose: "示範 superadmin 刪除專案：任務、產物、資料來源與資料夾一併移除。",
+      data_type: "TABULAR",
+      task_type: "classification",
+      data_scale: "small",
+      requested_gpu: 0,
+      requested_cpu: 1,
+      requested_memory_mb: 1024,
+      requested_storage_mb: 1024,
+      proposed_slug: "tmp-delete-demo",
+      members: [],
+    });
+    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/review`);
+    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/approve`, { slug: "tmp-delete-demo", gpu_limit: 0, cpu_limit: 1, memory_limit_mb: 1024, storage_quota_mb: 1024, max_concurrent_jobs: 1 });
+    await goto(sa, "/projects/tmp-delete-demo/settings");
+    await shot(sa, "roles-delete-project", "superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）");
+    await sa.getByTestId("delete-project").click();
+    await sa.getByRole("alertdialog").waitFor();
+    await sa.getByLabel("輸入 slug 確認").fill("tmp-delete-demo");
+    await shot(sa, "roles-delete-confirm", "刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）", { fullPage: false });
+    await sa.getByRole("alertdialog").getByRole("button", { name: "永久刪除" }).click();
+    await sa.waitForURL(/\/projects$/, { timeout: 30_000 });
+    await settle(sa, 1200);
+    await shot(sa, "roles-deleted", "刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數");
+    await sa.close();
+
+    const ad = await uiLogin(adminCtx, "admin", "admin1234");
+    await goto(ad, "/admin/quotas");
+    await shot(ad, "roles-admin-quotas-readonly", "admin 看專案配額：唯讀（PERMISSION_DENIED 由後端把關，前端只是不給改）");
+    await goto(ad, "/admin/model-zoo");
+    await shot(ad, "roles-admin-zoo-readonly", "admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除");
+    const tmpIssue = await api(userTok, "POST", "/issues", { type: "question", title: "（示範）這個討論串會被管理員刪除", body: "測試刪除討論串。" });
+    await goto(ad, `/discussions/${tmpIssue.id}`);
+    await ad.getByRole("button", { name: "刪除" }).click();
+    await ad.getByRole("alertdialog").waitFor();
+    await shot(ad, "roles-delete-issue", "admin 刪除討論串（連同留言）需確認；寫入稽核紀錄", { fullPage: false });
+    await ad.getByRole("alertdialog").getByRole("button", { name: "刪除" }).click();
+    await ad.waitForURL(/\/discussions$/, { timeout: 30_000 });
+    await settle(ad, 1000);
+    await shot(ad, "roles-issue-deleted", "刪除後回到討論區列表");
+    await ad.close();
+
+    const u = await uiLogin(userCtx, "user", "user1234");
+    await goto(u, "/admin", 800);
+    await shot(u, "roles-user-no-admin", "一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）");
+    await u.close();
+  }
+
+  // =====================================================================================================
+  if (want("usage")) {
+    phase = "usage";
+    console.log("▶ usage");
+    const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
+    await goto(sa, "/admin/usage?range=1h", 1500);
+    await shot(sa, "usage-1h", "資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」");
+    await sa.getByRole("tab", { name: "系統總量" }).click();
+    await settle(sa, 600);
+    await shot(sa, "usage-node-denominator", "分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比");
+    await sa.getByRole("tab", { name: "專案配額" }).click();
+    await settle(sa, 600);
+    await shot(sa, "usage-quota-denominator", "分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體");
+    await sa.close();
+  }
+
+  // =====================================================================================================
+  if (want("tool")) {
+    phase = "tool";
+    console.log("▶ tool");
+    const page = await uiLogin(userCtx, "user", "user1234");
+    await goto(page, "/tools/preprocess");
+    await shot(page, "tool-empty", "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 預覽 → 執行 → 下載；不保存資料");
+    await page.fill("#tool-spec-target", "yield_pct");
+    await page.fill("#tool-spec-id_column", "lot_id");
+    await page.setInputFiles('[data-testid="upload-input"]', DS.wat);
+    await page.getByText("已上傳 wat_yield.csv").waitFor({ timeout: 60_000 });
+    await settle(page, 800);
+    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "補值");
+    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "標準化（z-score）");
+    await page.getByRole("button", { name: "抽樣預覽" }).click();
+    await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
+    await settle(page, 800);
+    await shot(page, "tool-preview", "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽前後差異");
+    await page.getByTestId("tool-run").click();
+    await page.getByTestId("tool-summary").waitFor({ timeout: 120_000 });
+    await settle(page, 800);
+    await shot(page, "tool-done", "對整個檔案執行完成：摘要（步驟、檔案、列數前後）與下載按鈕");
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), page.getByTestId("tool-download").click()]);
+    state.toolDownload = download.suggestedFilename();
+    await settle(page, 2500);
+    await shot(page, "tool-downloaded", `下載 ${state.toolDownload}（processed.csv + pipeline.json + summary.json）後，伺服器端的暫存檔立即刪除`);
+    await page.close();
   }
 
   // =====================================================================================================
@@ -725,9 +851,11 @@ try {
         localStorage.setItem("theme", "light");
       } catch {}
     });
-    const ap = await uiLogin(adminDark, "admin", "admin1234");
+    const ap = await uiLogin(adminDark, "superadmin", "superadmin1234");
     await goto(ap, "/admin/queue", 800);
     await shot(ap, "light-admin-queue", "Light mode：管理員佇列", { theme: "light" });
+    await goto(ap, "/admin/usage", 800);
+    await shot(ap, "light-usage", "Light mode：資源使用率歷史", { theme: "light" });
     await ap.close();
     await adminDark.close();
     await dark.close();

@@ -20,6 +20,11 @@ import type {
   Upload,
   User,
   ZooTask,
+  GpuResetResult,
+  UsageHistory,
+  UsageProject,
+  ToolProcessResult,
+  ToolUpload,
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
@@ -50,9 +55,12 @@ export function toUser(u: UserRead | J): User {
     username: str(x.username),
     email: str(x.email),
     displayName: str(x.display_name) || str(x.username),
-    role: x.role === "admin" ? "admin" : "user",
+    role: x.role === "superadmin" || x.role === "admin" ? x.role : "user",
     isActive: Boolean(x.is_active),
     lastLoginAt: isoOpt(x.last_login_at),
+    authProvider: x.auth_provider === "keycloak" ? "keycloak" : x.auth_provider === "local" ? "local" : undefined,
+    permissions: Array.isArray(x.permissions) ? (x.permissions as string[]) : undefined,
+    authMode: x.auth_mode === "keycloak" ? "keycloak" : x.auth_mode === "local" ? "local" : undefined,
   };
 }
 
@@ -148,6 +156,7 @@ export function toJob(j: J): Job {
     requestedGpu: num(j.requested_gpu),
     requestedCpu: num(j.requested_cpu),
     requestedMemoryMb: num(j.requested_memory_mb),
+    requestedGpuMemoryMb: opt<number>(j.requested_gpu_memory_mb),
     timeoutMinutes: num(j.timeout_minutes),
     assignedGpus: opt<number[]>(j.assigned_gpus),
     assignedCpus: opt<number[]>(j.assigned_cpus),
@@ -265,6 +274,7 @@ export function toPool(p: J): ResourcePool {
     memoryMb: num(p.memory_mb),
     maxRunningJobs: num(p.max_running_jobs, 1),
     allowBackfill: Boolean(p.allow_backfill),
+    gpuShare: p.gpu_share === undefined ? true : Boolean(p.gpu_share),
   };
 }
 
@@ -286,6 +296,9 @@ export function toNode(n: J): NodeStatus {
       memoryUsedMb: num(g.memory_used_mb),
       utilization: num(g.utilization),
       jobId: opt<number>(g.job_id),
+      jobIds: ((g.job_ids as number[]) ?? []).map(Number),
+      reservedMb: opt<number>(g.reserved_mb),
+      processes: opt<number>(g.processes),
     })),
     cpuCores: num(n.cpu_cores),
     cpuUsedCores: num(n.cpu_used_cores),
@@ -357,6 +370,117 @@ export function toAudit(l: J): AuditLog {
     reason: reason == null ? undefined : String(reason),
     payload,
     createdAt: iso(l.created_at),
+  };
+}
+
+export function toGpuReset(r: J): GpuResetResult {
+  return {
+    index: num(r.index),
+    mode: (r.mode as GpuResetResult["mode"]) ?? "jobs",
+    stoppedJobs: ((r.stopped_jobs as number[]) ?? []).map(Number),
+    killedPids: ((r.killed_pids as number[]) ?? []).map(Number),
+    skippedPids: ((r.skipped_pids as number[]) ?? []).map(Number),
+    command: opt<string>(r.command),
+    commandOk: opt<boolean>(r.command_ok),
+    commandOutput: opt<string>(r.command_output),
+    memoryUsedMbBefore: opt<number>(r.memory_used_mb_before),
+    memoryUsedMbAfter: opt<number>(r.memory_used_mb_after),
+  };
+}
+
+export function toUsageHistory(h: J): UsageHistory {
+  const totals = (h.totals as J) ?? {};
+  const share = (h.project_share as Record<string, J>) ?? {};
+  return {
+    range: (h.range as UsageHistory["range"]) ?? "24h",
+    bucketS: num(h.bucket_s, 60),
+    sampleIntervalS: num(h.sample_interval_s, 30),
+    points: ((h.points as J[]) ?? []).map((p) => ({
+      t: str(p.t),
+      cpuPct: opt<number>(p.cpu_pct),
+      memUsedMb: opt<number>(p.mem_used_mb),
+      gpuUtil: opt<number>(p.gpu_util),
+      gpuMemUsedMb: opt<number>(p.gpu_mem_used_mb),
+      allocGpu: opt<number>(p.alloc_gpu),
+      allocCpu: opt<number>(p.alloc_cpu),
+      allocMemoryMb: opt<number>(p.alloc_memory_mb),
+      runningJobs: opt<number>(p.running_jobs),
+      projects: Object.fromEntries(
+        Object.entries((p.projects as Record<string, J>) ?? {}).map(([id, v]) => [
+          id,
+          {
+            gpu: num(v.gpu),
+            cpu: num(v.cpu),
+            memoryMb: num(v.memory_mb),
+            runningJobs: num(v.running_jobs),
+            cpuActual: num(v.cpu_actual),
+            memActualMb: num(v.mem_actual_mb),
+          },
+        ]),
+      ),
+    })),
+    totals: {
+      cpuCores: num(totals.cpu_cores),
+      memoryMb: num(totals.memory_mb),
+      gpuCount: num(totals.gpu_count),
+      gpuMemoryMb: num(totals.gpu_memory_mb),
+      poolGpu: num(totals.pool_gpu),
+      poolCpu: num(totals.pool_cpu),
+      poolMemoryMb: num(totals.pool_memory_mb),
+    },
+    projects: ((h.projects as J[]) ?? []).map((p) => ({
+      id: num(p.id),
+      slug: str(p.slug),
+      name: str(p.name),
+      gpuLimit: num(p.gpu_limit),
+      cpuLimit: num(p.cpu_limit),
+      memoryLimitMb: num(p.memory_limit_mb),
+      status: (p.status as UsageProject["status"]) ?? "active",
+    })),
+    projectShare: Object.fromEntries(
+      Object.entries(share).map(([id, v]) => [
+        id,
+        {
+          gpuAvg: num(v.gpu_avg),
+          cpuAvg: num(v.cpu_avg),
+          memoryMbAvg: num(v.memory_mb_avg),
+          gpuOfQuota: num(v.gpu_of_quota),
+          cpuOfQuota: num(v.cpu_of_quota),
+          memoryMbOfQuota: num(v.memory_mb_of_quota),
+          gpuOfPool: num(v.gpu_of_pool),
+          cpuOfPool: num(v.cpu_of_pool),
+          memoryMbOfPool: num(v.memory_mb_of_pool),
+          gpuOfNode: num(v.gpu_of_node),
+          cpuOfNode: num(v.cpu_of_node),
+          memoryMbOfNode: num(v.memory_mb_of_node),
+          cpuActualAvg: num(v.cpu_actual_avg),
+          memActualAvgMb: num(v.mem_actual_avg_mb),
+          jobSeconds: num(v.job_seconds),
+        },
+      ]),
+    ),
+  };
+}
+
+export function toToolUpload(u: J): ToolUpload {
+  return {
+    id: str(u.id),
+    dataType: u.data_type as ToolUpload["dataType"],
+    originalFilename: str(u.original_filename),
+    sizeBytes: num(u.size_bytes),
+    format: str(u.format),
+    detectedSpec: opt<Record<string, unknown>>(u.detected_spec),
+    expiresAt: iso(u.expires_at),
+    createdAt: iso(u.created_at),
+  };
+}
+
+export function toToolResult(r: J): ToolProcessResult {
+  return {
+    id: str(r.id),
+    summary: (r.summary as ToolProcessResult["summary"]) ?? {},
+    zipSizeBytes: num(r.zip_size_bytes),
+    downloadPath: str(r.download_path),
   };
 }
 

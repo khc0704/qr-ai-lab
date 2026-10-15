@@ -2,11 +2,12 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { getProject } from "@/lib/api";
+import { can, getCurrentUser } from "@/lib/session";
 import { ProjectSettingsForm } from "./project-settings-form";
 
 async function Settings({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = await getProject(slug);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
   return (
     <ProjectSettingsForm
@@ -14,6 +15,7 @@ async function Settings({ params }: { params: Promise<{ slug: string }> }) {
       description={project.description}
       slug={project.slug}
       archived={project.status === "archived"}
+      canDelete={can(user, "projects.delete")}
     />
   );
 }

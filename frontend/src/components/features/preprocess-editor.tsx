@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { previewPreprocessAction } from "@/lib/actions";
+import { previewPreprocessAction, type ActionResult } from "@/lib/actions";
 import { cn } from "@/lib/utils";
 import type { ArrayStat, ColumnStat, PreprocessOp, PreprocessStep, PreviewPayload, PreviewSide } from "@/types/domain";
 
@@ -21,14 +21,17 @@ export function PreprocessEditor({
   uploadId,
   spec,
   disabledReason,
+  onPreview,
 }: {
   ops: PreprocessOp[];
   steps: PreprocessStep[];
   onChange: (steps: PreprocessStep[]) => void;
-  slug: string;
-  uploadId?: number;
+  slug?: string;
+  uploadId?: number | string;
   spec: Record<string, unknown>;
   disabledReason?: string;
+  /** Replace the project preview call (standalone tool). */
+  onPreview?: (steps: PreprocessStep[], spec: Record<string, unknown>) => Promise<ActionResult<PreviewPayload>>;
 }) {
   const [adding, setAdding] = useState<string>("");
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
@@ -50,7 +53,9 @@ export function PreprocessEditor({
   const runPreview = () => {
     if (!uploadId) return;
     startTransition(async () => {
-      const r = await previewPreprocessAction(slug, uploadId, steps, spec, 5);
+      const r = onPreview
+        ? await onPreview(steps, spec)
+        : await previewPreprocessAction(slug ?? "", Number(uploadId), steps, spec, 5);
       if (!r.ok) {
         toast.error(r.error);
         return;
@@ -80,7 +85,13 @@ export function PreprocessEditor({
                 {op?.fitted ? (
                   <span className="rounded-sm bg-muted px-1.5 text-[11px] text-muted-foreground">訓練時學習</span>
                 ) : null}
-                <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="移除步驟" onClick={() => remove(i)}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="ml-auto"
+                  aria-label="移除步驟"
+                  onClick={() => remove(i)}
+                >
                   <X />
                 </Button>
               </div>
@@ -101,7 +112,10 @@ export function PreprocessEditor({
                       return (
                         <div key={p.name} className="grid gap-1.5">
                           <Label htmlFor={id}>{p.label}</Label>
-                          <Select value={String(v)} onValueChange={(x) => setParam(i, p.name, coerceChoice(p.choices, x))}>
+                          <Select
+                            value={String(v)}
+                            onValueChange={(x) => setParam(i, p.name, coerceChoice(p.choices, x))}
+                          >
                             <SelectTrigger id={id} size="sm">
                               <SelectValue />
                             </SelectTrigger>
@@ -202,16 +216,35 @@ export function PreviewView({ payload }: { payload: PreviewPayload }) {
   );
 }
 
-function Side({ title, side, dataType, highlight }: { title: string; side: PreviewSide; dataType: string; highlight?: boolean }) {
+function Side({
+  title,
+  side,
+  dataType,
+  highlight,
+}: {
+  title: string;
+  side: PreviewSide;
+  dataType: string;
+  highlight?: boolean;
+}) {
   return (
-    <div className={cn("min-w-0 space-y-2 rounded-lg border bg-card p-3", highlight ? "border-primary/40" : "border-border")}>
+    <div
+      className={cn(
+        "min-w-0 space-y-2 rounded-lg border bg-card p-3",
+        highlight ? "border-primary/40" : "border-border",
+      )}
+    >
       <div className="flex items-baseline justify-between">
         <span className="text-label">{title}</span>
         {side.row_count !== undefined ? (
           <span className="font-mono text-xs text-muted-foreground tabular-nums">{side.row_count} 列</span>
         ) : null}
       </div>
-      {Array.isArray(side.stats) ? <StatsTable stats={side.stats} /> : side.stats ? <ArrayStats stats={side.stats} /> : null}
+      {Array.isArray(side.stats) ? (
+        <StatsTable stats={side.stats} />
+      ) : side.stats ? (
+        <ArrayStats stats={side.stats} />
+      ) : null}
       {side.rows ? <RowsTable columns={side.columns ?? []} rows={side.rows} /> : null}
       {side.images ? (
         <div className="flex flex-wrap gap-2">
@@ -237,7 +270,8 @@ function Side({ title, side, dataType, highlight }: { title: string; side: Previ
 }
 
 function ArrayStats({ stats }: { stats: ArrayStat }) {
-  const fmt = (v?: number) => (v === undefined || Number.isNaN(v) ? "—" : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3));
+  const fmt = (v?: number) =>
+    v === undefined || Number.isNaN(v) ? "—" : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3);
   const cells: [string, string][] = [
     ["shape", stats.shape.join(" × ")],
     ["平均", fmt(stats.mean)],
@@ -259,7 +293,8 @@ function ArrayStats({ stats }: { stats: ArrayStat }) {
 }
 
 function StatsTable({ stats }: { stats: ColumnStat[] }) {
-  const fmt = (v?: number) => (v === undefined || Number.isNaN(v) ? "—" : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3));
+  const fmt = (v?: number) =>
+    v === undefined || Number.isNaN(v) ? "—" : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3);
   return (
     <div className="max-h-56 overflow-auto rounded-md border border-border">
       <table className="w-full text-xs">
@@ -334,7 +369,12 @@ function Curves({ curves }: { curves: NonNullable<PreviewSide["curves"]> }) {
   const sx = (i: number, n: number) => (n <= 1 ? 0 : (i / (n - 1)) * W);
   const sy = (v: number) => (hi === lo ? H / 2 : H - ((v - lo) / (hi - lo)) * (H - 8) - 4);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-32 w-full rounded-md border border-border bg-background" role="img" aria-label="曲線預覽">
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="h-32 w-full rounded-md border border-border bg-background"
+      role="img"
+      aria-label="曲線預覽"
+    >
       {curves.map((c, ci) =>
         c.values.map((series, si) => (
           <polyline

@@ -1,15 +1,25 @@
-import { ClipboardCheck, Cpu, HardDrive, ListOrdered, MemoryStick, Timer } from "lucide-react";
+import { ChartLine, ClipboardCheck, Cpu, HardDrive, ListOrdered, MemoryStick, Timer } from "lucide-react";
 import Link from "next/link";
+import { GpuCards } from "@/components/features/gpu-cards";
 import { ResourceMeter } from "@/components/features/resource-meter";
 import { ResourcePoolForm } from "@/components/features/resource-pool-form";
 import { StatCard } from "@/components/features/stat-card";
 import { PageHeader } from "@/components/layout/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAdminOverview, getNodeStatus, getResourcePool } from "@/lib/api";
 import { formatMb } from "@/lib/format";
+import { can, getCurrentUser } from "@/lib/session";
 
 export default async function AdminDashboardPage() {
-  const [overview, pool, node] = await Promise.all([getAdminOverview(), getResourcePool(), getNodeStatus()]);
+  const [overview, pool, node, me] = await Promise.all([
+    getAdminOverview(),
+    getResourcePool(),
+    getNodeStatus(),
+    getCurrentUser(),
+  ]);
+  const canManagePool = can(me, "pool.manage");
+  const canResetGpu = can(me, "gpu.reset");
   const diskPct = Math.round(((node.diskTotalGb - node.diskFreeGb) / node.diskTotalGb) * 100);
   return (
     <>
@@ -55,15 +65,42 @@ export default async function AdminDashboardPage() {
         />
       </div>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <Card>
-          <CardHeader>
-            <CardTitle>總資源池</CardTitle>
-            <CardDescription>Scheduler 以此為容量上限。變更只影響之後啟動的任務，並寫入稽核紀錄。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResourcePoolForm pool={pool} node={node} />
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>GPU</CardTitle>
+                  <CardDescription>
+                    驅動程式讀到的顯存與排程器保留的份額；任務建立時填「每張 GPU 需要的顯存」即可多個任務共用一張。
+                    {canResetGpu ? "「重置」可強制釋放卡住的顯存。" : ""}
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/admin/usage">
+                    <ChartLine />
+                    使用率歷史
+                  </Link>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <GpuCards gpus={node.gpus} poolIndices={pool.gpuIndices} canReset={canResetGpu} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>總資源池</CardTitle>
+              <CardDescription>
+                Scheduler 以此為容量上限。變更只影響之後啟動的任務，並寫入稽核紀錄。
+                {!canManagePool ? "只有 superadmin 可以調整；你目前只能檢視。" : ""}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ResourcePoolForm pool={pool} node={node} readOnly={!canManagePool} />
+            </CardContent>
+          </Card>
+        </div>
         <aside className="space-y-4">
           {node.runner ? (
             <Card className="gap-3 p-5" data-testid="runner-card">
@@ -77,7 +114,10 @@ export default async function AdminDashboardPage() {
                   [
                     ["記憶體", node.runner.enforces.memory ? "cgroup" : node.runner.memoryWatchdog ? "watchdog" : null],
                     ["CPU", node.runner.enforces.cpu ? "cgroup" : "threads"],
-                    ["核心", node.runner.enforces.cpuset ? (node.runner.kind === "systemd" ? "cgroup" : "affinity") : null],
+                    [
+                      "核心",
+                      node.runner.enforces.cpuset ? (node.runner.kind === "systemd" ? "cgroup" : "affinity") : null,
+                    ],
                   ] as const
                 ).map(([k, how]) => (
                   <li key={k} className="rounded-md bg-muted px-2 py-1">
@@ -99,7 +139,9 @@ export default async function AdminDashboardPage() {
               <div className="truncate font-mono text-[11px] text-muted-foreground" title={node.runner.trainerPython}>
                 {node.runner.trainerPython}
               </div>
-              <div className="text-[11px] text-muted-foreground">離線：HF_HUB_OFFLINE / YOLO_OFFLINE 已設定，權重只讀模型庫</div>
+              <div className="text-[11px] text-muted-foreground">
+                離線：HF_HUB_OFFLINE / YOLO_OFFLINE 已設定，權重只讀模型庫
+              </div>
             </Card>
           ) : null}
           <Card className="gap-4 p-5">

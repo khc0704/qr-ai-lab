@@ -6,6 +6,13 @@ import { cookies } from "next/headers";
 
 export const BACKEND_URL = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 export const TOKEN_COOKIE = "qr_token";
+/** "local" (dev: username/password accounts, token in our own cookie) or "keycloak" (prod: Auth.js session). */
+export const AUTH_MODE: "local" | "keycloak" = process.env.AUTH_MODE === "keycloak" ? "keycloak" : "local";
+/** Public origin of this frontend (nginx), used for Keycloak post-logout redirects. */
+export const PUBLIC_URL = (process.env.AUTH_URL ?? process.env.PUBLIC_URL ?? "http://localhost:3000").replace(
+  /\/$/,
+  "",
+);
 
 export class ApiError extends Error {
   constructor(
@@ -19,6 +26,12 @@ export class ApiError extends Error {
 }
 
 export async function getToken(): Promise<string | undefined> {
+  if (AUTH_MODE === "keycloak") {
+    const { auth } = await import("@/auth");
+    const session = await auth();
+    if (!session || session.error || !session.accessToken) return undefined;
+    return session.accessToken;
+  }
   return (await cookies()).get(TOKEN_COOKIE)?.value;
 }
 

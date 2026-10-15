@@ -2,6 +2,7 @@ import { Copy, Download, PackageOpen } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { AdminJobActions } from "@/components/features/admin-job-actions";
 import { ArtifactRowActions } from "@/components/features/artifact-row-actions";
 import { FamilyText, InputKindChip } from "@/components/features/chips";
 import { EmptyState } from "@/components/features/empty-state";
@@ -20,17 +21,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { artifactKindLabel, familyLabel, inferenceModeLabel, jobKindLabel, jobModeLabel } from "@/i18n/zh-TW";
 import { getArtifact, getJob, getJobLog, listArtifactsForJob } from "@/lib/api";
 import { formatBytes, formatMetric } from "@/lib/format";
+import { can, getCurrentUser } from "@/lib/session";
 import type { InferenceMode, PreprocessStep } from "@/types/domain";
 
 async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: string }> }) {
   const { slug, jobId } = await params;
   const job = await getJob(Number(jobId));
   if (!job || job.projectSlug !== slug) notFound();
-  const [log, artifacts, model] = await Promise.all([
+  const [log, artifacts, model, user] = await Promise.all([
     getJobLog(job.id),
     listArtifactsForJob(job.id),
     job.artifactId ? getArtifact(job.artifactId) : undefined,
+    getCurrentUser(),
   ]);
+  const controlsJobs = can(user, "jobs.control");
   const { leaderboard, ...metrics } = job.metrics ?? {};
   // Live metrics (job.metrics) are whatever the trainer reported last. Once a training job has a result, or
   // an AutoML leaderboard, the headline cards show the best model instead of the last trial.
@@ -288,12 +292,15 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
           </span>
         }
         actions={
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>
-              <Copy />
-              複製設定
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {controlsJobs ? <AdminJobActions job={job} /> : null}
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>
+                <Copy />
+                複製設定
+              </Link>
+            </Button>
+          </div>
         }
       />
       <JobStatusBar job={job} />

@@ -34,7 +34,15 @@ interface Row {
   usedBytes: number;
 }
 
-export function QuotasTable({ rows: initial, pool }: { rows: Row[]; pool: ResourcePool }) {
+export function QuotasTable({
+  rows: initial,
+  pool,
+  readOnly = false,
+}: {
+  rows: Row[];
+  pool: ResourcePool;
+  readOnly?: boolean;
+}) {
   const [rows, setRows] = useState(initial);
   const [confirm, setConfirm] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -74,7 +82,7 @@ export function QuotasTable({ rows: initial, pool }: { rows: Row[]; pool: Resour
         type="number"
         step={step}
         value={r[key]}
-        disabled={r.status === "archived"}
+        disabled={readOnly || r.status === "archived"}
         onChange={(e) => set(r.slug, key, Number(e.target.value))}
         className="ml-auto h-8 w-24 text-right font-mono text-xs"
       />
@@ -136,7 +144,7 @@ export function QuotasTable({ rows: initial, pool }: { rows: Row[]; pool: Resour
         </Table>
       </div>
       <div className="flex justify-end">
-        <Button disabled={!dirty} onClick={() => setConfirm(true)}>
+        <Button disabled={readOnly || !dirty} onClick={() => setConfirm(true)}>
           <Save />
           儲存配額
         </Button>

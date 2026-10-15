@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChartLine,
   ClipboardCheck,
   ClipboardList,
   FolderKanban,
@@ -13,7 +14,8 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Users,
-  type LucideIcon
+  Wand2,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -35,6 +37,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { common, nav } from "@/i18n/zh-TW";
+import { isAdminRole } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 import type { User } from "@/types/domain";
 
@@ -108,6 +111,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
     { href: "/discussions", label: nav.discussions, icon: MessagesSquare },
     { href: "/project-requests", label: nav.projectRequests, icon: ClipboardList, badge: counts.myRequestReplies },
     { href: "/projects", label: nav.projects, icon: FolderKanban },
+    { href: "/tools/preprocess", label: nav.tools, icon: Wand2 },
   ];
   const admin: NavItem[] = [
     { href: "/admin", label: nav.adminDashboard, icon: Gauge, exact: true },
@@ -116,6 +120,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
     { href: "/admin/users", label: nav.adminUsers, icon: Users },
     { href: "/admin/quotas", label: nav.adminQuotas, icon: SlidersHorizontal },
     { href: "/admin/model-zoo", label: nav.adminModelZoo, icon: PackageSearch },
+    { href: "/admin/usage", label: nav.adminUsage, icon: ChartLine },
     { href: "/admin/audit", label: nav.adminAudit, icon: ScrollText },
   ];
 
@@ -138,7 +143,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
       </SidebarHeader>
       <SidebarContent>
         <NavGroup label="主選單" items={main} />
-        {user.role === "admin" ? <NavGroup label={nav.admin} items={admin} /> : null}
+        {isAdminRole(user.role) ? <NavGroup label={nav.admin} items={admin} /> : null}
       </SidebarContent>
       <SidebarFooter>
         <UserMenu user={user} />

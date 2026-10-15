@@ -15,6 +15,7 @@ import {
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { systemRoleLabel } from "@/i18n/zh-TW";
 import { logoutAction } from "@/lib/actions";
+import { isAdminRole } from "@/lib/roles";
 import { initials } from "@/lib/format";
 import type { User } from "@/types/domain";
 
@@ -28,7 +29,7 @@ export function UserMenu({ user }: { user: User }) {
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent" aria-label="使用者選單">
               <Avatar className="size-8 rounded-full">
-                <AvatarFallback className={user.role === "admin" ? "ring-1 ring-primary/50" : undefined}>
+                <AvatarFallback className={isAdminRole(user.role) ? "ring-1 ring-primary/50" : undefined}>
                   {initials(user.displayName)}
                 </AvatarFallback>
               </Avatar>

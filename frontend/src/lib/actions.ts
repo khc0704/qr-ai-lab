@@ -5,9 +5,19 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { toJob, toProject, toRequest, toUpload, toUser } from "@/lib/api/mappers";
-import { ApiError, apiFetch, errorMessage, TOKEN_COOKIE } from "@/lib/backend";
-import type { Job, PreprocessStep, PreviewPayload, Project, ProjectRequest, Upload } from "@/types/domain";
+import { toGpuReset, toJob, toProject, toRequest, toToolResult, toUpload, toUser } from "@/lib/api/mappers";
+import { ApiError, apiFetch, AUTH_MODE, errorMessage, PUBLIC_URL, TOKEN_COOKIE } from "@/lib/backend";
+import type {
+  GpuResetMode,
+  GpuResetResult,
+  Job,
+  PreprocessStep,
+  PreviewPayload,
+  Project,
+  ProjectRequest,
+  ToolProcessResult,
+  Upload,
+} from "@/types/domain";
 
 type J = Record<string, unknown>;
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string; code?: string };
@@ -55,6 +65,20 @@ export async function loginAction(_prev: LoginState, formData: FormData): Promis
 }
 
 export async function logoutAction(): Promise<void> {
+  if (AUTH_MODE === "keycloak") {
+    const { auth, signOut } = await import("@/auth");
+    const session = await auth();
+    await signOut({ redirect: false });
+    // End the Keycloak SSO session too, otherwise the next "login" silently signs the same user back in.
+    const issuer = process.env.AUTH_KEYCLOAK_ISSUER;
+    if (issuer) {
+      const url = new URL(`${issuer}/protocol/openid-connect/logout`);
+      if (session?.idToken) url.searchParams.set("id_token_hint", session.idToken);
+      url.searchParams.set("post_logout_redirect_uri", `${PUBLIC_URL}/login`);
+      redirect(url.toString());
+    }
+    redirect("/login");
+  }
   (await cookies()).delete(TOKEN_COOKIE);
   redirect("/login");
 }
@@ -99,7 +123,9 @@ export async function approveRequestAction(id: number, body: J): Promise<ActionR
 
 export async function rejectRequestAction(id: number, reviewNote: string): Promise<ActionResult<ProjectRequest>> {
   const r = await run(async () =>
-    toRequest(await apiFetch<J>(`/project-requests/${id}/reject`, { method: "POST", body: { review_note: reviewNote } })),
+    toRequest(
+      await apiFetch<J>(`/project-requests/${id}/reject`, { method: "POST", body: { review_note: reviewNote } }),
+    ),
   );
   if (r.ok) revalidatePath(`/project-requests/${id}`);
   return r;
@@ -148,6 +174,15 @@ export async function reopenIssueAction(id: number): Promise<ActionResult<undefi
   return r;
 }
 
+export async function deleteIssueAction(id: number): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>(`/issues/${id}`, { method: "DELETE" });
+    return undefined;
+  });
+  if (r.ok) revalidatePath("/discussions");
+  return r;
+}
+
 // --- projects --------------------------------------------------------------------------------------
 
 export async function updateProjectAction(slug: string, body: J): Promise<ActionResult<undefined>> {
@@ -168,6 +203,18 @@ export async function archiveProjectAction(slug: string): Promise<ActionResult<u
   return r;
 }
 
+export async function deleteProjectAction(slug: string): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>(`/projects/${slug}`, { method: "DELETE" });
+    return undefined;
+  });
+  if (r.ok) {
+    revalidatePath("/projects");
+    revalidatePath("/admin/quotas");
+  }
+  return r;
+}
+
 export async function updateQuotaAction(slug: string, body: J): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     await apiFetch<J>(`/projects/${slug}/quota`, { method: "PATCH", body });
@@ -177,9 +224,16 @@ export async function updateQuotaAction(slug: string, body: J): Promise<ActionRe
   return r;
 }
 
-export async function addMemberAction(slug: string, usernameOrEmail: string, role: string): Promise<ActionResult<undefined>> {
+export async function addMemberAction(
+  slug: string,
+  usernameOrEmail: string,
+  role: string,
+): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
-    await apiFetch<J>(`/projects/${slug}/members`, { method: "POST", body: { username_or_email: usernameOrEmail, role } });
+    await apiFetch<J>(`/projects/${slug}/members`, {
+      method: "POST",
+      body: { username_or_email: usernameOrEmail, role },
+    });
     return undefined;
   });
   if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
@@ -254,6 +308,36 @@ export async function uploadStatusAction(slug: string, raw: J): Promise<Upload> 
   return toUpload(raw);
 }
 
+// --- standalone preprocessing tool -----------------------------------------------------------------
+
+export async function previewToolAction(
+  id: string,
+  steps: PreprocessStep[],
+  spec: J,
+  sample = 5,
+): Promise<ActionResult<PreviewPayload>> {
+  return run(() =>
+    apiFetch<PreviewPayload>(`/tools/uploads/${id}/preview`, { method: "POST", body: { steps, sample, spec } }),
+  );
+}
+
+export async function processToolAction(
+  id: string,
+  steps: PreprocessStep[],
+  spec: J,
+): Promise<ActionResult<ToolProcessResult>> {
+  return run(async () =>
+    toToolResult(await apiFetch<J>(`/tools/uploads/${id}/process`, { method: "POST", body: { steps, spec } })),
+  );
+}
+
+export async function deleteToolUploadAction(id: string): Promise<ActionResult<undefined>> {
+  return run(async () => {
+    await apiFetch<J>(`/tools/uploads/${id}`, { method: "DELETE" });
+    return undefined;
+  });
+}
+
 // --- jobs ------------------------------------------------------------------------------------------
 
 export async function createJobAction(slug: string, body: J): Promise<ActionResult<Job>> {
@@ -274,7 +358,11 @@ export async function cancelJobAction(id: number, slug: string): Promise<ActionR
   return r;
 }
 
-export async function setDefaultArtifactAction(id: number, slug: string, value = true): Promise<ActionResult<undefined>> {
+export async function setDefaultArtifactAction(
+  id: number,
+  slug: string,
+  value = true,
+): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     await apiFetch<J>(`/artifacts/${id}`, { method: "PATCH", body: { is_default: value } });
     return undefined;
@@ -309,6 +397,7 @@ export async function updateResourcePoolAction(pool: {
   memoryMb: number;
   maxRunningJobs: number;
   allowBackfill: boolean;
+  gpuShare: boolean;
 }): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     await apiFetch<J>("/admin/settings/resource-pool", {
@@ -319,6 +408,7 @@ export async function updateResourcePoolAction(pool: {
         memory_mb: pool.memoryMb,
         max_running_jobs: pool.maxRunningJobs,
         allow_backfill: pool.allowBackfill,
+        gpu_share: pool.gpuShare,
       },
     });
     return undefined;
@@ -327,7 +417,26 @@ export async function updateResourcePoolAction(pool: {
   return r;
 }
 
-export async function moveQueueAction(jobId: number, position: "top" | "up" | "down" | "bottom"): Promise<ActionResult<undefined>> {
+/** superadmin: free a GPU (stop our jobs / kill every process / device reset). Audited by the backend. */
+export async function resetGpuAction(
+  index: number,
+  mode: GpuResetMode,
+  reason: string,
+): Promise<ActionResult<GpuResetResult>> {
+  const r = await run(async () =>
+    toGpuReset(await apiFetch<J>(`/admin/gpus/${index}/reset`, { method: "POST", body: { mode, reason } })),
+  );
+  if (r.ok) {
+    revalidatePath("/admin");
+    revalidatePath("/admin/queue");
+  }
+  return r;
+}
+
+export async function moveQueueAction(
+  jobId: number,
+  position: "top" | "up" | "down" | "bottom",
+): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     await apiFetch<J[]>(`/admin/queue/${jobId}/move`, { method: "POST", body: { position } });
     return undefined;
@@ -336,12 +445,35 @@ export async function moveQueueAction(jobId: number, position: "top" | "up" | "d
   return r;
 }
 
-export async function stopJobAction(jobId: number, reason: string): Promise<ActionResult<undefined>> {
+export async function stopJobAction(jobId: number, reason: string, slug?: string): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     await apiFetch<J>(`/admin/jobs/${jobId}/stop`, { method: "POST", body: { reason } });
     return undefined;
   });
-  if (r.ok) revalidatePath("/admin/queue");
+  if (r.ok) {
+    revalidatePath("/admin/queue");
+    if (slug) revalidatePath(`/projects/${slug}/jobs/${jobId}`);
+  }
+  return r;
+}
+
+/** admin: re-queue a finished job as a new job with the same input and settings. */
+export async function restartJobAction(jobId: number, slug: string): Promise<ActionResult<Job>> {
+  const r = await run(async () => toJob(await apiFetch<J>(`/admin/jobs/${jobId}/restart`, { method: "POST" })));
+  if (r.ok) {
+    revalidatePath(`/projects/${slug}/jobs`);
+    revalidatePath("/admin/queue");
+  }
+  return r;
+}
+
+/** admin: delete a finished job together with its log / output folder. */
+export async function deleteJobAction(jobId: number, slug: string): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    await apiFetch<J>(`/admin/jobs/${jobId}`, { method: "DELETE" });
+    return undefined;
+  });
+  if (r.ok) revalidatePath(`/projects/${slug}/jobs`);
   return r;
 }
 

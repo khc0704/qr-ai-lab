@@ -4,11 +4,13 @@ import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { getModelZoo, getNodeStatus } from "@/lib/api";
+import { can, getCurrentUser } from "@/lib/session";
 import { ZooTable } from "./zoo-table";
 
 async function ModelZoo({ searchParams }: { searchParams: Promise<{ verify?: string }> }) {
   const { verify } = await searchParams;
-  const [entries, node] = await Promise.all([getModelZoo(verify === "1"), getNodeStatus()]);
+  const [entries, node, me] = await Promise.all([getModelZoo(verify === "1"), getNodeStatus(), getCurrentUser()]);
+  const canManage = can(me, "model_zoo.manage");
   const present = entries.filter((e) => e.status === "present").length;
   return (
     <>
@@ -29,7 +31,7 @@ async function ModelZoo({ searchParams }: { searchParams: Promise<{ verify?: str
           snapshot 資料夾的 zip；單檔權重（YOLO .pt）直接提供檔案。目錄有登記 sha256 的會在匯入時比對。
         </AlertDescription>
       </Alert>
-      <ZooTable entries={entries} verified={verify === "1"} />
+      <ZooTable entries={entries} verified={verify === "1"} canManage={canManage} />
     </>
   );
 }

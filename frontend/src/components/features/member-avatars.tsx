@@ -1,13 +1,14 @@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { initials } from "@/lib/format";
+import { isAdminRole } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 import type { User } from "@/types/domain";
 
 export function UserAvatar({ user, className }: { user: User; className?: string }) {
   return (
     <Avatar className={cn("size-7", className)}>
-      <AvatarFallback className={cn("text-[11px]", user.role === "admin" && "ring-1 ring-primary/50")}>
+      <AvatarFallback className={cn("text-[11px]", isAdminRole(user.role) && "ring-1 ring-primary/50")}>
         {initials(user.displayName)}
       </AvatarFallback>
     </Avatar>

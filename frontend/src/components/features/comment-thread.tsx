@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RelativeTime } from "@/components/features/time";
 import { addCommentAction } from "@/lib/actions";
 import type { Comment, User } from "@/types/domain";
+import { isAdminRole } from "@/lib/roles";
 
 export function CommentThread({
   comments,
@@ -48,7 +49,7 @@ export function CommentThread({
               <Card className="flex-1 gap-2 p-4">
                 <div className="flex items-baseline gap-2">
                   <span className="text-sm font-medium">{c.author?.displayName}</span>
-                  {c.author?.role === "admin" ? (
+                  {isAdminRole(c.author?.role) ? (
                     <span className="rounded-sm bg-primary/10 px-1.5 text-[11px] font-medium text-brand-ink">
                       管理員
                     </span>

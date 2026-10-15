@@ -16,16 +16,8 @@ export type ModelFamily =
   | "spectrum.masked_autoencoder"
   | "text.bert_classifier";
 export type InferenceMode =
-  | "predict"
-  | "score"
-  | "compare"
-  | "embed"
-  | "retrieve"
-  | "detect"
-  | "segment"
-  | "measure"
-  | "extend";
-export type SystemRole = "admin" | "user";
+  "predict" | "score" | "compare" | "embed" | "retrieve" | "detect" | "segment" | "measure" | "extend";
+export type SystemRole = "superadmin" | "admin" | "user";
 export type ProjectRole = "owner" | "maintainer" | "member" | "viewer";
 export type ProjectStatus = "active" | "archived";
 export type JobKind = "train" | "inference";
@@ -61,6 +53,10 @@ export interface User {
   role: SystemRole;
   isActive: boolean;
   lastLoginAt?: string;
+  authProvider?: "local" | "keycloak";
+  /** Only on the current user (/me): permission names resolved by the backend. */
+  permissions?: string[];
+  authMode?: "local" | "keycloak";
 }
 
 export interface ProjectMember {
@@ -152,6 +148,8 @@ export interface Job {
   requestedGpu: number;
   requestedCpu: number;
   requestedMemoryMb: number;
+  /** VRAM the job asked for (shared-GPU placement); undefined = whole GPUs. */
+  requestedGpuMemoryMb?: number;
   timeoutMinutes: number;
   assignedGpus?: number[];
   assignedCpus?: number[];
@@ -248,6 +246,8 @@ export interface ResourcePool {
   memoryMb: number;
   maxRunningJobs: number;
   allowBackfill: boolean;
+  /** Several jobs may share one GPU when they declare the VRAM they need. */
+  gpuShare: boolean;
 }
 
 export interface Allocated {
@@ -264,6 +264,90 @@ export interface NodeGpu {
   memoryUsedMb: number;
   utilization: number;
   jobId?: number;
+  jobIds: number[];
+  /** Σ VRAM reserved by the jobs placed here; equals the total when one of them holds the GPU exclusively. */
+  reservedMb?: number;
+  /** Compute processes the driver sees on this GPU (any user). */
+  processes?: number;
+}
+
+export type GpuResetMode = "jobs" | "all" | "device";
+
+export interface GpuResetResult {
+  index: number;
+  mode: GpuResetMode;
+  stoppedJobs: number[];
+  killedPids: number[];
+  skippedPids: number[];
+  command?: string;
+  commandOk?: boolean;
+  commandOutput?: string;
+  memoryUsedMbBefore?: number;
+  memoryUsedMbAfter?: number;
+}
+
+export type UsageRange = "1h" | "6h" | "24h" | "7d" | "30d";
+
+export interface UsagePoint {
+  t: string;
+  cpuPct?: number;
+  memUsedMb?: number;
+  gpuUtil?: number;
+  gpuMemUsedMb?: number;
+  allocGpu?: number;
+  allocCpu?: number;
+  allocMemoryMb?: number;
+  runningJobs?: number;
+  projects: Record<
+    string,
+    { gpu: number; cpu: number; memoryMb: number; runningJobs: number; cpuActual: number; memActualMb: number }
+  >;
+}
+
+export interface UsageProject {
+  id: number;
+  slug: string;
+  name: string;
+  gpuLimit: number;
+  cpuLimit: number;
+  memoryLimitMb: number;
+  status: ProjectStatus;
+}
+
+export interface UsageProjectShare {
+  gpuAvg: number;
+  cpuAvg: number;
+  memoryMbAvg: number;
+  gpuOfQuota: number;
+  cpuOfQuota: number;
+  memoryMbOfQuota: number;
+  gpuOfPool: number;
+  cpuOfPool: number;
+  memoryMbOfPool: number;
+  gpuOfNode: number;
+  cpuOfNode: number;
+  memoryMbOfNode: number;
+  cpuActualAvg: number;
+  memActualAvgMb: number;
+  jobSeconds: number;
+}
+
+export interface UsageHistory {
+  range: UsageRange;
+  bucketS: number;
+  sampleIntervalS: number;
+  points: UsagePoint[];
+  totals: {
+    cpuCores: number;
+    memoryMb: number;
+    gpuCount: number;
+    gpuMemoryMb: number;
+    poolGpu: number;
+    poolCpu: number;
+    poolMemoryMb: number;
+  };
+  projects: UsageProject[];
+  projectShare: Record<string, UsageProjectShare>;
 }
 
 export interface RunnerInfo {
@@ -360,7 +444,10 @@ export interface CatalogFamily {
 export interface Catalog {
   version: number;
   data_types: Record<DataType, { label: string; formats: string[] }>;
-  tasks: Record<TaskType, { label: string; metrics: string[]; direction: "maximize" | "minimize"; needs_labels: boolean }>;
+  tasks: Record<
+    TaskType,
+    { label: string; metrics: string[]; direction: "maximize" | "minimize"; needs_labels: boolean }
+  >;
   families: Record<string, CatalogFamily>;
   automl: {
     data_type: DataType;
@@ -440,6 +527,25 @@ export interface ArrayStat {
   min: number;
   max: number;
   nan_ratio?: number;
+}
+
+/** Standalone preprocessing tool: a temp file on the backend (no database row), gone after download / TTL. */
+export interface ToolUpload {
+  id: string;
+  dataType: DataType;
+  originalFilename: string;
+  sizeBytes: number;
+  format: string;
+  detectedSpec?: Record<string, unknown>;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface ToolProcessResult {
+  id: string;
+  summary: Record<string, unknown> & { steps?: string[]; files?: string[] };
+  zipSizeBytes: number;
+  downloadPath: string;
 }
 
 export interface Capacity {

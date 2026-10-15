@@ -53,8 +53,7 @@ export const modelFamilyLabel: Record<ModelFamily, string> = {
 };
 
 /** Unknown ids (e.g. a family added to the catalog before the UI) fall back to the id itself. */
-export const familyLabel = (f?: string | null): string =>
-  f ? (modelFamilyLabel[f as ModelFamily] ?? f) : "—";
+export const familyLabel = (f?: string | null): string => (f ? (modelFamilyLabel[f as ModelFamily] ?? f) : "—");
 
 export const inferenceModeLabel: Record<InferenceMode, string> = {
   predict: "預測（類別 / 數值）",
@@ -123,7 +122,16 @@ export const issueTypeLabel: Record<IssueType, string> = {
 
 export const issueStatusLabel: Record<IssueStatus, string> = { open: "開放", closed: "已關閉" };
 export const projectStatusLabel: Record<ProjectStatus, string> = { active: "進行中", archived: "已封存" };
-export const systemRoleLabel: Record<SystemRole, string> = { admin: "管理員", user: "使用者" };
+export const systemRoleLabel: Record<SystemRole, string> = {
+  superadmin: "系統管理員",
+  admin: "管理員",
+  user: "使用者",
+};
+export const systemRoleHint: Record<SystemRole, string> = {
+  superadmin: "所有操作：資源池、專案配額、刪專案、模型庫、使用者角色、GPU 重置",
+  admin: "日常營運：審核申請、中斷 / 重啟 / 重排任務、管理討論區；不能改資源或刪專案",
+  user: "沒有任何管理操作，只有專案內的角色",
+};
 
 export const projectRoleLabel: Record<ProjectRole, string> = {
   owner: "擁有者",
@@ -158,6 +166,7 @@ export const nav = {
   discussions: "討論區",
   projectRequests: "專案申請",
   projects: "專案",
+  tools: "資料前處理",
   admin: "管理",
   adminDashboard: "Dashboard",
   adminRequests: "申請審核",
@@ -165,6 +174,7 @@ export const nav = {
   adminUsers: "使用者",
   adminQuotas: "專案配額",
   adminModelZoo: "模型庫",
+  adminUsage: "使用率歷史",
   adminAudit: "稽核紀錄",
 } as const;
 
@@ -178,6 +188,10 @@ export const routeLabel: Record<string, string> = {
   users: nav.adminUsers,
   quotas: nav.adminQuotas,
   audit: nav.adminAudit,
+  usage: nav.adminUsage,
+  tools: "工具",
+  preprocess: nav.tools,
+  "model-zoo": nav.adminModelZoo,
   "data-sources": "資料來源",
   jobs: "任務",
   models: "模型",

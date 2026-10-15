@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { toUser, type UserRead } from "@/lib/api/mappers";
 import { ApiError, apiFetch, getToken } from "@/lib/backend";
+import { can as canPerm, isAdminRole, type Permission } from "@/lib/roles";
 import type { User } from "@/types/domain";
 
 export const getOptionalUser = cache(async (): Promise<User | null> => {
@@ -25,6 +26,11 @@ export const getCurrentUser = cache(async (): Promise<User> => {
   return user;
 });
 
+/** admin or superadmin: may enter the admin area. Use `can()` for anything finer. */
 export function isAdmin(user: User): boolean {
-  return user.role === "admin";
+  return isAdminRole(user.role);
+}
+
+export function can(user: User, perm: Permission): boolean {
+  return canPerm(user, perm);
 }
