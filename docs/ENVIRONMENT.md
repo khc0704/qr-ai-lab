@@ -15,7 +15,7 @@
 - `backend/tests/conftest.py`：測試用固定值（SQLite 暫存、假 secret、`JOB_RUNNER=subprocess`），不要拿來當範本。
 - 排程器啟動每個任務子程序時注入的 `JOB_*`、`DATA_SOURCE_*`、`CUDA_VISIBLE_DEVICES`、`*_NUM_THREADS`、離線旗標（`app/scheduler/runner.py` 的 `job_env` / `thread_env`），由程式產生，不用手動設定。
 - `infra/systemd/*.service` 內的少數固定值（`NODE_ENV=production`、`NEXT_TELEMETRY_DISABLED=1`）。
-- e2e 截圖腳本讀的 `CHROMIUM_PATH`、`BASE_URL`、`API_URL`、`DATA_DIR`、`ZOO_DIR`、`PHASES`、`START_N`（只在跑 `npm run screenshots*` 時用）。
+- e2e 截圖腳本讀的 `CHROMIUM_PATH`、`BASE_URL`、`API_URL`、`DATA_DIR`、`ZOO_DIR`、`PHASES`、`START_N`、`OUT_DIR`（只在跑 `npm run screenshots*` 時用）。
 
 ## backend / scheduler（`backend/.env` 或 `/etc/qr-ai-lab/qrlab.env`）
 
