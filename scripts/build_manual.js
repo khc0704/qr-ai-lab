@@ -9,7 +9,7 @@ const {
 } = require("docx");
 
 const ROOT = path.resolve(__dirname, "..");
-const SHOTS = path.join(ROOT, "docs", "screenshots");
+const SHOTS = path.join(ROOT, "docs", "screenshots", "e2e"); // real end-to-end screenshots (NN-name.png)
 const OUT = path.join(ROOT, "docs", "manuals", "QR-AI-Lab-使用手冊.docx");
 const FONT = { ascii: "Calibri", hAnsi: "Calibri", eastAsia: "Microsoft JhengHei", cs: "Calibri" };
 const MONO = { ascii: "Consolas", hAnsi: "Consolas", eastAsia: "Microsoft JhengHei", cs: "Consolas" };
@@ -47,7 +47,9 @@ function table(headers, rows, widths) {
 
 function pngSize(buf) { return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }; }
 function img(name, caption) {
-  const file = path.join(SHOTS, name);
+  // `name` is the screenshot's suffix (e.g. "request-form-filled"); the numbered prefix is resolved here.
+  const match = fs.existsSync(SHOTS) ? fs.readdirSync(SHOTS).find((f) => f.endsWith(`-${name}.png`)) : undefined;
+  const file = match ? path.join(SHOTS, match) : path.join(SHOTS, name);
   if (!fs.existsSync(file)) return [p(`（截圖 ${name} 不存在）`)];
   const data = fs.readFileSync(file);
   const { w, h } = pngSize(data);
@@ -115,9 +117,9 @@ const children = [
     "任務頁看即時 log、進度、指標；完成後在「模型」頁看到產物，第一個模型自動成為預設模型。",
     "「新建任務」選推論：選模型、推論模式、輸入資料（直接貼 JSON、上傳或資料來源），完成後下載 predictions.csv。",
   ]),
-  ...img("project-request-new.light.png", "圖 1　專案申請表單"),
-  ...img("project-job-new.dark.png", "圖 2　新建任務精靈（資料來源 → 模型 → 資源）"),
-  ...img("project-job-running.light.png", "圖 3　任務頁：進度、即時 log、指標"),
+  ...img("request-form-filled", "圖 1　專案申請表單（填好的例子）"),
+  ...img("wizard-2-preview", "圖 2　新建任務精靈：欄位與前處理（抽樣預覽處理前 / 後）"),
+  ...img("job-log-live", "圖 3　任務頁：執行中的即時 log"),
   pb(),
 
   h1("2. 建立任務（Job）：欄位說明與推論模式"),
@@ -278,7 +280,7 @@ const children = [
     "log 每行有時間與等級：[SYSTEM] 是排程器（分配資源、啟動、逾時、中斷），[INFO] / [WARN] / [ERROR] 來自訓練程式；每個 epoch / trial 一行。",
     "結果不好：先檢查資料（標籤錯、類別極端不平衡、圖片太小、光譜長度不一致），再增加資料，最後才調參。",
   ]),
-  ...img("project-models.dark.png", "圖 4　模型頁：產物、版本、預設模型"),
+  ...img("job-succeeded", "圖 4　訓練完成：最佳模型、AutoML leaderboard"),
 
   h1("10. 管理員：資源池、佇列、強制中斷、模型庫"),
   ...ul([
@@ -288,8 +290,8 @@ const children = [
     "模型庫：列出目錄需要的預訓練權重與是否存在。權重由管理員在有網路的機器用 scripts/fetch_model_zoo.py 下載，放到伺服器的 MODEL_ZOO_ROOT；訓練容器完全離線。",
     "專案申請審核：核准時指定 slug、GPU / CPU / 記憶體 / 儲存配額、同時執行上限與成員。",
   ]),
-  ...img("admin-dashboard.light.png", "圖 5　管理員儀表板"),
-  ...img("admin-queue.light.png", "圖 6　佇列與執行中任務"),
+  ...img("admin-dashboard", "圖 5　管理員儀表板"),
+  ...img("admin-queue", "圖 6　佇列與執行中任務"),
   pb(),
 
   h1("11. 常見問題"),
