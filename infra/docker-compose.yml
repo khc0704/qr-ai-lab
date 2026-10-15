@@ -1,7 +1,7 @@
 # 本地開發與單機部署。基礎服務（mariadb、redis）永遠啟動；backend / scheduler 在 profile `app`。
 #   基礎服務：cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
 #   全部：    docker compose -f infra/docker-compose.yml --env-file infra/.env --profile app up -d
-# trainer image 另外建置：docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
+# trainer image 另外建置（context = repo 根目錄）：docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .
 # frontend / nginx：前端接上 backend 後加入（docs/ARCHITECTURE.md §13）。
 name: qr-ai-lab
 
@@ -73,8 +73,8 @@ services:
   backend:
     profiles: [app]
     build:
-      context: ../backend
-      dockerfile: ../infra/backend/Dockerfile
+      context: ..                       # repo root: backend + libs/preprocess
+      dockerfile: infra/backend/Dockerfile
     image: qr-ai-lab/backend:dev
     restart: unless-stopped
     environment: *backend-env

@@ -1,5 +1,6 @@
 # QR AI Lab trainer image: CUDA runtime + Python 3.12 + the trainer package (all model families).
-# Build:  docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile trainer
+# Build (context = repo root, because trainer depends on libs/preprocess):
+#   docker build -t qr-ai-lab/trainer:dev -f infra/trainer/Dockerfile .
 # The image never downloads weights: pretrained models are mounted read-only at /job/zoo (MODEL_ZOO_ROOT).
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu24.04
 
@@ -22,13 +23,14 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+COPY libs/preprocess /libs/preprocess
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY trainer/pyproject.toml trainer/uv.lock ./
 # uv.lock pins the PyPI torch build (bundles CUDA libraries; needs a driver that supports it). To pin a
 # different CUDA line instead, add e.g. `--index https://download.pytorch.org/whl/cu124 --index-strategy unsafe-best-match`
 # and drop --frozen so the resolution can change.
 RUN uv sync --frozen --no-dev --extra dl --no-install-project
-COPY trainer ./trainer
+COPY trainer/trainer ./trainer
 
 # Hardened at runtime by the scheduler (read-only rootfs, cap_drop ALL, user 1000); make the dirs it needs.
 RUN mkdir -p /job/input /job/output /job/model /job/zoo && chown -R 1000:1000 /job
