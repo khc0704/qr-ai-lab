@@ -34,9 +34,9 @@ paths:
 ## 程式風格
 
 - Python 3.12、全面 async（`AsyncSession`、`httpx.AsyncClient`；檔案 I/O 與 docker SDK 的同步呼叫用 `asyncio.to_thread`）。
-- Ruff lint + format（line-length 100）、完整型別註記、`from __future__ import annotations`。
+- Ruff lint + format（line-length 120）、完整型別註記、`from __future__ import annotations`。
 - 不用 `print`；用 `structlog`，log 不含 token、密碼、使用者憑證。
-- 設定只透過 `Settings`；測試用 `.env.test` + 測試用 MariaDB（docker）或 SQLite 僅限純邏輯測試；`DATA_ROOT` 在測試中指向 tmp 目錄。
+- 設定只透過 `Settings`；測試（`tests/conftest.py`）用 SQLite 暫存檔 + 記憶體事件 bus + tmp `DATA_ROOT`，排程器用假 runner；`tests/test_e2e_subprocess.py` 以 subprocess runner 跑真的 trainer（`-m e2e`）。
 - 使用者資料來源憑證以 Fernet（`DATASET_SECRET_KEY`）加密存 `data_sources.credentials_enc`，只在 scheduler 組裝 Job 容器環境變數時解密；API 回應只回 `has_credentials`。
 - 不留存政策是硬規則：任何寫入使用者資料的程式碼只能落在 `uploads/` 或 `jobs/{id}/input/`，而且必須有對應的刪除路徑（Job 終態、過期清理）。
 - 改 DB 結構請同時遵守 `.claude/rules/database.md`。
@@ -44,7 +44,8 @@ paths:
 ## Trainer
 
 - 每個 model family 實作 `BaseTrainer`（`prepare / fit / evaluate / export`）與 `BaseInferencer`（`load / predict`），註冊到 `trainer/models/registry.py`；id 必須與 `backend/app/catalog/model_catalog.yaml` 一致（CI 測試比對）。
-- 輸入在 `/job/input`（唯讀）：upload 已就緒；data_source 由 trainer 以 `minio` SDK / `httpx` 自行下載到 `/job/input`（stage `fetching`，回報進度）。輸出寫 `/job/output/{model|preprocessor|report|metrics|output}/`，再呼叫 `/internal/jobs/{id}/artifacts` 登記；trainer 不直接連 DB，不持有任何伺服器端憑證。
+- 輸入在 `/job/input`：upload 已就緒（唯讀）；data_source 由 trainer 以 `minio` SDK / `httpx` 自行下載到 `/job/input`（可寫；stage `fetching`，回報進度）。暫存只能寫 `/job/output/_work`（結束自刪）。輸出寫 `/job/output/{model|preprocessor|report|metrics|output}/`，再呼叫 `/internal/jobs/{id}/artifacts` 登記（path 可為目錄）；trainer 不直接連 DB，不持有任何伺服器端憑證。
+- 預訓練權重只透過 `ctx.weight(id)` 從 `/job/zoo`（`MODEL_ZOO_ROOT`）取得；容器設 `HF_HUB_OFFLINE=1` 等離線變數，任何 `from_pretrained` / `YOLO(...)` 都必須指向本地路徑（`local_files_only=True`），絕不自行下載。
 - 一律把有意義的進度印到 stdout（每 epoch / trial 一行，含指標），因為 stdout 就是使用者看到的 log；不要印憑證或完整環境變數。
 - 尊重資源限制：GPU 由 scheduler 用 `CUDA_VISIBLE_DEVICES` 指定；DataLoader workers ≤ cpu_limit；batch size 由搜尋空間決定但要有 OOM 回退（減半重試一次）。
 - AutoML：Optuna 單容器循序 trial，`MedianPruner`，受 `max_trials` 與 `time_budget_minutes` 限制；每個 trial 回報一筆 leaderboard row。

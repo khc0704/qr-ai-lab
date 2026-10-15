@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from app.schemas.common import ORMModel
+from app.schemas.user import UserRead
+
+
+class JobInputBody(BaseModel):
+    kind: Literal["upload", "data_source", "inline"]
+    upload_id: int | None = None
+    data_source_id: int | None = None
+    format: str | None = None
+    spec: dict[str, Any] = Field(default_factory=dict)
+    rows: list[dict[str, Any]] | None = None  # inline (inference only)
+
+
+class JobCreate(BaseModel):
+    kind: Literal["train", "inference"]
+    name: str = Field(min_length=1, max_length=120)
+    input: JobInputBody
+    task_type: str | None = None
+    mode: Literal["manual", "auto"] | None = None
+    model_family: str | None = None
+    config: dict[str, Any] | None = None
+    artifact_id: int | None = None
+    requested_gpu: int = Field(default=0, ge=0, le=64)
+    requested_cpu: float = Field(default=1, ge=0.5)
+    requested_memory_mb: int = Field(default=2048, ge=256)
+    timeout_minutes: int | None = Field(default=None, ge=1)
+
+
+class JobRead(ORMModel):
+    id: int
+    project_id: int
+    project_slug: str
+    project_name: str
+    kind: str
+    name: str
+    status: str
+    queue_rank: int
+    queue_position: int | None = None
+    wait_reason: str | None = None
+    requested_gpu: int
+    requested_cpu: float
+    requested_memory_mb: int
+    timeout_minutes: int
+    assigned_gpus: list[int] | None
+    progress: float
+    current_stage: str | None
+    task_type: str | None
+    mode: str | None
+    model_family: str | None
+    data_source_id: int | None
+    artifact_id: int | None
+    input: dict[str, Any]
+    config: dict[str, Any] | None
+    metrics: dict[str, Any] | None
+    result: dict[str, Any] | None
+    output_path: str | None
+    error_message: str | None
+    cancel_reason: str | None
+    cancel_requested_by: UserRead | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_by: UserRead
+    created_at: datetime
+
+
+class LogLinesRead(BaseModel):
+    lines: list[str]
+    offset: int
+    total: int
+
+
+class StopBody(BaseModel):
+    reason: str = Field(min_length=2, max_length=255)
+
+
+class OrderBody(BaseModel):
+    job_ids: list[int] = Field(min_length=1)
+
+
+class MoveBody(BaseModel):
+    position: Literal["top", "up", "down", "bottom"]

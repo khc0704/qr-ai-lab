@@ -1,0 +1,255 @@
+# Model catalog: single source of truth for data types, tasks, model families, AutoML candidates and the
+# pretrained-weight manifest (model zoo). Human doc: docs/MODEL_CATALOG.md. Trainer registry ids must match.
+version: 2
+
+data_types:
+  TABULAR:  { label: 表格,  formats: [csv, parquet] }
+  IMAGE:    { label: 圖片,  formats: [image_folder, coco, yolo] }
+  SEQUENCE: { label: 序列,  formats: [csv, npy] }
+  TEXT:     { label: 文字,  formats: [csv, jsonl] }
+  SPECTRUM: { label: 光譜,  formats: [spectrum_csv, npy] }
+
+tasks:
+  classification:    { label: 分類,     metrics: [f1_macro, accuracy, auroc], direction: maximize, needs_labels: true }
+  regression:        { label: 迴歸,     metrics: [rmse, mae, r2],            direction: minimize, needs_labels: true }
+  detection:         { label: 物件偵測, metrics: [map50_95, map50],          direction: maximize, needs_labels: true }
+  segmentation:      { label: 分割,     metrics: [mask_map50_95, mask_map50], direction: maximize, needs_labels: true }
+  anomaly_detection: { label: 異常偵測, metrics: [auroc, f1],                direction: maximize, needs_labels: false }
+
+# inference_modes: what a trained artifact can be asked to do at inference time
+#   predict   → label / value per sample            detect / segment → boxes / masks
+#   score     → anomaly score + threshold verdict    embed → vector per sample
+#   retrieve  → nearest / farthest against a reference set (golden library)   measure → geometry from masks
+families:
+  tabular.linear:
+    label: 線性 / 邏輯迴歸
+    group: tabular
+    framework: sklearn
+    supports: { TABULAR: [classification, regression], TEXT: [classification] }
+    inference_modes: [predict]
+    resources: { gpu: none, cpu_min: 1, memory_mb_min: 1024 }
+    min_rows: 50
+    defaults: { C: 1.0, alpha: 1.0 }
+    search_space:
+      C: { type: float, low: 0.001, high: 100, log: true }
+    weights: []
+    sop: 最簡單、可解釋、秒級訓練，當基準線。TEXT 時自動接 TF-IDF。
+
+  tabular.svm:
+    label: SVM
+    group: tabular
+    framework: sklearn
+    supports: { TABULAR: [classification, regression] }
+    inference_modes: [predict]
+    resources: { gpu: none, cpu_min: 1, memory_mb_min: 2048 }
+    max_rows: 50000
+    defaults: { C: 1.0, kernel: rbf, gamma: scale }
+    search_space:
+      C: { type: float, low: 0.01, high: 100, log: true }
+      gamma: { type: float, low: 0.0001, high: 1, log: true }
+      kernel: { type: categorical, choices: [rbf, linear] }
+    weights: []
+    sop: 小資料、特徵多時表現好；超過 5 萬列會很慢。
+
+  tabular.random_forest:
+    label: 隨機森林
+    group: tabular
+    framework: sklearn
+    supports: { TABULAR: [classification, regression] }
+    inference_modes: [predict]
+    resources: { gpu: none, cpu_min: 2, memory_mb_min: 2048 }
+    defaults: { n_estimators: 300, max_depth: null, min_samples_leaf: 1 }
+    search_space:
+      n_estimators: { type: int, low: 100, high: 800 }
+      max_depth: { type: int, low: 4, high: 32 }
+      min_samples_leaf: { type: int, low: 1, high: 10 }
+    weights: []
+    sop: 穩健、不太需要調參、給特徵重要度。
+
+  tabular.xgboost:
+    label: XGBoost
+    group: tabular
+    framework: xgboost
+    supports: { TABULAR: [classification, regression] }
+    inference_modes: [predict]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 2048 }
+    min_rows: 200
+    defaults: { n_estimators: 500, learning_rate: 0.05, max_depth: 6, subsample: 0.8, colsample_bytree: 0.8 }
+    search_space:
+      learning_rate: { type: float, low: 0.01, high: 0.3, log: true }
+      max_depth: { type: int, low: 3, high: 10 }
+      min_child_weight: { type: int, low: 1, high: 10 }
+      subsample: { type: float, low: 0.5, high: 1.0 }
+      colsample_bytree: { type: float, low: 0.5, high: 1.0 }
+      reg_lambda: { type: float, low: 0.001, high: 10, log: true }
+    weights: []
+    sop: 表格資料的預設首選，多數情況最準。
+
+  tabular.isolation_forest:
+    label: Isolation Forest
+    group: tabular
+    framework: sklearn
+    supports: { TABULAR: [anomaly_detection] }
+    inference_modes: [score]
+    resources: { gpu: none, cpu_min: 1, memory_mb_min: 1024 }
+    defaults: { n_estimators: 200, contamination: auto }
+    search_space:
+      n_estimators: { type: int, low: 100, high: 500 }
+      max_samples: { type: float, low: 0.2, high: 1.0 }
+    weights: []
+    sop: 只用正常（或大多正常）的表格資料找離群樣本，例如 WAT / PCM 參數異常。
+
+  vision.yolo:
+    label: YOLO
+    group: vision
+    framework: ultralytics
+    supports: { IMAGE: [detection, segmentation, classification] }
+    inference_modes: [detect, segment, predict]
+    resources: { gpu: required, cpu_min: 4, memory_mb_min: 8192 }
+    min_rows: 200
+    defaults: { model: yolo11s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true }
+    search_space:
+      model: { type: categorical, choices: [yolo11n, yolo11s, yolo11m] }
+      imgsz: { type: categorical, choices: [512, 640, 800] }
+      lr0: { type: float, low: 0.001, high: 0.02, log: true }
+      epochs: { type: int, low: 50, high: 150 }
+    weights:
+      - { id: yolo11n,     file: yolo11n.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolo11s,     file: yolo11s.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolo11m,     file: yolo11m.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolo11n-seg, file: yolo11n-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-seg.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolo11s-seg, file: yolo11s-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-seg.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolo11n-cls, file: yolo11n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-cls.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolo11s-cls, file: yolo11s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-cls.pt", license: AGPL-3.0, sha256: null }
+    sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。
+
+  vision.dino_fewshot:
+    label: DINOv2 few-shot 分類（原型庫）
+    group: vision
+    framework: torch
+    supports: { IMAGE: [classification] }
+    inference_modes: [predict, embed, retrieve]
+    resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
+    min_rows: 5
+    defaults: { backbone: dinov2-small, head: prototype, k: 5, metric: cosine }
+    search_space:
+      backbone: { type: categorical, choices: [dinov2-small, dinov2-base] }
+      k: { type: int, low: 1, high: 20 }
+    weights:
+      - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
+    sop: 凍結 DINOv2 取特徵，每個類別（bin code）存成原型；新增類別只要加幾張範例，不用重訓。適合 TEM / SEM 表面影像分類。
+
+  vision.dino_patchcore:
+    label: DINOv2 PatchCore 異常偵測
+    group: vision
+    framework: torch
+    supports: { IMAGE: [anomaly_detection] }
+    inference_modes: [score, embed]
+    resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
+    min_rows: 20
+    defaults: { backbone: dinov2-small, coreset_ratio: 0.1, k: 3 }
+    search_space:
+      coreset_ratio: { type: float, low: 0.02, high: 0.3 }
+      k: { type: int, low: 1, high: 9 }
+    weights:
+      - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
+    sop: 只用正常影像建 patch 特徵記憶庫，異常分數 = 最近鄰距離，並輸出熱圖定位。
+
+  sequence.patch_autoencoder:
+    label: Patch Autoencoder
+    group: sequence
+    framework: torch
+    supports: { SEQUENCE: [anomaly_detection], SPECTRUM: [anomaly_detection] }
+    inference_modes: [score, embed, retrieve]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 4096 }
+    min_rows: 200
+    defaults: { patch_size: 16, latent: 32, layers: 3, lr: 0.001, epochs: 50 }
+    search_space:
+      patch_size: { type: categorical, choices: [8, 16, 32] }
+      latent: { type: int, low: 8, high: 128 }
+      layers: { type: int, low: 2, high: 4 }
+      lr: { type: float, low: 0.0001, high: 0.01, log: true }
+    weights: []
+    sop: 曲線切 patch 後做自編碼器，重建誤差大 = 異常；embedding 可拿來找最相似 / 最不相似的樣本。
+
+  spectrum.masked_autoencoder:
+    label: 光譜 Masked Autoencoder
+    group: spectrum
+    framework: torch
+    supports: { SPECTRUM: [anomaly_detection, regression] }
+    inference_modes: [score, embed, retrieve, predict]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 4096 }
+    min_rows: 500
+    defaults: { patch_size: 16, mask_ratio: 0.5, dim: 64, depth: 4, heads: 4, lr: 0.0005, epochs: 100 }
+    search_space:
+      patch_size: { type: categorical, choices: [8, 16, 32] }
+      mask_ratio: { type: float, low: 0.3, high: 0.75 }
+      dim: { type: categorical, choices: [32, 64, 128] }
+      depth: { type: int, low: 2, high: 6 }
+      lr: { type: float, low: 0.0001, high: 0.005, log: true }
+    weights: []
+    sop: 把光譜切 patch 隨機遮蔽再重建，學到的 embedding 做光譜鑑別器：與黃金樣本比相似度、找最不相似、追蹤漂移；有標籤時接迴歸頭預測 CD / 厚度。
+
+  text.bert_classifier:
+    label: BERT 分類器
+    group: text
+    framework: transformers
+    supports: { TEXT: [classification] }
+    inference_modes: [predict, embed]
+    resources: { gpu: required, cpu_min: 4, memory_mb_min: 8192 }
+    min_rows: 300
+    defaults: { model: bert-base-chinese, max_len: 256, lr: 0.00002, epochs: 3, batch: 16 }
+    search_space:
+      lr: { type: float, low: 0.00001, high: 0.00005, log: true }
+      epochs: { type: int, low: 2, high: 5 }
+      max_len: { type: categorical, choices: [128, 256, 512] }
+    weights:
+      - { id: bert-base-chinese, file: bert-base-chinese/, source: "https://huggingface.co/google-bert/bert-base-chinese", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: xlm-roberta-base,  file: xlm-roberta-base/,  source: "https://huggingface.co/FacebookAI/xlm-roberta-base", license: MIT, sha256: null, kind: hf_repo }
+    sop: 預訓練 BERT 接分類頭，語意理解；權重從模型庫離線載入。
+
+automl:
+  - data_type: TABULAR
+    tasks: [classification, regression]
+    candidates: [tabular.xgboost, tabular.random_forest, tabular.linear, tabular.svm]
+    rules:
+      - { if: "row_count > 50000", drop: [tabular.svm] }
+      - { if: "row_count < 1000", prefer: [tabular.random_forest] }
+    budget: { max_trials: 20, time_budget_minutes: 60 }
+  - data_type: TABULAR
+    tasks: [anomaly_detection]
+    candidates: [tabular.isolation_forest]
+    budget: { max_trials: 10, time_budget_minutes: 20 }
+  - data_type: IMAGE
+    tasks: [classification]
+    candidates: [vision.dino_fewshot, vision.yolo]
+    rules:
+      - { if: "row_count < 100", drop: [vision.yolo] }
+    budget: { max_trials: 8, time_budget_minutes: 120 }
+  - data_type: IMAGE
+    tasks: [detection, segmentation]
+    candidates: [vision.yolo]
+    budget: { max_trials: 8, time_budget_minutes: 120 }
+  - data_type: IMAGE
+    tasks: [anomaly_detection]
+    candidates: [vision.dino_patchcore]
+    budget: { max_trials: 6, time_budget_minutes: 60 }
+  - data_type: SEQUENCE
+    tasks: [anomaly_detection]
+    candidates: [sequence.patch_autoencoder]
+    budget: { max_trials: 10, time_budget_minutes: 60 }
+  - data_type: SPECTRUM
+    tasks: [anomaly_detection]
+    candidates: [spectrum.masked_autoencoder, sequence.patch_autoencoder]
+    budget: { max_trials: 10, time_budget_minutes: 60 }
+  - data_type: SPECTRUM
+    tasks: [regression]
+    candidates: [spectrum.masked_autoencoder]
+    budget: { max_trials: 10, time_budget_minutes: 60 }
+  - data_type: TEXT
+    tasks: [classification]
+    candidates: [text.bert_classifier, tabular.linear]
+    rules:
+      - { if: "row_count < 300", drop: [text.bert_classifier] }
+    budget: { max_trials: 8, time_budget_minutes: 120 }

@@ -1,0 +1,90 @@
+"""FastAPI dependencies: DB session, current user, admin, project role, internal job token."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import Depends, Path
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.errors import forbidden, not_found, unauthorized
+from app.core.security import decode_access_token, decode_job_token, decode_keycloak_token
+from app.db.session import get_session
+from app.models import Job, Project, User
+
+bearer = HTTPBearer(auto_error=False)
+DbSession = Annotated[AsyncSession, Depends(get_session)]
+Creds = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+
+ROLE_ORDER = {"viewer": 0, "member": 1, "maintainer": 2, "owner": 3}
+
+
+async def get_current_user(session: DbSession, creds: Creds) -> User:
+    if creds is None or not creds.credentials:
+        raise unauthorized()
+    s = get_settings()
+    if s.auth_mode == "keycloak":
+        from app.services import users as users_svc
+
+        claims = decode_keycloak_token(creds.credentials, s)
+        user = await users_svc.upsert_keycloak_user(session, claims)
+    else:
+        claims = decode_access_token(creds.credentials, s)
+        user = await session.get(User, int(claims["sub"]))
+    if user is None or not user.is_active:
+        raise unauthorized("USER_INACTIVE", "帳號不存在或已停用")
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def require_admin(user: CurrentUser) -> User:
+    if not user.is_admin:
+        raise forbidden("ADMIN_ONLY", "只有管理員可以執行")
+    return user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]
+
+
+@dataclass
+class ProjectAccess:
+    project: Project
+    role: str  # effective role; admins are owners everywhere
+    user: User
+
+
+def project_access(min_role: str = "viewer"):
+    async def dep(session: DbSession, user: CurrentUser, slug: Annotated[str, Path()]) -> ProjectAccess:
+        project = (await session.execute(select(Project).where(Project.slug == slug))).scalar_one_or_none()
+        if project is None:
+            raise not_found("PROJECT_NOT_FOUND", f"找不到專案 {slug}")
+        role = "owner" if user.is_admin else project.role_of(user.id)
+        if role is None:
+            raise not_found("PROJECT_NOT_FOUND", f"找不到專案 {slug}")  # hide existence from non-members
+        if ROLE_ORDER[role] < ROLE_ORDER[min_role]:
+            raise forbidden("PROJECT_ROLE", f"需要 {min_role} 以上的專案角色")
+        return ProjectAccess(project=project, role=role, user=user)
+
+    return dep
+
+
+async def get_internal_job(session: DbSession, creds: Creds, job_id: Annotated[int, Path()]) -> Job:
+    """Trainer → backend calls carry a per-job token whose subject must match the path."""
+    if creds is None:
+        raise unauthorized("INVALID_JOB_TOKEN", "缺少 job token")
+    claims = decode_job_token(creds.credentials)
+    if int(claims["sub"]) != job_id:
+        raise forbidden("JOB_TOKEN_MISMATCH", "token 不屬於此 job")
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise not_found("JOB_NOT_FOUND", "找不到 job")
+    return job
+
+
+InternalJob = Annotated[Job, Depends(get_internal_job)]

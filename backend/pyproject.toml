@@ -1,0 +1,52 @@
+[project]
+name = "qr-ai-lab-backend"
+version = "0.1.0"
+description = "QR AI Lab backend API and scheduler (FastAPI)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "asyncmy>=0.2.9",
+  "aiosqlite>=0.20",
+  "alembic>=1.13",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "python-multipart>=0.0.9",
+  "pyjwt[crypto]>=2.8",
+  "argon2-cffi>=23.1",
+  "cryptography>=42",
+  "redis>=5.0",
+  "httpx>=0.27",
+  "structlog>=24",
+  "pyyaml>=6",
+  "docker>=7.1",
+  "psutil>=5.9",
+  "aiofiles>=23",
+  "minio>=7.2",
+  "sse-starlette>=2.1",
+]
+
+[project.optional-dependencies]
+gpu = ["nvidia-ml-py>=12"]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "anyio>=4"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["B008", "RUF012", "RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["e2e: runs the real trainer in a child process (slower)"]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
