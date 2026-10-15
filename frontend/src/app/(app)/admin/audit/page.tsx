@@ -2,7 +2,7 @@ import { UserInline } from "@/components/features/member-avatars";
 import { PageHeader } from "@/components/layout/page-header";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listAuditLogs } from "@/lib/api";
-import { formatDateTime, formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
 
 export default async function AdminAuditPage() {
   const logs = await listAuditLogs();
@@ -23,11 +23,8 @@ export default async function AdminAuditPage() {
           <TableBody>
             {logs.map((l) => (
               <TableRow key={l.id}>
-                <TableCell
-                  className="font-mono text-xs text-muted-foreground tabular-nums"
-                  title={formatDateTime(l.createdAt)}
-                >
-                  {formatRelative(l.createdAt)}
+                <TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
+                  <RelativeTime iso={l.createdAt} />
                 </TableCell>
                 <TableCell>
                   {l.actor ? (

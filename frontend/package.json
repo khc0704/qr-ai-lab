@@ -11,7 +11,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "gen:api": "echo 'TODO: openapi-typescript http://localhost:8000/openapi.json -o src/types/api.ts (backend not created yet)'",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/e2e-walkthrough.mjs",
+    "screenshots:report": "node scripts/e2e-report.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

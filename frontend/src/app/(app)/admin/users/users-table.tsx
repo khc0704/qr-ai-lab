@@ -1,15 +1,24 @@
 "use client";
 
+import { useTransition } from "react";
 import { toast } from "sonner";
 import { UserInline } from "@/components/features/member-avatars";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { systemRoleLabel } from "@/i18n/zh-TW";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
+import { updateUserAction } from "@/lib/actions";
 import type { User } from "@/types/domain";
 
-export function UsersTable({ users }: { users: User[] }) {
+export function UsersTable({ users, currentUserId }: { users: User[]; currentUserId: number }) {
+  const [pending, startTransition] = useTransition();
+  const update = (u: User, body: { role?: string; is_active?: boolean }, done: string) =>
+    startTransition(async () => {
+      const r = await updateUserAction(u.id, body);
+      if (!r.ok) toast.error(r.error);
+      else toast.success(done);
+    });
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <Table>
@@ -33,8 +42,11 @@ export function UsersTable({ users }: { users: User[] }) {
               <TableCell className="font-mono text-xs text-muted-foreground">{u.email}</TableCell>
               <TableCell>
                 <Select
-                  defaultValue={u.role}
-                  onValueChange={(v) => toast.success(`${u.displayName} → ${systemRoleLabel[v as User["role"]]}`)}
+                  value={u.role}
+                  disabled={pending || u.id === currentUserId}
+                  onValueChange={(v) =>
+                    update(u, { role: v }, `${u.displayName} → ${systemRoleLabel[v as User["role"]]}`)
+                  }
                 >
                   <SelectTrigger size="sm" className="w-28">
                     <SelectValue />
@@ -47,13 +59,14 @@ export function UsersTable({ users }: { users: User[] }) {
               </TableCell>
               <TableCell>
                 <Switch
-                  defaultChecked={u.isActive}
+                  checked={u.isActive}
+                  disabled={pending || u.id === currentUserId}
                   aria-label={`啟用 ${u.displayName}`}
-                  onCheckedChange={(c) => toast.success(`${u.displayName} 已${c ? "啟用" : "停用"}`)}
+                  onCheckedChange={(c) => update(u, { is_active: c }, `${u.displayName} 已${c ? "啟用" : "停用"}`)}
                 />
               </TableCell>
               <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                {u.lastLoginAt ? formatRelative(u.lastLoginAt) : "—"}
+                {u.lastLoginAt ? <RelativeTime iso={u.lastLoginAt} /> : "—"}
               </TableCell>
             </TableRow>
           ))}

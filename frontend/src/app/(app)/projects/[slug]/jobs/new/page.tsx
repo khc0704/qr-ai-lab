@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
-import { getProject, listArtifacts, listDataSources } from "@/lib/api";
+import { getCatalog, getJob, getProject, listArtifacts, listDataSources, listPreprocessOps } from "@/lib/api";
 import { NewJobWizard } from "./new-job-wizard";
 
 async function Wizard({
@@ -9,15 +9,22 @@ async function Wizard({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ kind?: string }>;
+  searchParams: Promise<{ kind?: string; from?: string }>;
 }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
   const project = await getProject(slug);
   if (!project) notFound();
-  const [sources, models] = await Promise.all([listDataSources(project.id), listArtifacts(project.id, "model")]);
+  const [sources, models, catalog, ops, from] = await Promise.all([
+    listDataSources(project.slug),
+    listArtifacts(project.slug, "model"),
+    getCatalog(),
+    listPreprocessOps(project.dataType),
+    sp.from ? getJob(Number(sp.from)) : undefined,
+  ]);
+  const cloneKind = from?.kind;
   return (
     <NewJobWizard
-      kind={sp.kind === "inference" ? "inference" : "train"}
+      kind={sp.kind === "inference" || cloneKind === "inference" ? "inference" : "train"}
       project={{
         slug: project.slug,
         dataType: project.dataType,
@@ -25,6 +32,7 @@ async function Wizard({
         gpuLimit: project.gpuLimit,
         cpuLimit: project.cpuLimit,
         memoryLimitMb: project.memoryLimitMb,
+        defaultTimeout: project.defaultJobTimeoutMinutes ?? 240,
       }}
       sources={sources.map((s) => ({ id: s.id, name: s.name, kind: s.kind, format: s.format, ok: s.lastCheckOk }))}
       models={models.map((m) => ({
@@ -33,7 +41,11 @@ async function Wizard({
         version: m.version,
         family: m.modelFamily,
         isDefault: m.isDefault,
+        inferenceModes: ((m.metadata?.inference_modes as string[] | undefined) ?? []) as string[],
       }))}
+      catalog={catalog}
+      ops={ops}
+      cloneFrom={from && from.projectSlug === project.slug ? from : undefined}
     />
   );
 }

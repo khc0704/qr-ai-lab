@@ -1,4 +1,4 @@
-import { Database, Info, Plus, RefreshCw } from "lucide-react";
+import { Database, Info, Plus } from "lucide-react";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { SourceKindChip } from "@/components/features/chips";
@@ -8,17 +8,18 @@ import { TableSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { RelativeTime } from "@/components/features/time";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dataFormatLabel } from "@/i18n/zh-TW";
 import { getProject, listDataSources } from "@/lib/api";
-import { formatRelative } from "@/lib/format";
 import { NewDataSourceDialog } from "./new-data-source-dialog";
+import { SourceRowActions } from "./source-row-actions";
 
 async function Sources({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const project = await getProject(slug);
   if (!project) notFound();
-  const sources = await listDataSources(project.id);
+  const sources = await listDataSources(project.slug);
   return (
     <>
       <Alert>
@@ -31,6 +32,7 @@ async function Sources({ params }: { params: Promise<{ slug: string }> }) {
       <div className="flex items-center justify-between">
         <span className="font-mono text-xs text-muted-foreground tabular-nums">{sources.length} 個資料來源</span>
         <NewDataSourceDialog
+          slug={project.slug}
           trigger={
             <Button size="sm">
               <Plus />
@@ -75,12 +77,10 @@ async function Sources({ params }: { params: Promise<{ slug: string }> }) {
                   <TableCell className="text-muted-foreground">{dataFormatLabel[s.format]}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <StatusBadge status={s.lastCheckOk ? "ok" : "error"} />
+                      <StatusBadge status={s.lastCheckOk == null ? "pending" : s.lastCheckOk ? "ok" : "error"} />
                       <span className="text-xs text-muted-foreground">{s.lastCheckMessage}</span>
                       {s.lastCheckedAt ? (
-                        <span className="font-mono text-[11px] text-subtle-foreground">
-                          {formatRelative(s.lastCheckedAt)}
-                        </span>
+                        <RelativeTime iso={s.lastCheckedAt} className="font-mono text-[11px] text-subtle-foreground" />
                       ) : null}
                     </div>
                   </TableCell>
@@ -88,10 +88,7 @@ async function Sources({ params }: { params: Promise<{ slug: string }> }) {
                     <UserInline user={s.createdBy} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="sm">
-                      <RefreshCw />
-                      檢查連線
-                    </Button>
+                    <SourceRowActions slug={project.slug} id={s.id} name={s.name} />
                   </TableCell>
                 </TableRow>
               ))}

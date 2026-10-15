@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { BookOpen, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTransition } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -14,8 +15,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { dataScaleLabel, dataTypeLabel, projectRoleLabel, taskTypeLabel } from "@/i18n/zh-TW";
+import { createProjectRequestAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
-import type { DataScale, DataType, ProjectRole, TaskType } from "@/types/domain";
+import type { DataScale, DataType, ProjectRequest, ProjectRole, TaskType } from "@/types/domain";
 
 const sop: Record<DataType, string> = {
   TABULAR:
@@ -54,27 +56,30 @@ export function NewRequestForm({
   poolGpu,
   poolCpu,
   poolMemoryMb,
+  initial,
 }: {
   poolGpu: number;
   poolCpu: number;
   poolMemoryMb: number;
+  initial?: ProjectRequest;
 }) {
   const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: {
-      title: "",
-      purpose: "",
-      dataType: "TABULAR",
-      taskType: "classification",
-      dataScale: "small",
-      dataDescription: "",
-      requestedGpu: 0,
-      requestedCpu: 2,
-      requestedMemoryMb: 4096,
-      requestedStorageMb: 10240,
-      proposedSlug: "",
-      members: [],
+      title: initial?.title ?? "",
+      purpose: initial?.purpose ?? "",
+      dataType: initial?.dataType ?? "TABULAR",
+      taskType: initial?.taskType ?? "classification",
+      dataScale: initial?.dataScale ?? "small",
+      dataDescription: initial?.dataDescription ?? "",
+      requestedGpu: initial?.requestedGpu ?? 0,
+      requestedCpu: initial?.requestedCpu ?? 2,
+      requestedMemoryMb: initial?.requestedMemoryMb ?? 4096,
+      requestedStorageMb: initial?.requestedStorageMb ?? 10240,
+      proposedSlug: initial?.proposedSlug ?? "",
+      members: (initial?.members ?? []).filter((m) => m.role !== "owner") as { email: string; role: "maintainer" | "member" | "viewer" }[],
     },
   });
   const members = useFieldArray({ control: form.control, name: "members" });
@@ -86,10 +91,30 @@ export function NewRequestForm({
     <Form {...form}>
       <form
         className="mx-auto w-full max-w-2xl space-y-6"
-        onSubmit={form.handleSubmit(() => {
-          toast.success("申請已送出（接上 backend 後會寫入）");
-          router.push("/project-requests");
-        })}
+        onSubmit={form.handleSubmit((v) =>
+          startTransition(async () => {
+            const r = await createProjectRequestAction({
+              title: v.title,
+              purpose: v.purpose,
+              data_type: v.dataType,
+              task_type: v.taskType,
+              data_scale: v.dataScale,
+              data_description: v.dataDescription || null,
+              requested_gpu: v.requestedGpu,
+              requested_cpu: v.requestedCpu,
+              requested_memory_mb: v.requestedMemoryMb,
+              requested_storage_mb: v.requestedStorageMb,
+              proposed_slug: v.proposedSlug || null,
+              members: v.members,
+            });
+            if (!r.ok) {
+              toast.error(r.error);
+              return;
+            }
+            toast.success(`申請 #${r.data.id} 已送出，等待管理員審核`);
+            router.push(`/project-requests/${r.data.id}`);
+          }),
+        )}
       >
         <Card>
           <CardHeader>
@@ -440,7 +465,7 @@ export function NewRequestForm({
           <Button type="button" variant="outline" onClick={() => router.back()}>
             取消
           </Button>
-          <Button type="submit">
+          <Button type="submit" disabled={pending}>
             <Send />
             送出申請
           </Button>

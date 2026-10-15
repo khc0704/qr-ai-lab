@@ -10,15 +10,15 @@ import { StatusBadge } from "@/components/features/status-badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { jobModeLabel } from "@/i18n/zh-TW";
-import { getProject, getQueue, listJobs } from "@/lib/api";
-import { formatDuration, formatMb, formatRelative } from "@/lib/format";
+import { Duration, RelativeTime } from "@/components/features/time";
+import { getProject, listJobs } from "@/lib/api";
+import { formatMb } from "@/lib/format";
 
 async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const project = await getProject(slug);
   if (!project) notFound();
-  const [jobs, queue] = await Promise.all([listJobs({ projectId: project.id }), getQueue()]);
-  const pos = (id: number) => queue.queued.findIndex((j) => j.id === id) + 1;
+  const jobs = await listJobs({ slug: project.slug });
   return (
     <>
       <div className="flex items-center justify-between gap-2">
@@ -104,7 +104,7 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
                     <div className="flex items-center gap-2">
                       <StatusBadge status={j.status} />
                       {j.status === "queued" ? (
-                        <span className="font-mono text-xs text-muted-foreground tabular-nums">#{pos(j.id)}</span>
+                        <span className="font-mono text-xs text-muted-foreground tabular-nums">#{j.queuePosition ?? "—"}</span>
                       ) : null}
                     </div>
                   </TableCell>
@@ -118,7 +118,7 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
                     <UserInline user={j.createdBy} />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {j.startedAt ? formatDuration(j.startedAt, j.finishedAt) : formatRelative(j.createdAt)}
+                    {j.startedAt ? <Duration start={j.startedAt} end={j.finishedAt} /> : <RelativeTime iso={j.createdAt} />}
                   </TableCell>
                 </TableRow>
               ))}

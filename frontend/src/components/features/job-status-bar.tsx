@@ -1,7 +1,7 @@
 "use client";
 
 import { Ban, Cpu, HardDrive, MemoryStick, Timer } from "lucide-react";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { KindChip } from "@/components/features/chips";
 import { StatusBadge } from "@/components/features/status-badge";
@@ -18,30 +18,39 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { jobStageLabel } from "@/i18n/zh-TW";
-import { formatDuration, formatMb } from "@/lib/format";
+import { cancelJobAction } from "@/lib/actions";
+import { Duration } from "@/components/features/time";
+import { formatMb } from "@/lib/format";
 import type { Job } from "@/types/domain";
 
 export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?: number }) {
   const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
   const cancellable = job.status === "queued" || job.status === "scheduled" || job.status === "running";
+  const cancel = () =>
+    startTransition(async () => {
+      const r = await cancelJobAction(job.id, job.projectSlug);
+      if (!r.ok) toast.error(r.error);
+      else toast.success(job.status === "queued" ? "已從佇列移除" : "已送出取消請求，容器將在 10 秒內停止");
+    });
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
         <StatusBadge status={job.status} />
         <KindChip kind={job.kind} />
-        {job.status === "running" && job.currentStage ? (
+        {(job.status === "running" || job.status === "scheduled") && job.currentStage ? (
           <span className="text-sm text-muted-foreground">{jobStageLabel[job.currentStage]}</span>
         ) : null}
-        {job.status === "queued" && queuePosition ? (
+        {job.status === "queued" && (queuePosition ?? job.queuePosition) ? (
           <span className="font-mono text-sm text-muted-foreground tabular-nums">
-            佇列 #{queuePosition}
+            佇列 #{queuePosition ?? job.queuePosition}
             {job.waitReason ? <span className="ml-2 font-sans text-xs text-warning">{job.waitReason}</span> : null}
           </span>
         ) : null}
         {job.startedAt ? (
           <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground tabular-nums">
             <Timer className="size-3.5" />
-            {formatDuration(job.startedAt, job.finishedAt)}
+            <Duration start={job.startedAt} end={job.finishedAt} />
           </span>
         ) : null}
         <span className="ml-auto flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
@@ -69,7 +78,8 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
         <Alert className="border-warning/30 bg-warning/10 text-warning">
           <Ban />
           <AlertTitle>
-            此任務由管理員{job.cancelRequestedBy ? ` ${job.cancelRequestedBy.displayName}` : ""}強制中斷
+            此任務由{job.cancelRequestedBy?.role === "admin" ? "管理員" : ""}
+            {job.cancelRequestedBy ? ` ${job.cancelRequestedBy.displayName}` : ""} 取消
           </AlertTitle>
           <AlertDescription className="text-warning/90">{job.cancelReason}</AlertDescription>
         </Alert>
@@ -95,7 +105,8 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
             <AlertDialogCancel>返回</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => toast.success(`已送出取消請求：任務 #${job.id}`)}
+              disabled={pending}
+              onClick={cancel}
             >
               取消任務
             </AlertDialogAction>

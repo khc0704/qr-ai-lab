@@ -1,152 +1,200 @@
-// Server-only data access layer. Today it reads mock data; later each function becomes a
-// fetch(`${BACKEND_URL}/api/v1/...`) with the Keycloak access token. Pages must only import
-// from here, never from mock-data directly, so the swap is a one-file change.
+// Server-only data access layer: every read the pages need, as fetches against the backend.
+// Pages must only import from here (never call fetch themselves) so the mapping lives in one place.
 import "server-only";
 
-import * as mock from "@/lib/mock-data";
+import { apiFetch } from "@/lib/backend";
+import {
+  toArtifact,
+  toAudit,
+  toCapacity,
+  toComment,
+  toDataSource,
+  toIssue,
+  toJob,
+  toLogLines,
+  toNode,
+  toPool,
+  toPreprocessOp,
+  toProject,
+  toRequest,
+  toUser,
+} from "@/lib/api/mappers";
 import type {
   Artifact,
   AuditLog,
+  Capacity,
+  Catalog,
   Comment,
   CommentTarget,
   DataSource,
+  DataType,
   Issue,
   Job,
   LogLine,
   NodeStatus,
+  PreprocessOp,
   Project,
   ProjectRequest,
   ResourcePool,
   User,
 } from "@/types/domain";
 
-const sortByRank = (a: Job, b: Job) => a.queueRank - b.queueRank || a.createdAt.localeCompare(b.createdAt);
-const newestFirst = <T extends { createdAt: string }>(a: T, b: T) => b.createdAt.localeCompare(a.createdAt);
+type J = Record<string, unknown>;
+interface Page<T> {
+  items: T[];
+  total: number;
+}
 
-export async function listProjects(opts?: { memberOf?: number; includeArchived?: boolean }): Promise<Project[]> {
-  return mock.projects.filter(
-    (p) =>
-      (opts?.includeArchived || p.status === "active") &&
-      (!opts?.memberOf || p.members.some((m) => m.user.id === opts.memberOf)),
-  );
+const q = (params: Record<string, string | number | boolean | undefined>) => {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") sp.set(k, String(v));
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+};
+
+// --- projects --------------------------------------------------------------------------------------
+
+export async function listProjects(opts?: { includeArchived?: boolean }): Promise<Project[]> {
+  const rows = await apiFetch<J[]>(`/projects${q({ include_archived: opts?.includeArchived })}`);
+  return rows.map(toProject);
 }
 
 export async function getProject(slug: string): Promise<Project | undefined> {
-  return mock.projects.find((p) => p.slug === slug);
+  const p = await apiFetch<J | undefined>(`/projects/${encodeURIComponent(slug)}`, { swallow: [403, 404] });
+  return p ? toProject(p) : undefined;
 }
 
-export async function listDataSources(projectId: number): Promise<DataSource[]> {
-  return mock.dataSources.filter((d) => d.projectId === projectId);
+export async function listDataSources(slug: string): Promise<DataSource[]> {
+  return (await apiFetch<J[]>(`/projects/${encodeURIComponent(slug)}/data-sources`)).map(toDataSource);
 }
+
+export async function listArtifacts(slug: string, kind?: Artifact["kind"]): Promise<Artifact[]> {
+  return (await apiFetch<J[]>(`/projects/${encodeURIComponent(slug)}/artifacts${q({ kind })}`)).map(toArtifact);
+}
+
+// --- jobs ------------------------------------------------------------------------------------------
 
 export async function listJobs(opts?: {
-  projectId?: number;
+  slug?: string;
   status?: Job["status"][];
+  kind?: Job["kind"];
   limit?: number;
 }): Promise<Job[]> {
-  const rows = mock.jobs
-    .filter(
-      (j) => (!opts?.projectId || j.projectId === opts.projectId) && (!opts?.status || opts.status.includes(j.status)),
-    )
-    .sort(newestFirst);
-  return opts?.limit ? rows.slice(0, opts.limit) : rows;
+  const status = opts?.status?.join(",");
+  if (opts?.slug) {
+    const page = await apiFetch<Page<J>>(
+      `/projects/${encodeURIComponent(opts.slug)}/jobs${q({ status, kind: opts.kind, page_size: opts.limit ?? 100 })}`,
+    );
+    return page.items.map(toJob);
+  }
+  return (await apiFetch<J[]>(`/jobs${q({ status, kind: opts?.kind, limit: opts?.limit ?? 20 })}`)).map(toJob);
 }
 
 export async function getJob(id: number): Promise<Job | undefined> {
-  return mock.jobs.find((j) => j.id === id);
+  const j = await apiFetch<J | undefined>(`/jobs/${id}`, { swallow: [403, 404] });
+  return j ? toJob(j) : undefined;
 }
 
-/** Global queue: running first (by start time), then queued by rank. */
+/** Admin only: running + queued with wait reasons. */
 export async function getQueue(): Promise<{ running: Job[]; queued: Job[] }> {
-  const running = mock.jobs
-    .filter((j) => j.status === "running" || j.status === "scheduled")
-    .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
-  const queued = mock.jobs.filter((j) => j.status === "queued").sort(sortByRank);
-  return { running, queued };
+  const r = await apiFetch<{ running: J[]; queued: J[] }>("/admin/queue");
+  return { running: r.running.map(toJob), queued: r.queued.map(toJob) };
 }
 
-export async function getQueuePosition(jobId: number): Promise<number | undefined> {
-  const { queued } = await getQueue();
-  const i = queued.findIndex((j) => j.id === jobId);
-  return i >= 0 ? i + 1 : undefined;
-}
-
-export async function getJobLog(jobId: number): Promise<LogLine[]> {
-  return mock.jobLogs[jobId] ?? [];
-}
-
-export async function listArtifacts(projectId: number, kind?: Artifact["kind"]): Promise<Artifact[]> {
-  return mock.artifacts.filter((a) => a.projectId === projectId && (!kind || a.kind === kind)).sort(newestFirst);
+export async function getJobLog(jobId: number, limit = 2000): Promise<LogLine[]> {
+  const r = await apiFetch<{ lines: string[]; offset: number; total: number }>(`/jobs/${jobId}/logs${q({ limit })}`);
+  return toLogLines(r.lines, r.offset);
 }
 
 export async function listArtifactsForJob(jobId: number): Promise<Artifact[]> {
-  return mock.artifacts.filter((a) => a.jobId === jobId);
+  return (await apiFetch<J[]>(`/jobs/${jobId}/artifacts`)).map(toArtifact);
 }
 
 export async function getArtifact(id: number): Promise<Artifact | undefined> {
-  return mock.artifacts.find((a) => a.id === id);
+  const a = await apiFetch<J | undefined>(`/artifacts/${id}`, { swallow: [403, 404] });
+  return a ? toArtifact(a) : undefined;
 }
+
+// --- requests / issues / comments ------------------------------------------------------------------
 
 export async function listProjectRequests(opts?: {
   applicantId?: number;
   status?: ProjectRequest["status"][];
 }): Promise<ProjectRequest[]> {
-  return mock.projectRequests
-    .filter(
-      (r) =>
-        (!opts?.applicantId || r.applicant.id === opts.applicantId) &&
-        (!opts?.status || opts.status.includes(r.status)),
-    )
-    .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+  const page = await apiFetch<Page<J>>(`/project-requests${q({ status: opts?.status?.join(","), page_size: 100 })}`);
+  const rows = page.items.map(toRequest);
+  return opts?.applicantId ? rows.filter((r) => r.applicant.id === opts.applicantId) : rows;
 }
 
 export async function getProjectRequest(id: number): Promise<ProjectRequest | undefined> {
-  return mock.projectRequests.find((r) => r.id === id);
+  const r = await apiFetch<J | undefined>(`/project-requests/${id}`, { swallow: [403, 404] });
+  return r ? toRequest(r) : undefined;
 }
 
 export async function listIssues(opts?: { status?: Issue["status"]; type?: Issue["type"] }): Promise<Issue[]> {
-  return mock.issues
-    .filter((i) => (!opts?.status || i.status === opts.status) && (!opts?.type || i.type === opts.type))
-    .sort(newestFirst);
+  const page = await apiFetch<Page<J>>(`/issues${q({ status: opts?.status, type: opts?.type, page_size: 100 })}`);
+  return page.items.map(toIssue);
 }
 
 export async function getIssue(id: number): Promise<Issue | undefined> {
-  return mock.issues.find((i) => i.id === id);
+  const i = await apiFetch<J | undefined>(`/issues/${id}`, { swallow: [403, 404] });
+  return i ? toIssue(i) : undefined;
 }
 
 export async function listComments(targetType: CommentTarget, targetId: number): Promise<Comment[]> {
-  return mock.comments
-    .filter((c) => c.targetType === targetType && c.targetId === targetId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const base = targetType === "issue" ? "/issues" : "/project-requests";
+  return (await apiFetch<J[]>(`${base}/${targetId}/comments`)).map(toComment);
 }
 
+// --- users / admin ---------------------------------------------------------------------------------
+
 export async function listUsers(): Promise<User[]> {
-  return [...mock.users];
+  return (await apiFetch<Page<J>>("/users?page_size=100")).items.map(toUser);
+}
+
+/** Pool + current allocation; readable by every user (request form, home page). */
+export async function getCapacity(): Promise<Capacity> {
+  return toCapacity(await apiFetch<J>("/capacity"));
 }
 
 export async function getResourcePool(): Promise<ResourcePool> {
-  return mock.resourcePool;
+  return (await getCapacity()).pool;
 }
 
 export async function getNodeStatus(): Promise<NodeStatus> {
-  return mock.nodeStatus;
+  return toNode(await apiFetch<J>("/admin/node"));
 }
 
 export async function listAuditLogs(limit = 50): Promise<AuditLog[]> {
-  return [...mock.auditLogs].sort(newestFirst).slice(0, limit);
+  return (await apiFetch<Page<J>>(`/admin/audit${q({ page_size: limit })}`)).items.map(toAudit);
 }
 
 export async function getAdminOverview() {
-  const { running, queued } = await getQueue();
-  const pending = (await listProjectRequests({ status: ["submitted", "in_review"] })).length;
-  const pool = await getResourcePool();
-  const node = await getNodeStatus();
+  const o = await apiFetch<J>("/admin/overview");
   return {
-    pendingRequests: pending,
-    queued: queued.length,
-    running: running.length,
-    poolGpuUsed: node.allocated.gpu,
-    poolGpuTotal: pool.gpuIndices.length,
-    poolUtilization: pool.gpuIndices.length ? Math.round((node.allocated.gpu / pool.gpuIndices.length) * 100) : 0,
+    pendingRequests: Number(o.pending_requests ?? 0),
+    queued: Number(o.queued ?? 0),
+    running: Number(o.running ?? 0),
+    poolGpuUsed: Number(o.pool_gpu_used ?? 0),
+    poolGpuTotal: Number(o.pool_gpu_total ?? 0),
+    poolUtilization: Number(o.pool_utilization ?? 0),
   };
 }
+
+export async function getModelZoo() {
+  return apiFetch<
+    { id: string; family: string; file: string; license?: string; kind: string; present: boolean; size_bytes?: number }[]
+  >("/admin/model-zoo");
+}
+
+// --- catalog ---------------------------------------------------------------------------------------
+
+export async function getCatalog(): Promise<Catalog> {
+  return apiFetch<Catalog>("/catalog");
+}
+
+export async function listPreprocessOps(dataType?: DataType): Promise<PreprocessOp[]> {
+  return (await apiFetch<J[]>(`/catalog/preprocess${q({ data_type: dataType })}`)).map(toPreprocessOp);
+}
+
+export { toPool };

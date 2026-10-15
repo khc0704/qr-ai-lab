@@ -6,7 +6,7 @@ import type { LogLine } from "@/types/domain";
 export default async function AdminQueuePage() {
   const [{ running, queued }, pool] = await Promise.all([getQueue(), getResourcePool()]);
   const logs: Record<number, LogLine[]> = {};
-  for (const j of [...running, ...queued]) logs[j.id] = await getJobLog(j.id);
+  for (const j of [...running, ...queued]) logs[j.id] = await getJobLog(j.id, 300);
   return (
     <>
       <PageHeader

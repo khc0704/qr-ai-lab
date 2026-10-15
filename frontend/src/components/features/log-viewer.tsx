@@ -29,12 +29,14 @@ export function LogViewer({
   title = "Log",
   className,
   maxHeight = "max-h-[480px]",
+  downloadHref,
 }: {
   lines: LogLine[];
   status?: JobStatus;
   title?: string;
   className?: string;
   maxHeight?: string;
+  downloadHref?: string;
 }) {
   const live = status === "running" || status === "scheduled";
   const [autoScroll, setAutoScroll] = useState(true);
@@ -70,14 +72,13 @@ export function LogViewer({
           <Button variant="ghost" size="icon-sm" aria-label="複製" onClick={copy}>
             <Copy />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="下載"
-            onClick={() => toast.message("下載 job.log（接上 backend 後啟用）")}
-          >
-            <Download />
-          </Button>
+          {downloadHref ? (
+            <Button variant="ghost" size="icon-sm" aria-label="下載" asChild>
+              <a href={downloadHref} download>
+                <Download />
+              </a>
+            </Button>
+          ) : null}
         </div>
       </div>
       <div

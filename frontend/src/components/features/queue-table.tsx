@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpToLine, Eye, OctagonX } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { KindChip } from "@/components/features/chips";
 import { LogViewer } from "@/components/features/log-viewer";
@@ -25,7 +25,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { jobStageLabel } from "@/i18n/zh-TW";
-import { formatDuration, formatMb, formatRelative } from "@/lib/format";
+import { moveQueueAction, stopJobAction } from "@/lib/actions";
+import { Duration, RelativeTime } from "@/components/features/time";
+import { formatMb } from "@/lib/format";
 import type { Job, LogLine } from "@/types/domain";
 
 function Resources({ job }: { job: Job }) {
@@ -45,29 +47,27 @@ export function QueueTable({
   queued: Job[];
   logs: Record<number, LogLine[]>;
 }) {
-  const [order, setOrder] = useState(queued);
+  const order = queued;
   const [stopTarget, setStopTarget] = useState<Job | null>(null);
   const [reason, setReason] = useState("");
   const [sheetJob, setSheetJob] = useState<Job | null>(null);
+  const [pending, startTransition] = useTransition();
 
-  const move = (id: number, to: "top" | "up" | "down" | "bottom") => {
-    setOrder((prev) => {
-      const i = prev.findIndex((j) => j.id === id);
-      if (i < 0) return prev;
-      const next = [...prev];
-      const [item] = next.splice(i, 1);
-      const target =
-        to === "top"
-          ? 0
-          : to === "bottom"
-            ? next.length
-            : to === "up"
-              ? Math.max(0, i - 1)
-              : Math.min(next.length, i + 1);
-      next.splice(target, 0, item);
-      return next;
+  const move = (id: number, to: "top" | "up" | "down" | "bottom") =>
+    startTransition(async () => {
+      const r = await moveQueueAction(id, to);
+      if (!r.ok) toast.error(r.error);
     });
-    toast.success(`已更新佇列順序（任務 #${id}）`);
+  const stop = () => {
+    const target = stopTarget;
+    if (!target) return;
+    startTransition(async () => {
+      const r = await stopJobAction(target.id, reason.trim());
+      if (!r.ok) toast.error(r.error);
+      else toast.success(`已送出強制中斷：任務 #${target.id}`);
+      setReason("");
+      setStopTarget(null);
+    });
   };
 
   const head = (label: string, cls?: string) => <TableHead className={cls}>{label}</TableHead>;
@@ -124,7 +124,7 @@ export function QueueTable({
                     {j.assignedGpus?.length ? `[${j.assignedGpus.join(",")}]` : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs tabular-nums">
-                    {j.startedAt ? formatDuration(j.startedAt) : "—"}
+                    {j.startedAt ? <Duration start={j.startedAt} /> : "—"}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -197,7 +197,7 @@ export function QueueTable({
                     <UserInline user={j.createdBy} />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {formatRelative(j.createdAt)}
+                    <RelativeTime iso={j.createdAt} />
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-0.5">
@@ -205,7 +205,7 @@ export function QueueTable({
                         variant="ghost"
                         size="icon-sm"
                         aria-label="置頂"
-                        disabled={i === 0}
+                        disabled={i === 0 || pending}
                         onClick={() => move(j.id, "top")}
                       >
                         <ArrowUpToLine />
@@ -214,7 +214,7 @@ export function QueueTable({
                         variant="ghost"
                         size="icon-sm"
                         aria-label="上移"
-                        disabled={i === 0}
+                        disabled={i === 0 || pending}
                         onClick={() => move(j.id, "up")}
                       >
                         <ArrowUp />
@@ -223,7 +223,7 @@ export function QueueTable({
                         variant="ghost"
                         size="icon-sm"
                         aria-label="下移"
-                        disabled={i === order.length - 1}
+                        disabled={i === order.length - 1 || pending}
                         onClick={() => move(j.id, "down")}
                       >
                         <ArrowDown />
@@ -232,7 +232,7 @@ export function QueueTable({
                         variant="ghost"
                         size="icon-sm"
                         aria-label="置底"
-                        disabled={i === order.length - 1}
+                        disabled={i === order.length - 1 || pending}
                         onClick={() => move(j.id, "bottom")}
                       >
                         <ArrowDownToLine />
@@ -270,12 +270,9 @@ export function QueueTable({
           <AlertDialogFooter>
             <AlertDialogCancel>返回</AlertDialogCancel>
             <AlertDialogAction
-              disabled={!reason.trim()}
+              disabled={!reason.trim() || pending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                toast.success(`已送出強制中斷：任務 #${stopTarget?.id}`);
-                setReason("");
-              }}
+              onClick={stop}
             >
               強制中斷
             </AlertDialogAction>

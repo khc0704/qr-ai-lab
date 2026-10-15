@@ -12,15 +12,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { projectRoleLabel } from "@/i18n/zh-TW";
 import { getProject, listArtifacts, listJobs } from "@/lib/api";
-import { formatBytes, formatMb, formatMetric, formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
+import { formatBytes, formatMb, formatMetric } from "@/lib/format";
 
 async function Overview({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const project = await getProject(slug);
   if (!project) notFound();
   const [jobs, models] = await Promise.all([
-    listJobs({ projectId: project.id, limit: 5 }),
-    listArtifacts(project.id, "model"),
+    listJobs({ slug: project.slug, limit: 5 }),
+    listArtifacts(project.slug, "model"),
   ]);
   const def = models.find((m) => m.isDefault);
   return (
@@ -114,7 +115,7 @@ async function Overview({ params }: { params: Promise<{ slug: string }> }) {
                       {j.status === "queued" ? "—" : `${j.progress}%`}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                      {formatRelative(j.createdAt)}
+                      <RelativeTime iso={j.createdAt} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -144,7 +145,7 @@ async function Overview({ params }: { params: Promise<{ slug: string }> }) {
                   ))}
                 </dl>
                 <div className="text-xs text-muted-foreground">
-                  {formatBytes(def.sizeBytes)} · {formatRelative(def.createdAt)}
+                  {formatBytes(def.sizeBytes)} · <RelativeTime iso={def.createdAt} />
                 </div>
               </>
             ) : (

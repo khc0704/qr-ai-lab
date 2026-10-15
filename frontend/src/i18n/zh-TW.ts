@@ -5,6 +5,7 @@ import type {
   DataScale,
   DataSourceKind,
   DataType,
+  InferenceMode,
   InputKind,
   IssueStatus,
   IssueType,
@@ -41,10 +42,30 @@ export const modelFamilyLabel: Record<ModelFamily, string> = {
   "tabular.svm": "SVM",
   "tabular.random_forest": "隨機森林",
   "tabular.xgboost": "XGBoost",
+  "tabular.isolation_forest": "Isolation Forest",
   "vision.yolo": "YOLO",
-  "vision.dino": "DINOv2",
+  "vision.dino_fewshot": "DINOv2 few-shot",
+  "vision.dino_patchcore": "DINOv2 PatchCore",
+  "vision.image_quality": "影像品質基準",
   "sequence.patch_autoencoder": "Patch Autoencoder",
+  "spectrum.masked_autoencoder": "光譜 Masked AE",
   "text.bert_classifier": "BERT 分類器",
+};
+
+/** Unknown ids (e.g. a family added to the catalog before the UI) fall back to the id itself. */
+export const familyLabel = (f?: string | null): string =>
+  f ? (modelFamilyLabel[f as ModelFamily] ?? f) : "—";
+
+export const inferenceModeLabel: Record<InferenceMode, string> = {
+  predict: "預測（類別 / 數值）",
+  score: "異常分數",
+  compare: "機台比對報告",
+  embed: "向量（embedding）",
+  retrieve: "找最相似 / 最不相似",
+  detect: "物件偵測",
+  segment: "分割",
+  measure: "分割 + 幾何量測",
+  extend: "新增類別（免重訓）",
 };
 
 export const jobStatusLabel: Record<JobStatus, string> = {
@@ -60,12 +81,17 @@ export const jobKindLabel: Record<JobKind, string> = { train: "訓練", inferenc
 export const jobModeLabel: Record<JobMode, string> = { manual: "手動", auto: "自動 (AutoML)" };
 
 export const jobStageLabel: Record<JobStage, string> = {
+  starting: "啟動中",
   fetching: "抓取資料中",
   preparing: "準備資料中",
   training: "模型訓練中",
   evaluating: "評估中",
   exporting: "匯出產物中",
+  loading: "載入模型中",
   predicting: "推論中",
+  done: "完成",
+  failed: "失敗",
+  cancelled: "已取消",
 };
 
 export const inputKindLabel: Record<InputKind, string> = {

@@ -1,4 +1,4 @@
-import { Archive, Settings2 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense, type ReactNode } from "react";
@@ -34,12 +34,6 @@ async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) 
               設定
             </Link>
           </Button>
-          {project.status === "active" ? (
-            <Button variant="ghost" size="sm">
-              <Archive />
-              封存
-            </Button>
-          ) : null}
         </>
       }
     >

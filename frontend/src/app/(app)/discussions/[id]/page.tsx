@@ -1,15 +1,15 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { CommentThread } from "@/components/features/comment-thread";
+import { IssueAdminActions } from "@/components/features/issue-admin-actions";
+import { RelativeTime } from "@/components/features/time";
 import { UserInline } from "@/components/features/member-avatars";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { issueTypeLabel } from "@/i18n/zh-TW";
 import { getIssue, listComments } from "@/lib/api";
-import { formatDateTime, formatRelative } from "@/lib/format";
 import { getCurrentUser, isAdmin } from "@/lib/session";
 import Link from "next/link";
 
@@ -48,9 +48,7 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
     ],
     [
       "建立",
-      <span key="c" className="font-mono text-xs" title={formatDateTime(issue.createdAt)}>
-        {formatRelative(issue.createdAt)}
-      </span>,
+      <RelativeTime key="c" iso={issue.createdAt} className="font-mono text-xs" />,
     ],
   ];
 
@@ -60,13 +58,7 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
         eyebrow={`#${issue.id} · ${issueTypeLabel[issue.type]}`}
         title={issue.title}
         actions={
-          admin ? (
-            issue.status === "open" ? (
-              <Button variant="outline">關閉問題</Button>
-            ) : (
-              <Button variant="outline">重開</Button>
-            )
-          ) : null
+          admin ? <IssueAdminActions id={issue.id} status={issue.status} /> : null
         }
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -76,7 +68,12 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
               {issue.body || <span className="text-subtle-foreground">（沒有內文）</span>}
             </CardContent>
           </Card>
-          <CommentThread comments={comments} currentUser={user} />
+          {issue.resolutionNote ? (
+            <Card className="border-success/30 bg-success/5">
+              <CardContent className="text-sm">處理結果：{issue.resolutionNote}</CardContent>
+            </Card>
+          ) : null}
+          <CommentThread comments={comments} currentUser={user} target="issue" targetId={issue.id} />
         </div>
         <aside className="space-y-4">
           <Card className="gap-0 p-0">

@@ -2,7 +2,7 @@
 
 import { Save, TriangleAlert } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/features/status-badge";
 import {
@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { updateQuotaAction } from "@/lib/actions";
 import { formatBytes, formatMb } from "@/lib/format";
 import type { ProjectStatus, ResourcePool } from "@/types/domain";
 
@@ -36,6 +37,27 @@ interface Row {
 export function QuotasTable({ rows: initial, pool }: { rows: Row[]; pool: ResourcePool }) {
   const [rows, setRows] = useState(initial);
   const [confirm, setConfirm] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const save = () =>
+    startTransition(async () => {
+      const changed = rows.filter((r) => JSON.stringify(r) !== JSON.stringify(initial.find((i) => i.slug === r.slug)));
+      let failed = 0;
+      for (const r of changed) {
+        const res = await updateQuotaAction(r.slug, {
+          gpu_limit: r.gpu,
+          cpu_limit: r.cpu,
+          memory_limit_mb: r.memoryMb,
+          storage_quota_mb: r.storageMb,
+          max_concurrent_jobs: r.maxJobs,
+        });
+        if (!res.ok) {
+          failed += 1;
+          toast.error(`${r.name}：${res.error}`);
+        }
+      }
+      if (!failed) toast.success(`已更新 ${changed.length} 個專案的配額`);
+      setConfirm(false);
+    });
   const dirty = JSON.stringify(rows) !== JSON.stringify(initial);
   const active = rows.filter((r) => r.status === "active");
   const sum = {
@@ -127,7 +149,7 @@ export function QuotasTable({ rows: initial, pool }: { rows: Row[]; pool: Resour
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>返回</AlertDialogCancel>
-            <AlertDialogAction onClick={() => toast.success("配額已更新（接上 backend 後生效）")}>
+            <AlertDialogAction disabled={pending} onClick={save}>
               確認
             </AlertDialogAction>
           </AlertDialogFooter>

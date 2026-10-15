@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -22,6 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { updateResourcePoolAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { NodeStatus, ResourcePool } from "@/types/domain";
@@ -41,7 +42,21 @@ export function ResourcePoolForm({ pool, node }: { pool: ResourcePool; node: Nod
   type Values = z.infer<typeof schema>;
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: pool, mode: "onChange" });
   const [confirm, setConfirm] = useState<Values | null>(null);
+  const [pending, startTransition] = useTransition();
   const values = useWatch({ control: form.control });
+  const save = () => {
+    const v = confirm;
+    if (!v) return;
+    startTransition(async () => {
+      const r = await updateResourcePoolAction(v);
+      if (!r.ok) toast.error(r.error);
+      else {
+        toast.success("資源池已更新");
+        form.reset(v);
+      }
+      setConfirm(null);
+    });
+  };
 
   return (
     <Form {...form}>
@@ -208,12 +223,7 @@ export function ResourcePoolForm({ pool, node }: { pool: ResourcePool; node: Nod
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>返回</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                toast.success("資源池已更新（接上 backend 後生效）");
-                form.reset(confirm ?? pool);
-              }}
-            >
+            <AlertDialogAction disabled={pending} onClick={save}>
               確認更新
             </AlertDialogAction>
           </AlertDialogFooter>

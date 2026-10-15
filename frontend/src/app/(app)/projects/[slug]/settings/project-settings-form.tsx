@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Save } from "lucide-react";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { archiveProjectAction, updateProjectAction } from "@/lib/actions";
 
 export function ProjectSettingsForm({
   name,
@@ -33,7 +34,20 @@ export function ProjectSettingsForm({
   const [n, setN] = useState(name);
   const [d, setD] = useState(description);
   const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
   const dirty = n !== name || d !== description;
+  const save = () =>
+    startTransition(async () => {
+      const r = await updateProjectAction(slug, { name: n, description: d });
+      if (!r.ok) toast.error(r.error);
+      else toast.success("已儲存專案設定");
+    });
+  const archive = () =>
+    startTransition(async () => {
+      const r = await archiveProjectAction(slug);
+      if (!r.ok) toast.error(r.error);
+      else toast.success("專案已封存");
+    });
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6">
       <Card>
@@ -53,7 +67,7 @@ export function ProjectSettingsForm({
             <Textarea id="p-desc" rows={4} value={d} onChange={(e) => setD(e.target.value)} />
           </div>
           <div className="flex justify-end">
-            <Button disabled={!dirty} onClick={() => toast.success("已儲存專案設定")}>
+            <Button disabled={!dirty || pending} onClick={save}>
               <Save />
               儲存
             </Button>
@@ -82,7 +96,8 @@ export function ProjectSettingsForm({
             <AlertDialogCancel>返回</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => toast.success("專案已封存")}
+              disabled={pending}
+              onClick={archive}
             >
               封存
             </AlertDialogAction>

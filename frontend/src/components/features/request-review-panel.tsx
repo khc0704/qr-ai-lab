@@ -1,7 +1,8 @@
 "use client";
 
 import { CircleCheck, CircleX, Eye } from "lucide-react";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { approveRequestAction, rejectRequestAction, reviewRequestAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import type { ProjectRequest, ResourcePool } from "@/types/domain";
 
@@ -28,16 +30,55 @@ export function RequestReviewPanel({ request, pool }: { request: ProjectRequest;
   const [mem, setMem] = useState(request.requestedMemoryMb);
   const [storage, setStorage] = useState(request.requestedStorageMb);
   const [reason, setReason] = useState("");
+  const [memberEmails, setMemberEmails] = useState<string[]>(request.members.map((m) => m.email));
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
   const terminal = request.status === "approved" || request.status === "rejected" || request.status === "withdrawn";
   if (terminal) return null;
   const overPool = gpu > pool.gpuIndices.length;
+  const review = () =>
+    startTransition(async () => {
+      const r = await reviewRequestAction(request.id);
+      if (!r.ok) toast.error(r.error);
+      else toast.success("已標記為審核中");
+    });
+  const approve = () =>
+    startTransition(async () => {
+      const r = await approveRequestAction(request.id, {
+        slug,
+        gpu_limit: gpu,
+        cpu_limit: cpu,
+        memory_limit_mb: mem,
+        storage_quota_mb: storage,
+        max_concurrent_jobs: 1,
+        members: request.members.filter((m) => memberEmails.includes(m.email)),
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setApproveOpen(false);
+      toast.success(`已核准，專案 ${r.data.slug} 已建立`);
+      router.push(`/projects/${r.data.slug}`);
+    });
+  const reject = () =>
+    startTransition(async () => {
+      const r = await rejectRequestAction(request.id, reason);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setRejectOpen(false);
+      setReason("");
+      toast.success("已退回申請");
+    });
 
   return (
     <div className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-4">
       <div className="text-label">管理員審核</div>
       <div className="flex flex-wrap gap-2">
         {request.status === "submitted" ? (
-          <Button variant="outline" size="sm" onClick={() => toast.success("已標記為審核中")}>
+          <Button variant="outline" size="sm" onClick={review} disabled={pending}>
             <Eye />
             開始審核
           </Button>
@@ -128,7 +169,12 @@ export function RequestReviewPanel({ request, pool }: { request: ProjectRequest;
                 <Label>成員</Label>
                 {request.members.map((m) => (
                   <label key={m.email} className="flex items-center gap-2 text-sm">
-                    <Checkbox defaultChecked />
+                    <Checkbox
+                      checked={memberEmails.includes(m.email)}
+                      onCheckedChange={(c) =>
+                        setMemberEmails(c ? [...memberEmails, m.email] : memberEmails.filter((e) => e !== m.email))
+                      }
+                    />
                     <span className="font-mono text-xs">{m.email}</span>
                     <span className="text-muted-foreground">{m.role}</span>
                   </label>
@@ -140,13 +186,7 @@ export function RequestReviewPanel({ request, pool }: { request: ProjectRequest;
             <Button variant="outline" onClick={() => setApproveOpen(false)}>
               取消
             </Button>
-            <Button
-              disabled={!slug || overPool}
-              onClick={() => {
-                setApproveOpen(false);
-                toast.success(`已核准，專案 ${slug} 已建立（接上 backend 後生效）`);
-              }}
-            >
+            <Button disabled={!slug || overPool || pending} onClick={approve}>
               核准並建立
             </Button>
           </DialogFooter>
@@ -173,15 +213,7 @@ export function RequestReviewPanel({ request, pool }: { request: ProjectRequest;
             <Button variant="outline" onClick={() => setRejectOpen(false)}>
               取消
             </Button>
-            <Button
-              variant="destructive"
-              disabled={!reason.trim()}
-              onClick={() => {
-                setRejectOpen(false);
-                toast.success("已退回申請");
-                setReason("");
-              }}
-            >
+            <Button variant="destructive" disabled={!reason.trim() || pending} onClick={reject}>
               退回
             </Button>
           </DialogFooter>

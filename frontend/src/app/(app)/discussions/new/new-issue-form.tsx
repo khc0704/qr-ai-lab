@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Send } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -13,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { issueTypeLabel } from "@/i18n/zh-TW";
+import { createIssueAction } from "@/lib/actions";
 
 const schema = z.object({
   type: z.enum(["question", "bug", "feature"]),
@@ -23,6 +25,7 @@ const schema = z.object({
 
 export function NewIssueForm({ projects }: { projects: { slug: string; name: string }[] }) {
   const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: { type: "question", title: "", body: "" },
@@ -31,10 +34,22 @@ export function NewIssueForm({ projects }: { projects: { slug: string; name: str
     <Form {...form}>
       <form
         className="mx-auto w-full max-w-2xl space-y-6"
-        onSubmit={form.handleSubmit(() => {
-          toast.success("已建立問題（接上 backend 後會寫入）");
-          router.push("/discussions");
-        })}
+        onSubmit={form.handleSubmit((v) =>
+          startTransition(async () => {
+            const r = await createIssueAction({
+              type: v.type,
+              title: v.title,
+              body: v.body,
+              project_slug: v.projectSlug || null,
+            });
+            if (!r.ok) {
+              toast.error(r.error);
+              return;
+            }
+            toast.success(`已建立問題 #${r.data.id}`);
+            router.push(`/discussions/${r.data.id}`);
+          }),
+        )}
       >
         <Card>
           <CardHeader>
@@ -121,7 +136,7 @@ export function NewIssueForm({ projects }: { projects: { slug: string; name: str
           <Button type="button" variant="outline" onClick={() => router.back()}>
             取消
           </Button>
-          <Button type="submit">
+          <Button type="submit" disabled={pending}>
             <Send />
             建立問題
           </Button>

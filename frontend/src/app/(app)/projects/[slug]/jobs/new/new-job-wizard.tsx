@@ -1,25 +1,38 @@
 "use client";
 
-import { BookOpen, ChevronLeft, ChevronRight, Rocket } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, LoaderCircle, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Dropzone } from "@/components/features/dropzone";
 import { SourceKindChip } from "@/components/features/chips";
+import { Dropzone } from "@/components/features/dropzone";
+import { PreprocessEditor } from "@/components/features/preprocess-editor";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Stepper } from "@/components/features/stepper";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { dataTypeLabel, modelFamilyLabel, taskTypeLabel } from "@/i18n/zh-TW";
+import { dataTypeLabel, familyLabel, inferenceModeLabel, taskTypeLabel } from "@/i18n/zh-TW";
+import { createJobAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { DataSourceKind, DataType, DataFormat, ModelFamily, TaskType } from "@/types/domain";
+import type {
+  Catalog,
+  DataFormat,
+  DataSourceKind,
+  DataType,
+  InferenceMode,
+  Job,
+  PreprocessOp,
+  PreprocessStep,
+  TaskType,
+  Upload,
+} from "@/types/domain";
 
 interface ProjectInfo {
   slug: string;
@@ -28,6 +41,7 @@ interface ProjectInfo {
   gpuLimit: number;
   cpuLimit: number;
   memoryLimitMb: number;
+  defaultTimeout: number;
 }
 interface SourceInfo {
   id: number;
@@ -40,174 +54,203 @@ interface ModelInfo {
   id: number;
   name: string;
   version: number;
-  family: ModelFamily;
+  family: string;
   isDefault: boolean;
+  inferenceModes: string[];
 }
 
-/** Mirrors docs/MODEL_CATALOG.md §4 — replaced by GET /catalog later. */
-const catalog: Record<
-  ModelFamily,
-  {
-    dataTypes: DataType[];
-    tasks: TaskType[];
-    gpu: boolean;
-    sop: string;
-    params: { key: string; label: string; def: string }[];
-  }
-> = {
-  "tabular.linear": {
-    dataTypes: ["TABULAR", "TEXT"],
-    tasks: ["classification", "regression"],
-    gpu: false,
-    sop: "最簡單、可解釋、秒級訓練，當基準線。",
-    params: [{ key: "C", label: "C / alpha", def: "1.0" }],
-  },
-  "tabular.svm": {
-    dataTypes: ["TABULAR"],
-    tasks: ["classification", "regression"],
-    gpu: false,
-    sop: "小資料、特徵多時好；> 50k 列會很慢。",
-    params: [
-      { key: "C", label: "C", def: "1.0" },
-      { key: "kernel", label: "kernel", def: "rbf" },
-    ],
-  },
-  "tabular.random_forest": {
-    dataTypes: ["TABULAR"],
-    tasks: ["classification", "regression"],
-    gpu: false,
-    sop: "穩健、不太需要調參、給特徵重要度。",
-    params: [
-      { key: "n_estimators", label: "樹的數量", def: "300" },
-      { key: "max_depth", label: "最大深度", def: "" },
-    ],
-  },
-  "tabular.xgboost": {
-    dataTypes: ["TABULAR"],
-    tasks: ["classification", "regression"],
-    gpu: false,
-    sop: "表格資料的預設首選，多數情況最準。",
-    params: [
-      { key: "learning_rate", label: "learning rate", def: "0.05" },
-      { key: "max_depth", label: "max depth", def: "6" },
-      { key: "n_estimators", label: "n estimators", def: "500" },
-    ],
-  },
-  "vision.yolo": {
-    dataTypes: ["IMAGE"],
-    tasks: ["detection", "segmentation", "classification"],
-    gpu: true,
-    sop: "即時物件偵測 / 分割的標準做法。",
-    params: [
-      { key: "model", label: "model", def: "yolo11s" },
-      { key: "imgsz", label: "imgsz", def: "640" },
-      { key: "epochs", label: "epochs", def: "100" },
-    ],
-  },
-  "vision.dino": {
-    dataTypes: ["IMAGE"],
-    tasks: ["classification", "anomaly_detection"],
-    gpu: true,
-    sop: "預訓練特徵 + 線性頭，少量標籤也能分得好。",
-    params: [
-      { key: "backbone", label: "backbone", def: "dinov2_vits14" },
-      { key: "epochs", label: "epochs", def: "20" },
-    ],
-  },
-  "sequence.patch_autoencoder": {
-    dataTypes: ["SEQUENCE", "SPECTRUM"],
-    tasks: ["anomaly_detection", "regression"],
-    gpu: true,
-    sop: "切 patch 做自編碼器，重建誤差大 = 異常。",
-    params: [
-      { key: "patch_size", label: "patch size", def: "16" },
-      { key: "latent", label: "latent", def: "32" },
-      { key: "epochs", label: "epochs", def: "50" },
-    ],
-  },
-  "text.bert_classifier": {
-    dataTypes: ["TEXT"],
-    tasks: ["classification"],
-    gpu: true,
-    sop: "預訓練 BERT 接分類頭，語意理解。",
-    params: [
-      { key: "model", label: "model", def: "bert-base-chinese" },
-      { key: "max_len", label: "max len", def: "256" },
-      { key: "epochs", label: "epochs", def: "3" },
-    ],
-  },
-};
-
-const specFields: Record<DataType, { key: string; label: string; placeholder: string }[]> = {
+const specFields: Record<DataType, { key: string; label: string; placeholder: string; hint?: string }[]> = {
   TABULAR: [
-    { key: "target", label: "目標欄位", placeholder: "例：yield_pct" },
+    { key: "target", label: "目標欄位", placeholder: "例：yield_pct", hint: "訓練必填；異常偵測可留空" },
     { key: "categorical", label: "類別欄位（逗號分隔，可選）", placeholder: "line,shift" },
+    { key: "id_column", label: "識別欄位（可選）", placeholder: "lot_id", hint: "不參與訓練，推論結果會帶回" },
   ],
-  IMAGE: [
-    { key: "classes", label: "類別（自動偵測，可修改）", placeholder: "scratch,dent,particle" },
-    { key: "imgsz", label: "影像尺寸", placeholder: "640" },
-  ],
+  IMAGE: [{ key: "classes", label: "類別（自動偵測，可修改）", placeholder: "scratch,dent,particle" }],
   SEQUENCE: [
-    { key: "window", label: "視窗長度", placeholder: "1024" },
-    { key: "stride", label: "步長", placeholder: "256" },
+    { key: "window", label: "視窗長度", placeholder: "256" },
+    { key: "stride", label: "步長", placeholder: "128" },
+    { key: "series_id", label: "序列 id 欄位", placeholder: "series_id" },
+    { key: "label", label: "標籤欄位（可選）", placeholder: "label" },
   ],
   TEXT: [
     { key: "text_column", label: "文字欄位", placeholder: "text" },
     { key: "label_column", label: "標籤欄位", placeholder: "label" },
   ],
-  SPECTRUM: [
-    { key: "patch_size", label: "patch 大小", placeholder: "16" },
-    { key: "label", label: "標籤欄位（可選）", placeholder: "" },
-  ],
+  SPECTRUM: [{ key: "label", label: "標籤欄位（可選）", placeholder: "label", hint: "異常標籤或迴歸目標" }],
 };
+
+function familiesFor(catalog: Catalog, dataType: DataType, task: TaskType): string[] {
+  return Object.entries(catalog.families)
+    .filter(([, f]) => (f.supports[dataType] ?? []).includes(task))
+    .map(([id]) => id);
+}
+
+function automlCandidates(catalog: Catalog, dataType: DataType, task: TaskType) {
+  const entry = catalog.automl.find((a) => a.data_type === dataType && a.tasks.includes(task));
+  return entry ? { candidates: entry.candidates, budget: entry.budget } : null;
+}
+
+function parseValue(v: string): unknown {
+  if (v === "") return undefined;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null") return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? v : n;
+}
 
 export function NewJobWizard({
   kind,
   project,
   sources,
   models,
+  catalog,
+  ops,
+  cloneFrom,
 }: {
   kind: "train" | "inference";
   project: ProjectInfo;
   sources: SourceInfo[];
   models: ModelInfo[];
+  catalog: Catalog;
+  ops: PreprocessOp[];
+  cloneFrom?: Job;
 }) {
   const router = useRouter();
   const isTrain = kind === "train";
-  const steps = isTrain ? ["資料", "欄位設定", "模式", "模型與參數", "資源", "確認"] : ["模型", "輸入", "資源", "確認"];
+  const steps = isTrain ? ["資料", "欄位與前處理", "模式", "模型與參數", "資源", "確認"] : ["模型", "輸入", "資源", "確認"];
+  const compatible = familiesFor(catalog, project.dataType, project.taskType);
+  const auto = automlCandidates(catalog, project.dataType, project.taskType);
+  const cloneSpec = (cloneFrom?.input.spec ?? {}) as Record<string, unknown>;
+  const cloneSearch = cloneFrom?.config?.search as { candidates?: string[]; max_trials?: number; time_budget_minutes?: number } | undefined;
+
   const [step, setStep] = useState(0);
-  const [name, setName] = useState("");
-  const [inputKind, setInputKind] = useState<"upload" | "data_source" | "inline">(isTrain ? "upload" : "inline");
-  const [sourceId, setSourceId] = useState<number | null>(sources[0]?.id ?? null);
-  const [spec, setSpec] = useState<Record<string, string>>({});
-  const [auto, setAuto] = useState(true);
-  const compatible = (Object.keys(catalog) as ModelFamily[]).filter(
-    (f) => catalog[f].dataTypes.includes(project.dataType) && catalog[f].tasks.includes(project.taskType),
+  const [name, setName] = useState(cloneFrom ? `${cloneFrom.name}-copy` : "");
+  const [inputKind, setInputKind] = useState<"upload" | "data_source" | "inline">(
+    cloneFrom?.input.kind === "data_source" ? "data_source" : isTrain ? "upload" : "inline",
   );
-  const [family, setFamily] = useState<ModelFamily>(compatible[0]);
-  const [candidates, setCandidates] = useState<ModelFamily[]>(compatible);
-  const [budget, setBudget] = useState({ trials: 20, minutes: 60 });
-  const [params, setParams] = useState<Record<string, string>>({});
-  const [modelId, setModelId] = useState<number | null>(models.find((m) => m.isDefault)?.id ?? models[0]?.id ?? null);
+  const [sourceId, setSourceId] = useState<number | null>(cloneFrom?.dataSourceId ?? sources[0]?.id ?? null);
+  const [upload, setUpload] = useState<Upload | null>(null);
+  const [inlineText, setInlineText] = useState(cloneFrom?.input.rows ? JSON.stringify(cloneFrom.input.rows, null, 1) : "");
+  const [spec, setSpec] = useState<Record<string, string>>(
+    Object.fromEntries(
+      Object.entries(cloneSpec)
+        .filter(([k, v]) => k !== "preprocess" && (typeof v === "string" || typeof v === "number"))
+        .map(([k, v]) => [k, String(v)]),
+    ),
+  );
+  const [preprocess, setPreprocess] = useState<PreprocessStep[]>((cloneSpec.preprocess as PreprocessStep[] | undefined) ?? []);
+  const [mode, setMode] = useState<"auto" | "manual">(cloneFrom?.mode ?? (auto ? "auto" : "manual"));
+  const [family, setFamily] = useState<string>(cloneFrom?.modelFamily ?? compatible[0] ?? "");
+  const [candidates, setCandidates] = useState<string[]>(cloneSearch?.candidates ?? auto?.candidates ?? compatible);
+  const [budget, setBudget] = useState({
+    trials: cloneSearch?.max_trials ?? auto?.budget.max_trials ?? 10,
+    minutes: cloneSearch?.time_budget_minutes ?? auto?.budget.time_budget_minutes ?? 60,
+  });
+  const [params, setParams] = useState<Record<string, string>>(
+    Object.fromEntries(
+      Object.entries(cloneFrom?.config ?? {})
+        .filter(([k]) => k !== "search" && k !== "mode")
+        .map(([k, v]) => [k, String(v)]),
+    ),
+  );
+  const [modelId, setModelId] = useState<number | null>(
+    cloneFrom?.artifactId ?? models.find((m) => m.isDefault)?.id ?? models[0]?.id ?? null,
+  );
+  const selectedModel = models.find((m) => m.id === modelId);
+  const inferenceModes = (selectedModel?.inferenceModes.length ? selectedModel.inferenceModes : ["predict"]) as InferenceMode[];
+  const [inferMode, setInferMode] = useState<string>((cloneFrom?.config?.mode as string | undefined) ?? "");
+  const effectiveMode = inferMode && inferenceModes.includes(inferMode as InferenceMode) ? inferMode : inferenceModes[0];
+  const [pending, startTransition] = useTransition();
+
+  const gpuOf = (f: string) => catalog.families[f]?.resources.gpu === "required";
   const needsGpu = isTrain
-    ? auto
-      ? candidates.some((c) => catalog[c].gpu)
-      : catalog[family].gpu
-    : catalog[models.find((m) => m.id === modelId)?.family ?? "tabular.linear"].gpu;
+    ? mode === "auto"
+      ? candidates.some(gpuOf)
+      : gpuOf(family)
+    : gpuOf(selectedModel?.family ?? "");
   const [res, setRes] = useState({
-    gpu: Math.min(1, project.gpuLimit),
-    cpu: Math.min(4, project.cpuLimit),
-    memoryMb: Math.min(16384, project.memoryLimitMb),
-    timeout: 240,
+    gpu: cloneFrom?.requestedGpu ?? Math.min(needsGpu ? 1 : 0, project.gpuLimit),
+    cpu: cloneFrom?.requestedCpu ?? Math.min(2, project.cpuLimit),
+    memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(4096, project.memoryLimitMb),
+    timeout: cloneFrom?.timeoutMinutes ?? project.defaultTimeout,
   });
   const overQuota = res.gpu > project.gpuLimit || res.cpu > project.cpuLimit || res.memoryMb > project.memoryLimitMb;
   const last = step === steps.length - 1;
+  const geometricBlocked = project.taskType === "detection" || project.taskType === "segmentation";
 
   const next = () => setStep((s) => Math.min(steps.length - 1, s + 1));
   const back = () => setStep((s) => Math.max(0, s - 1));
-  const submit = () => {
-    toast.success(`已建立${isTrain ? "訓練" : "推論"}任務，已加入佇列（接上 backend 後生效）`);
-    router.push(`/projects/${project.slug}/jobs`);
+
+  const submit = () =>
+    startTransition(async () => {
+      const specOut: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(spec)) {
+        const parsed = parseValue(v);
+        if (parsed !== undefined) specOut[k] = parsed;
+      }
+      if (preprocess.length) specOut.preprocess = preprocess;
+      let rows: unknown[] | undefined;
+      if (inputKind === "inline") {
+        try {
+          rows = JSON.parse(inlineText || "[]") as unknown[];
+          if (!Array.isArray(rows) || rows.length === 0) throw new Error("rows");
+        } catch {
+          toast.error("直接輸入必須是 JSON 陣列，例如 [{\"x1\": 1.2}]");
+          return;
+        }
+      }
+      const config: Record<string, unknown> = {};
+      if (isTrain && mode === "manual") {
+        for (const [k, v] of Object.entries(params)) {
+          const parsed = parseValue(v);
+          if (parsed !== undefined) config[k] = parsed;
+        }
+      }
+      if (isTrain && mode === "auto") {
+        config.search = { candidates, max_trials: budget.trials, time_budget_minutes: budget.minutes };
+      }
+      if (!isTrain && effectiveMode) config.mode = effectiveMode;
+      const body = {
+        kind,
+        name: name || (isTrain ? (mode === "auto" ? "automl-run" : `${family.split(".")[1]}-run`) : "batch-infer"),
+        input: {
+          kind: inputKind,
+          upload_id: inputKind === "upload" ? upload?.id : undefined,
+          data_source_id: inputKind === "data_source" ? sourceId : undefined,
+          rows,
+          spec: specOut,
+        },
+        task_type: project.taskType,
+        mode: isTrain ? mode : undefined,
+        model_family: isTrain && mode === "manual" ? family : undefined,
+        config: Object.keys(config).length ? config : undefined,
+        artifact_id: isTrain ? undefined : modelId,
+        requested_gpu: res.gpu,
+        requested_cpu: res.cpu,
+        requested_memory_mb: res.memoryMb,
+        timeout_minutes: res.timeout,
+      };
+      const r = await createJobAction(project.slug, body);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(`任務 #${r.data.id} 已建立，進入佇列`);
+      router.push(`/projects/${project.slug}/jobs/${r.data.id}`);
+    });
+
+  const canProceed = () => {
+    const dataOk =
+      inputKind === "upload" ? Boolean(upload) : inputKind === "data_source" ? Boolean(sourceId) : inlineText.trim().length > 0;
+    if (isTrain) {
+      if (step === 0) return dataOk;
+      if (step === 3) return mode === "auto" ? candidates.length > 0 : Boolean(family);
+    } else {
+      if (step === 0) return Boolean(modelId);
+      if (step === 1) return dataOk;
+    }
+    return true;
   };
 
   const dataStep = (
@@ -232,12 +275,19 @@ export function NewJobWizard({
             </TabsTrigger>
           </TabsList>
           {!isTrain ? (
-            <TabsContent value="inline" className="pt-4">
-              <Textarea rows={8} className="font-mono text-xs" placeholder='[{"col_a": 1.2, "col_b": "x"}, …]' />
+            <TabsContent value="inline" className="space-y-2 pt-4">
+              <Textarea
+                rows={8}
+                className="font-mono text-xs"
+                placeholder='[{"x1": 1.2, "x2": 0.3, "line": "A"}, …]  光譜 / 序列：[{"id": "s1", "values": [0.1, 0.2, …]}]'
+                value={inlineText}
+                onChange={(e) => setInlineText(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">適合少量即時推論；大量資料請用上傳或資料來源。</p>
             </TabsContent>
           ) : null}
           <TabsContent value="upload" className="pt-4">
-            <Dropzone />
+            <Dropzone slug={project.slug} onUploaded={setUpload} />
           </TabsContent>
           <TabsContent value="data_source" className="grid gap-2 pt-4">
             {sources.length === 0 ? (
@@ -251,18 +301,12 @@ export function NewJobWizard({
                   sourceId === s.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
                 )}
               >
-                <input
-                  type="radio"
-                  name="source"
-                  className="accent-current"
-                  checked={sourceId === s.id}
-                  onChange={() => setSourceId(s.id)}
-                />
+                <input type="radio" name="source" className="accent-current" checked={sourceId === s.id} onChange={() => setSourceId(s.id)} />
                 <span className="font-medium">{s.name}</span>
                 <SourceKindChip kind={s.kind} />
                 <span className="font-mono text-xs text-muted-foreground">{s.format}</span>
                 <span className="ml-auto">
-                  <StatusBadge status={s.ok ? "ok" : "error"} />
+                  <StatusBadge status={s.ok == null ? "pending" : s.ok ? "ok" : "error"} />
                 </span>
               </label>
             ))}
@@ -273,59 +317,90 @@ export function NewJobWizard({
   );
 
   const specStep = (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div className="space-y-1">
-          <CardTitle>欄位設定</CardTitle>
-          <CardDescription>
-            {project.dataType} · {dataTypeLabel[project.dataType]} / {taskTypeLabel[project.taskType]}
-          </CardDescription>
-        </div>
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button type="button" variant="outline" size="sm">
-              <BookOpen />
-              SOP
-            </Button>
-          </SheetTrigger>
-          <SheetContent className="w-full sm:max-w-md">
-            <SheetHeader>
-              <SheetTitle>{dataTypeLabel[project.dataType]}資料的模型選擇</SheetTitle>
-              <SheetDescription>對應 docs/MODEL_CATALOG.md，之後由 /catalog 提供。</SheetDescription>
-            </SheetHeader>
-            <div className="space-y-3 px-4 pb-4 text-sm">
-              {compatible.map((f) => (
-                <div key={f} className="rounded-lg border border-border p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{modelFamilyLabel[f]}</span>
-                    <span className="font-mono text-[11px] text-subtle-foreground">{f}</span>
-                  </div>
-                  <p className="mt-1 text-muted-foreground">
-                    {catalog[f].sop}
-                    {catalog[f].gpu ? "（需要 GPU）" : "（CPU 即可）"}
-                  </p>
-                </div>
-              ))}
-              <p className="text-muted-foreground">第一次建議選「自動模式」，跑完看 leaderboard 再手動微調。</p>
-            </div>
-          </SheetContent>
-        </Sheet>
-      </CardHeader>
-      <CardContent className="grid gap-4 sm:grid-cols-2">
-        {specFields[project.dataType].map((f) => (
-          <div key={f.key} className="grid gap-2">
-            <Label htmlFor={`spec-${f.key}`}>{f.label}</Label>
-            <Input
-              id={`spec-${f.key}`}
-              className="font-mono"
-              placeholder={f.placeholder}
-              value={spec[f.key] ?? ""}
-              onChange={(e) => setSpec({ ...spec, [f.key]: e.target.value })}
-            />
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div className="space-y-1">
+            <CardTitle>欄位設定</CardTitle>
+            <CardDescription>
+              {project.dataType} · {dataTypeLabel[project.dataType]} / {taskTypeLabel[project.taskType]}
+              {upload?.detectedSpec ? (
+                <span className="ml-2 font-mono text-xs">
+                  偵測到 {String((upload.detectedSpec as { row_count?: number }).row_count ?? "?")} 列
+                  {Array.isArray((upload.detectedSpec as { columns?: string[] }).columns)
+                    ? `，欄位：${((upload.detectedSpec as { columns: string[] }).columns ?? []).slice(0, 12).join(", ")}`
+                    : ""}
+                </span>
+              ) : null}
+            </CardDescription>
           </div>
-        ))}
-      </CardContent>
-    </Card>
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button type="button" variant="outline" size="sm">
+                <BookOpen />
+                SOP
+              </Button>
+            </SheetTrigger>
+            <SheetContent className="w-full sm:max-w-md">
+              <SheetHeader>
+                <SheetTitle>{dataTypeLabel[project.dataType]}資料的模型選擇</SheetTitle>
+                <SheetDescription>來自模型目錄（GET /catalog）。</SheetDescription>
+              </SheetHeader>
+              <div className="space-y-3 overflow-auto px-4 pb-4 text-sm">
+                {compatible.map((f) => (
+                  <div key={f} className="rounded-lg border border-border p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{familyLabel(f)}</span>
+                      <span className="font-mono text-[11px] text-subtle-foreground">{f}</span>
+                    </div>
+                    <p className="mt-1 text-muted-foreground">
+                      {catalog.families[f]?.sop}
+                      {gpuOf(f) ? "（需要 GPU）" : "（CPU 即可）"}
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      推論：{catalog.families[f]?.inference_modes.map((m) => inferenceModeLabel[m] ?? m).join(" / ")}
+                    </p>
+                  </div>
+                ))}
+                <p className="text-muted-foreground">第一次建議選「自動模式」，跑完看 leaderboard 再手動微調。</p>
+              </div>
+            </SheetContent>
+          </Sheet>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          {specFields[project.dataType].map((f) => (
+            <div key={f.key} className="grid gap-2">
+              <Label htmlFor={`spec-${f.key}`}>{f.label}</Label>
+              <Input
+                id={`spec-${f.key}`}
+                className="font-mono"
+                placeholder={f.placeholder}
+                value={spec[f.key] ?? ""}
+                onChange={(e) => setSpec({ ...spec, [f.key]: e.target.value })}
+              />
+              {f.hint ? <p className="text-xs text-muted-foreground">{f.hint}</p> : null}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>資料前處理（可選）</CardTitle>
+          <CardDescription>加入步驟後按「抽樣預覽」看處理前後的差異；步驟會隨任務送出。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PreprocessEditor
+            ops={ops}
+            steps={preprocess}
+            onChange={setPreprocess}
+            slug={project.slug}
+            uploadId={inputKind === "upload" ? upload?.id : undefined}
+            spec={Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""))}
+            disabledReason={geometricBlocked ? "偵測 / 分割任務不能用會改變座標的步驟" : undefined}
+          />
+        </CardContent>
+      </Card>
+    </div>
   );
 
   const modeStep = (
@@ -336,16 +411,17 @@ export function NewJobWizard({
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2">
         {[
-          { v: true, t: "自動（AutoML）", d: "推薦。候選模型 + Optuna 搜尋，結束後給 leaderboard 與最佳模型。" },
-          { v: false, t: "手動", d: "指定一個模型家族與參數。適合已經知道要什麼的時候。" },
+          { v: "auto" as const, t: "自動（AutoML）", d: "推薦。候選模型 + Optuna 搜尋，結束後給 leaderboard 與最佳模型。", disabled: !auto },
+          { v: "manual" as const, t: "手動", d: "指定一個模型家族與參數。適合已經知道要什麼的時候。", disabled: compatible.length === 0 },
         ].map((o) => (
           <button
-            key={String(o.v)}
+            key={o.v}
             type="button"
-            onClick={() => setAuto(o.v)}
+            disabled={o.disabled}
+            onClick={() => setMode(o.v)}
             className={cn(
-              "rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-              auto === o.v ? "border-primary/50 bg-primary/5 shadow-glow-sm" : "border-border hover:bg-accent/40",
+              "rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
+              mode === o.v ? "border-primary/50 bg-primary/5 shadow-glow-sm" : "border-border hover:bg-accent/40",
             )}
           >
             <div className="font-medium">{o.t}</div>
@@ -356,134 +432,139 @@ export function NewJobWizard({
     </Card>
   );
 
-  const modelStep = auto ? (
-    <Card>
-      <CardHeader>
-        <CardTitle>候選模型與預算</CardTitle>
-        <CardDescription>
-          依 {dataTypeLabel[project.dataType]} × {taskTypeLabel[project.taskType]} 自動挑選，可取消勾選。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          {compatible.map((f) => {
-            const on = candidates.includes(f);
-            return (
+  const familyParams = (f: string) =>
+    Object.entries(catalog.families[f]?.defaults ?? {}).map(([key, def]) => ({ key, def: def === null ? "" : String(def) }));
+
+  const modelStep =
+    mode === "auto" ? (
+      <Card>
+        <CardHeader>
+          <CardTitle>候選模型與預算</CardTitle>
+          <CardDescription>
+            依 {dataTypeLabel[project.dataType]} × {taskTypeLabel[project.taskType]} 自動挑選，可取消勾選。
+            {res.gpu === 0 ? " 沒申請 GPU 時需要 GPU 的候選會被略過。" : ""}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {(auto?.candidates ?? compatible).map((f) => {
+              const on = candidates.includes(f);
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setCandidates(on ? candidates.filter((c) => c !== f) : [...candidates, f])}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-sm transition-colors",
+                    on ? "border-primary/50 bg-primary/10 text-brand-ink" : "border-border text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {familyLabel(f)}
+                  {gpuOf(f) ? <span className="ml-1 font-mono text-[11px]">GPU</span> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="trials">最多 trial 數</Label>
+              <Input id="trials" type="number" min={1} className="text-right font-mono" value={budget.trials} onChange={(e) => setBudget({ ...budget, trials: Number(e.target.value) })} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="minutes">時間預算（分鐘）</Label>
+              <Input id="minutes" type="number" min={1} className="text-right font-mono" value={budget.minutes} onChange={(e) => setBudget({ ...budget, minutes: Number(e.target.value) })} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    ) : (
+      <Card>
+        <CardHeader>
+          <CardTitle>模型與參數</CardTitle>
+          <CardDescription>留空的參數用目錄預設值。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {compatible.map((f) => (
               <button
                 key={f}
                 type="button"
-                onClick={() => setCandidates(on ? candidates.filter((c) => c !== f) : [...candidates, f])}
+                onClick={() => setFamily(f)}
                 className={cn(
-                  "rounded-md border px-3 py-1.5 text-sm transition-colors",
-                  on
-                    ? "border-primary/50 bg-primary/10 text-brand-ink"
-                    : "border-border text-muted-foreground hover:bg-accent",
+                  "rounded-lg border p-3 text-left transition-colors",
+                  family === f ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
                 )}
               >
-                {modelFamilyLabel[f]}
-                {catalog[f].gpu ? <span className="ml-1 font-mono text-[11px]">GPU</span> : null}
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{familyLabel(f)}</span>
+                  {gpuOf(f) ? <span className="font-mono text-[11px] text-muted-foreground">GPU</span> : null}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{catalog.families[f]?.sop}</div>
               </button>
-            );
-          })}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2">
-            <Label htmlFor="trials">最多 trial 數</Label>
-            <Input
-              id="trials"
-              type="number"
-              className="text-right font-mono"
-              value={budget.trials}
-              onChange={(e) => setBudget({ ...budget, trials: Number(e.target.value) })}
-            />
+            ))}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="minutes">時間預算（分鐘）</Label>
-            <Input
-              id="minutes"
-              type="number"
-              className="text-right font-mono"
-              value={budget.minutes}
-              onChange={(e) => setBudget({ ...budget, minutes: Number(e.target.value) })}
-            />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  ) : (
-    <Card>
-      <CardHeader>
-        <CardTitle>模型與參數</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {compatible.map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFamily(f)}
-              className={cn(
-                "rounded-lg border p-3 text-left transition-colors",
-                family === f ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{modelFamilyLabel[f]}</span>
-                {catalog[f].gpu ? <span className="font-mono text-[11px] text-muted-foreground">GPU</span> : null}
+          <div className="grid gap-4 sm:grid-cols-3">
+            {familyParams(family).map((p) => (
+              <div key={p.key} className="grid gap-2">
+                <Label htmlFor={`p-${p.key}`}>{p.key}</Label>
+                <Input
+                  id={`p-${p.key}`}
+                  className="font-mono"
+                  placeholder={p.def}
+                  value={params[p.key] ?? ""}
+                  onChange={(e) => setParams({ ...params, [p.key]: e.target.value })}
+                />
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">{catalog[f].sop}</div>
-            </button>
-          ))}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {catalog[family].params.map((p) => (
-            <div key={p.key} className="grid gap-2">
-              <Label htmlFor={`p-${p.key}`}>{p.label}</Label>
-              <Input
-                id={`p-${p.key}`}
-                className="font-mono"
-                placeholder={p.def}
-                value={params[p.key] ?? ""}
-                onChange={(e) => setParams({ ...params, [p.key]: e.target.value })}
-              />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
 
   const pickModelStep = (
     <Card>
       <CardHeader>
-        <CardTitle>模型</CardTitle>
-        <CardDescription>選擇要用來推論的已訓練模型。</CardDescription>
+        <CardTitle>模型與推論模式</CardTitle>
+        <CardDescription>選擇要用來推論的已訓練模型，以及推論時要做什麼。</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-2">
-        {models.map((m) => (
-          <label
-            key={m.id}
-            className={cn(
-              "flex cursor-pointer items-center gap-3 rounded-lg border p-3",
-              modelId === m.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
-            )}
-          >
-            <input
-              type="radio"
-              name="model"
-              className="accent-current"
-              checked={modelId === m.id}
-              onChange={() => setModelId(m.id)}
-            />
-            <span className="font-medium">{m.name}</span>
-            <span className="font-mono text-xs text-muted-foreground">
-              v{m.version} · {m.family}
-            </span>
-            {m.isDefault ? (
-              <span className="ml-auto rounded-sm bg-primary/10 px-1.5 text-[11px] text-brand-ink">預設</span>
-            ) : null}
-          </label>
-        ))}
+      <CardContent className="space-y-4">
+        <div className="grid gap-2">
+          {models.length === 0 ? <p className="text-sm text-muted-foreground">還沒有模型，先完成一個訓練任務。</p> : null}
+          {models.map((m) => (
+            <label
+              key={m.id}
+              className={cn(
+                "flex cursor-pointer items-center gap-3 rounded-lg border p-3",
+                modelId === m.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent/40",
+              )}
+            >
+              <input type="radio" name="model" className="accent-current" checked={modelId === m.id} onChange={() => setModelId(m.id)} />
+              <span className="font-medium">{m.name}</span>
+              <span className="font-mono text-xs text-muted-foreground">
+                v{m.version} · {m.family}
+              </span>
+              {m.isDefault ? <span className="ml-auto rounded-sm bg-primary/10 px-1.5 text-[11px] text-brand-ink">預設</span> : null}
+            </label>
+          ))}
+        </div>
+        {selectedModel ? (
+          <div className="grid gap-2">
+            <Label htmlFor="infer-mode">推論模式</Label>
+            <Select value={effectiveMode} onValueChange={setInferMode}>
+              <SelectTrigger id="infer-mode" className="w-80">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {inferenceModes.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {inferenceModeLabel[m] ?? m}
+                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">{m}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -503,15 +584,7 @@ export function NewJobWizard({
       <CardContent className="grid gap-4 sm:grid-cols-4">
         <div className="grid gap-2">
           <Label htmlFor="r-gpu">GPU</Label>
-          <Input
-            id="r-gpu"
-            type="number"
-            min={0}
-            className="text-right font-mono"
-            value={res.gpu}
-            onChange={(e) => setRes({ ...res, gpu: Number(e.target.value) })}
-            aria-invalid={res.gpu > project.gpuLimit || (needsGpu && res.gpu === 0)}
-          />
+          <Input id="r-gpu" type="number" min={0} className="text-right font-mono" value={res.gpu} onChange={(e) => setRes({ ...res, gpu: Number(e.target.value) })} aria-invalid={res.gpu > project.gpuLimit || (needsGpu && res.gpu === 0)} />
           {res.gpu > project.gpuLimit ? (
             <p className="text-xs text-destructive">超過配額 {project.gpuLimit}</p>
           ) : needsGpu && res.gpu === 0 ? (
@@ -520,46 +593,17 @@ export function NewJobWizard({
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-cpu">CPU 核</Label>
-          <Input
-            id="r-cpu"
-            type="number"
-            min={1}
-            className="text-right font-mono"
-            value={res.cpu}
-            onChange={(e) => setRes({ ...res, cpu: Number(e.target.value) })}
-            aria-invalid={res.cpu > project.cpuLimit}
-          />
+          <Input id="r-cpu" type="number" min={1} className="text-right font-mono" value={res.cpu} onChange={(e) => setRes({ ...res, cpu: Number(e.target.value) })} aria-invalid={res.cpu > project.cpuLimit} />
           {res.cpu > project.cpuLimit ? <p className="text-xs text-destructive">超過配額 {project.cpuLimit}</p> : null}
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-mem">Memory (MB)</Label>
-          <Input
-            id="r-mem"
-            type="number"
-            step={1024}
-            className="text-right font-mono"
-            value={res.memoryMb}
-            onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })}
-            aria-invalid={res.memoryMb > project.memoryLimitMb}
-          />
-          <p
-            className={cn(
-              "text-xs",
-              res.memoryMb > project.memoryLimitMb ? "text-destructive" : "text-muted-foreground",
-            )}
-          >
-            {formatMb(res.memoryMb || 0)}
-          </p>
+          <Input id="r-mem" type="number" step={1024} className="text-right font-mono" value={res.memoryMb} onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })} aria-invalid={res.memoryMb > project.memoryLimitMb} />
+          <p className={cn("text-xs", res.memoryMb > project.memoryLimitMb ? "text-destructive" : "text-muted-foreground")}>{formatMb(res.memoryMb || 0)}</p>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="r-to">逾時（分鐘）</Label>
-          <Input
-            id="r-to"
-            type="number"
-            className="text-right font-mono"
-            value={res.timeout}
-            onChange={(e) => setRes({ ...res, timeout: Number(e.target.value) })}
-          />
+          <Input id="r-to" type="number" min={1} className="text-right font-mono" value={res.timeout} onChange={(e) => setRes({ ...res, timeout: Number(e.target.value) })} />
         </div>
       </CardContent>
     </Card>
@@ -576,7 +620,7 @@ export function NewJobWizard({
           <Label htmlFor="job-name">任務名稱</Label>
           <Input
             id="job-name"
-            placeholder={isTrain ? (auto ? "automl-run-1" : `${family.split(".")[1]}-run-1`) : "batch-infer-1"}
+            placeholder={isTrain ? (mode === "auto" ? "automl-run-1" : `${family.split(".")[1]}-run-1`) : "batch-infer-1"}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -587,22 +631,34 @@ export function NewJobWizard({
             {inputKind === "data_source"
               ? (sources.find((s) => s.id === sourceId)?.name ?? "—")
               : inputKind === "upload"
-                ? "一次性上傳（任務結束即刪）"
+                ? `${upload?.originalFilename ?? "—"}（任務結束即刪）`
                 : "直接輸入"}
           </dd>
           {isTrain ? (
             <>
+              <dt className="text-label">欄位</dt>
+              <dd className="font-mono text-xs">
+                {Object.entries(spec)
+                  .filter(([, v]) => v)
+                  .map(([k, v]) => `${k}=${v}`)
+                  .join("  ") || "—"}
+              </dd>
+              <dt className="text-label">前處理</dt>
+              <dd className="font-mono text-xs">{preprocess.map((s) => s.op).join(" → ") || "無"}</dd>
               <dt className="text-label">模式</dt>
               <dd>
-                {auto
+                {mode === "auto"
                   ? `自動 · ${candidates.length} 個候選 · ${budget.trials} trials / ${budget.minutes} 分鐘`
-                  : `手動 · ${modelFamilyLabel[family]}`}
+                  : `手動 · ${familyLabel(family)}`}
               </dd>
             </>
           ) : (
             <>
               <dt className="text-label">模型</dt>
-              <dd>{models.find((m) => m.id === modelId)?.name ?? "—"}</dd>
+              <dd>
+                {selectedModel ? `${selectedModel.name} v${selectedModel.version}` : "—"} ·{" "}
+                {inferenceModeLabel[effectiveMode as InferenceMode] ?? effectiveMode}
+              </dd>
             </>
           )}
           <dt className="text-label">資源</dt>
@@ -610,10 +666,6 @@ export function NewJobWizard({
             {res.gpu} GPU · {res.cpu} CPU · {formatMb(res.memoryMb)} · 逾時 {res.timeout} 分鐘
           </dd>
         </dl>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Switch defaultChecked />
-          完成或失敗時通知我
-        </label>
       </CardContent>
     </Card>
   );
@@ -632,16 +684,12 @@ export function NewJobWizard({
           {step === 0 ? "取消" : "上一步"}
         </Button>
         {last ? (
-          <Button
-            type="button"
-            onClick={submit}
-            disabled={overQuota || (isTrain && inputKind === "data_source" && !sourceId)}
-          >
-            <Rocket />
+          <Button type="button" onClick={submit} disabled={pending || overQuota || (needsGpu && res.gpu === 0)}>
+            {pending ? <LoaderCircle className="animate-spin" /> : <Rocket />}
             建立任務
           </Button>
         ) : (
-          <Button type="button" onClick={next}>
+          <Button type="button" onClick={next} disabled={!canProceed()}>
             下一步
             <ChevronRight />
           </Button>

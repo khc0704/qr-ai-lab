@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { listJobs, listProjects } from "@/lib/api";
 
 export default async function ProjectsPage() {
-  const [projects, jobs] = await Promise.all([listProjects({ includeArchived: true }), listJobs()]);
+  const [projects, jobs] = await Promise.all([listProjects({ includeArchived: true }), listJobs({ limit: 100 })]);
   const active = projects.filter((p) => p.status === "active");
   const archived = projects.filter((p) => p.status === "archived");
   return (

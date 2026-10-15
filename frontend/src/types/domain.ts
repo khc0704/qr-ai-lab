@@ -1,5 +1,4 @@
-// Domain types mirroring docs/DATABASE.md. Keep field names in camelCase on the frontend;
-// the API layer (src/lib/api) is responsible for mapping snake_case responses.
+// Domain types used by pages and components (camelCase). src/lib/api maps the backend's snake_case JSON.
 
 export type DataType = "TABULAR" | "IMAGE" | "SEQUENCE" | "TEXT" | "SPECTRUM";
 export type TaskType = "classification" | "regression" | "detection" | "segmentation" | "anomaly_detection";
@@ -8,17 +7,42 @@ export type ModelFamily =
   | "tabular.svm"
   | "tabular.random_forest"
   | "tabular.xgboost"
+  | "tabular.isolation_forest"
   | "vision.yolo"
-  | "vision.dino"
+  | "vision.dino_fewshot"
+  | "vision.dino_patchcore"
+  | "vision.image_quality"
   | "sequence.patch_autoencoder"
+  | "spectrum.masked_autoencoder"
   | "text.bert_classifier";
+export type InferenceMode =
+  | "predict"
+  | "score"
+  | "compare"
+  | "embed"
+  | "retrieve"
+  | "detect"
+  | "segment"
+  | "measure"
+  | "extend";
 export type SystemRole = "admin" | "user";
 export type ProjectRole = "owner" | "maintainer" | "member" | "viewer";
 export type ProjectStatus = "active" | "archived";
 export type JobKind = "train" | "inference";
 export type JobStatus = "queued" | "scheduled" | "running" | "succeeded" | "failed" | "cancelled";
 export type JobMode = "manual" | "auto";
-export type JobStage = "fetching" | "preparing" | "training" | "evaluating" | "exporting" | "predicting";
+export type JobStage =
+  | "starting"
+  | "fetching"
+  | "preparing"
+  | "training"
+  | "evaluating"
+  | "exporting"
+  | "loading"
+  | "predicting"
+  | "done"
+  | "failed"
+  | "cancelled";
 export type InputKind = "upload" | "data_source" | "inline";
 export type RequestStatus = "submitted" | "in_review" | "approved" | "rejected" | "withdrawn";
 export type DataScale = "tiny" | "small" | "medium" | "large";
@@ -60,6 +84,7 @@ export interface Project {
   storageQuotaMb: number;
   storageUsedBytes: number;
   maxConcurrentJobs: number;
+  defaultJobTimeoutMinutes?: number;
   members: ProjectMember[];
   createdAt: string;
   /** Live usage, computed by the backend from running jobs. */
@@ -77,6 +102,7 @@ export interface DataSource {
   url?: string;
   hasCredentials: boolean;
   format: DataFormat;
+  defaultSpec?: Record<string, unknown>;
   lastCheckOk?: boolean;
   lastCheckMessage?: string;
   lastCheckedAt?: string;
@@ -84,25 +110,32 @@ export interface DataSource {
   createdAt: string;
 }
 
+export interface PreprocessStep {
+  op: string;
+  params?: Record<string, unknown>;
+}
+
 export interface JobInput {
   kind: InputKind;
   originalFilename?: string;
   sizeBytes?: number;
   dataSourceName?: string;
-  format: DataFormat | "json";
-  spec: Record<string, unknown>;
+  format: DataFormat | "json" | string;
+  spec: Record<string, unknown> & { preprocess?: PreprocessStep[] };
+  rows?: Record<string, unknown>[];
 }
 
 export interface LeaderboardRow {
   trial: number;
   family: ModelFamily;
-  params: Record<string, number | string>;
+  params: Record<string, number | string | boolean | null>;
   metric: number;
+  metrics?: Record<string, number>;
   durationS: number;
 }
 
 export interface JobMetrics {
-  [key: string]: number | LeaderboardRow[] | undefined;
+  [key: string]: number | string | LeaderboardRow[] | undefined;
   leaderboard?: LeaderboardRow[];
 }
 
@@ -115,6 +148,7 @@ export interface Job {
   name: string;
   status: JobStatus;
   queueRank: number;
+  queuePosition?: number;
   requestedGpu: number;
   requestedCpu: number;
   requestedMemoryMb: number;
@@ -125,10 +159,12 @@ export interface Job {
   taskType?: TaskType;
   mode?: JobMode;
   modelFamily?: ModelFamily;
+  dataSourceId?: number;
   artifactId?: number;
   input: JobInput;
   config?: Record<string, unknown>;
   metrics?: JobMetrics;
+  result?: Record<string, unknown>;
   errorMessage?: string;
   cancelReason?: string;
   cancelRequestedBy?: User;
@@ -151,6 +187,7 @@ export interface Artifact {
   path: string;
   sizeBytes: number;
   metrics?: Record<string, number>;
+  metadata?: Record<string, unknown>;
   isDefault: boolean;
   createdAt: string;
 }
@@ -188,6 +225,7 @@ export interface Issue {
   author: User;
   assignee?: User;
   projectSlug?: string;
+  resolutionNote?: string;
   commentCount: number;
   createdAt: string;
   closedAt?: string;
@@ -211,6 +249,13 @@ export interface ResourcePool {
   allowBackfill: boolean;
 }
 
+export interface Allocated {
+  gpu: number;
+  cpu: number;
+  memoryMb: number;
+  runningJobs: number;
+}
+
 export interface NodeGpu {
   index: number;
   name: string;
@@ -228,8 +273,7 @@ export interface NodeStatus {
   memoryUsedMb: number;
   diskTotalGb: number;
   diskFreeGb: number;
-  /** Sum of resources currently allocated to scheduled/running jobs. */
-  allocated: { gpu: number; cpu: number; memoryMb: number; runningJobs: number };
+  allocated: Allocated;
 }
 
 export interface AuditLog {
@@ -239,6 +283,7 @@ export interface AuditLog {
   targetType: string;
   targetId?: number;
   reason?: string;
+  payload?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -249,4 +294,110 @@ export interface LogLine {
   ts: string;
   level: LogLevel;
   text: string;
+}
+
+/** GET /catalog — kept close to the yaml (snake_case keys) because it is configuration, not a record. */
+export interface CatalogFamily {
+  label: string;
+  group: string;
+  framework: string;
+  supports: Partial<Record<DataType, TaskType[]>>;
+  inference_modes: InferenceMode[];
+  resources: { gpu: "none" | "optional" | "required"; cpu_min: number; memory_mb_min: number };
+  min_rows?: number;
+  max_rows?: number;
+  defaults: Record<string, unknown>;
+  search_space: Record<string, { type: string; low?: number; high?: number; log?: boolean; choices?: unknown[] }>;
+  weights: string[];
+  sop: string;
+}
+
+export interface Catalog {
+  version: number;
+  data_types: Record<DataType, { label: string; formats: string[] }>;
+  tasks: Record<TaskType, { label: string; metrics: string[]; direction: "maximize" | "minimize"; needs_labels: boolean }>;
+  families: Record<string, CatalogFamily>;
+  automl: {
+    data_type: DataType;
+    tasks: TaskType[];
+    candidates: string[];
+    rules?: { if: string; drop?: string[]; prefer?: string[] }[];
+    budget: { max_trials: number; time_budget_minutes: number };
+  }[];
+}
+
+export interface PreprocessParam {
+  name: string;
+  label: string;
+  type: "int" | "float" | "str" | "bool" | "choice" | "columns";
+  default?: unknown;
+  min?: number;
+  max?: number;
+  choices?: unknown[];
+  help?: string;
+}
+
+export interface PreprocessOp {
+  id: string;
+  label: string;
+  description: string;
+  dataTypes: DataType[];
+  params: PreprocessParam[];
+  geometric: boolean;
+  fitted: boolean;
+  dropsRows: boolean;
+}
+
+export interface Upload {
+  id: number;
+  projectId: number;
+  originalFilename: string;
+  sizeBytes: number;
+  format: string;
+  detectedSpec?: Record<string, unknown>;
+  status: string;
+  expiresAt: string;
+}
+
+/** POST /projects/{slug}/uploads/{id}/preview — payload keys mirror the backend (snake_case). */
+export interface PreviewPayload {
+  data_type: DataType;
+  steps: string[];
+  before: PreviewSide;
+  after: PreviewSide;
+}
+export interface PreviewSide {
+  row_count?: number;
+  columns?: string[];
+  rows?: Record<string, unknown>[];
+  /** Tabular / text previews: one entry per column. Sequence / spectrum / image previews: one summary object. */
+  stats?: ColumnStat[] | ArrayStat;
+  images?: { id: string; width: number; height: number; mode: string; mean: number; std: number; png_base64: string }[];
+  curves?: { id: string; values: number[][] }[];
+  points_step?: number;
+}
+
+export interface ColumnStat {
+  column: string;
+  dtype: string;
+  missing: number;
+  mean?: number;
+  std?: number;
+  min?: number;
+  max?: number;
+  unique?: number;
+}
+
+export interface ArrayStat {
+  shape: number[];
+  mean: number;
+  std: number;
+  min: number;
+  max: number;
+  nan_ratio?: number;
+}
+
+export interface Capacity {
+  pool: ResourcePool;
+  allocated: Allocated;
 }

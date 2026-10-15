@@ -1,11 +1,13 @@
-import { Pencil, Undo2 } from "lucide-react";
+import { Pencil } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DataTypeChip, TaskChip } from "@/components/features/chips";
 import { CommentThread } from "@/components/features/comment-thread";
 import { UserInline } from "@/components/features/member-avatars";
+import { WithdrawRequestButton } from "@/components/features/request-owner-actions";
 import { RequestReviewPanel } from "@/components/features/request-review-panel";
+import { RelativeTime } from "@/components/features/time";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
@@ -13,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { dataScaleLabel, projectRoleLabel } from "@/i18n/zh-TW";
 import { getProjectRequest, getResourcePool, listComments } from "@/lib/api";
-import { formatDateTime, formatMb, formatRelative } from "@/lib/format";
+import { formatMb } from "@/lib/format";
 import { getCurrentUser, isAdmin } from "@/lib/session";
 
 async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -73,15 +75,14 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
         title={req.title}
         actions={
           mine && req.status === "rejected" ? (
-            <Button variant="outline">
-              <Pencil />
-              修改並重送
+            <Button variant="outline" asChild>
+              <Link href={`/project-requests/new?from=${req.id}`}>
+                <Pencil />
+                修改並重送
+              </Link>
             </Button>
           ) : mine && (req.status === "submitted" || req.status === "in_review") ? (
-            <Button variant="outline">
-              <Undo2 />
-              撤回
-            </Button>
+            <WithdrawRequestButton id={req.id} />
           ) : null
         }
       />
@@ -120,6 +121,8 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
             <CommentThread
               comments={comments}
               currentUser={user}
+              target="project_request"
+              targetId={req.id}
               placeholder={admin ? "要求補件或說明審核意見…" : "回覆管理員…"}
             />
           </section>
@@ -151,14 +154,16 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
               </div>
               <div className="flex items-center justify-between px-4 py-2.5">
                 <dt className="text-label">送出</dt>
-                <dd className="font-mono text-xs" title={formatDateTime(req.submittedAt)}>
-                  {formatRelative(req.submittedAt)}
+                <dd className="font-mono text-xs">
+                  <RelativeTime iso={req.submittedAt} />
                 </dd>
               </div>
               {req.reviewedAt ? (
                 <div className="flex items-center justify-between px-4 py-2.5">
                   <dt className="text-label">審核</dt>
-                  <dd className="font-mono text-xs">{formatRelative(req.reviewedAt)}</dd>
+                  <dd className="font-mono text-xs">
+                    <RelativeTime iso={req.reviewedAt} />
+                  </dd>
                 </div>
               ) : null}
               {req.projectSlug ? (

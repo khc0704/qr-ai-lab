@@ -9,38 +9,32 @@ import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatBytes, formatRelative } from "@/lib/format";
-import {
-  getAdminOverview,
-  getNodeStatus,
-  getResourcePool,
-  listJobs,
-  listProjectRequests,
-  listProjects,
-} from "@/lib/api";
+import { RelativeTime } from "@/components/features/time";
+import { formatBytes } from "@/lib/format";
+import { getAdminOverview, getCapacity, listJobs, listProjectRequests, listProjects } from "@/lib/api";
 import { getCurrentUser, isAdmin } from "@/lib/session";
 
 export default async function HomePage() {
   const user = await getCurrentUser();
   const admin = isAdmin(user);
-  const [projects, jobs, requests, pool, node] = await Promise.all([
-    listProjects({ memberOf: admin ? undefined : user.id }),
+  const [projects, jobs, requests, capacity, overview] = await Promise.all([
+    listProjects(),
     listJobs({ limit: 6 }),
     listProjectRequests({ applicantId: user.id }),
-    getResourcePool(),
-    getNodeStatus(),
+    getCapacity(),
+    admin ? getAdminOverview() : null,
   ]);
-  const overview = admin ? await getAdminOverview() : null;
+  const { pool, allocated } = capacity;
   const running = jobs.filter((j) => j.status === "running").length;
   const storage = projects.reduce((s, p) => s + p.storageUsedBytes, 0);
-  const freeGpu = pool.gpuIndices.length - node.allocated.gpu;
+  const freeGpu = pool.gpuIndices.length - allocated.gpu;
 
   return (
     <>
       <PageHeader
         eyebrow={<Greeting />}
         title={`${user.displayName}，今天有 ${freeGpu} 張 GPU 可用`}
-        description={`資源池 ${pool.gpuIndices.length} GPU 中 ${node.allocated.gpu} 張執行中；佇列中 ${overview?.queued ?? "—"} 個任務。`}
+        description={`資源池 ${pool.gpuIndices.length} GPU 中 ${allocated.gpu} 張執行中${overview ? `；佇列中 ${overview.queued} 個任務` : ""}。`}
         actions={
           <Button asChild>
             <Link href="/project-requests/new">
@@ -166,7 +160,7 @@ export default async function HomePage() {
                     {j.status === "queued" ? "—" : `${j.progress}%`}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {formatRelative(j.createdAt)}
+                    <RelativeTime iso={j.createdAt} />
                   </TableCell>
                 </TableRow>
               ))}

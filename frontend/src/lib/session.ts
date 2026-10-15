@@ -1,13 +1,29 @@
-// Mock session until Auth.js + Keycloak are wired (see docs/ARCHITECTURE.md §2).
-// When this reads cookies(), every caller must sit inside a <Suspense> boundary (Cache Components).
+// Current user from the backend (/me) using the token cookie. Any component calling this reads cookies,
+// so it must render inside a <Suspense> boundary (Cache Components) — the (app) layout provides one.
 import "server-only";
 
-import { users } from "@/lib/mock-data";
+import { redirect } from "next/navigation";
+import { cache } from "react";
+import { toUser, type UserRead } from "@/lib/api/mappers";
+import { ApiError, apiFetch, getToken } from "@/lib/backend";
 import type { User } from "@/types/domain";
 
-export async function getCurrentUser(): Promise<User> {
-  return users[0];
-}
+export const getOptionalUser = cache(async (): Promise<User | null> => {
+  const token = await getToken();
+  if (!token) return null;
+  try {
+    return toUser(await apiFetch<UserRead>("/me", { token }));
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 401 || e.status === 403)) return null;
+    throw e;
+  }
+});
+
+export const getCurrentUser = cache(async (): Promise<User> => {
+  const user = await getOptionalUser();
+  if (!user) redirect("/login?reason=expired");
+  return user;
+});
 
 export function isAdmin(user: User): boolean {
   return user.role === "admin";

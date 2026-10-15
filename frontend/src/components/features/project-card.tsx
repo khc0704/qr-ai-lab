@@ -4,7 +4,8 @@ import { MemberAvatars } from "@/components/features/member-avatars";
 import { ResourceMeter } from "@/components/features/resource-meter";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Card } from "@/components/ui/card";
-import { formatBytes, formatMb, formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
+import { formatBytes, formatMb } from "@/lib/format";
 import type { Job, Project } from "@/types/domain";
 
 export function ProjectCard({ project, latestJob }: { project: Project; latestJob?: Job }) {
@@ -43,9 +44,7 @@ export function ProjectCard({ project, latestJob }: { project: Project; latestJo
             {latestJob ? (
               <>
                 <StatusBadge status={latestJob.status} />
-                <span className="font-mono text-[11px] text-subtle-foreground">
-                  {formatRelative(latestJob.createdAt)}
-                </span>
+                <RelativeTime iso={latestJob.createdAt} className="font-mono text-[11px] text-subtle-foreground" />
               </>
             ) : null}
           </div>

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { systemRoleLabel } from "@/i18n/zh-TW";
+import { logoutAction } from "@/lib/actions";
 import { initials } from "@/lib/format";
 import type { User } from "@/types/domain";
 
@@ -45,9 +46,9 @@ export function UserMenu({ user }: { user: User }) {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem>
+              <DropdownMenuItem disabled>
                 <UserRound />
-                個人資料
+                {user.username}
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
@@ -65,7 +66,7 @@ export function UserMenu({ user }: { user: User }) {
               跟隨系統
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive">
+            <DropdownMenuItem variant="destructive" onSelect={() => void logoutAction()}>
               <LogOut />
               登出
             </DropdownMenuItem>

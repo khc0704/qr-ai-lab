@@ -3,7 +3,8 @@ import { DataTypeChip, TaskChip } from "@/components/features/chips";
 import { UserInline } from "@/components/features/member-avatars";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatMb, formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
+import { formatMb } from "@/lib/format";
 import type { ProjectRequest } from "@/types/domain";
 
 export function RequestTable({ requests, showApplicant }: { requests: ProjectRequest[]; showApplicant: boolean }) {
@@ -57,7 +58,7 @@ export function RequestTable({ requests, showApplicant }: { requests: ProjectReq
                 </TableCell>
               ) : null}
               <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                {formatRelative(r.submittedAt)}
+                <RelativeTime iso={r.submittedAt} />
               </TableCell>
             </TableRow>
           ))}

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { issueTypeLabel } from "@/i18n/zh-TW";
 import { listIssues } from "@/lib/api";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
 import { cn } from "@/lib/utils";
 import type { IssueStatus, IssueType } from "@/types/domain";
 
@@ -104,7 +104,7 @@ async function IssueList({ searchParams }: { searchParams: Promise<{ status?: st
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs tabular-nums">{i.commentCount}</TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {formatRelative(i.createdAt)}
+                    <RelativeTime iso={i.createdAt} />
                   </TableCell>
                 </TableRow>
               ))}

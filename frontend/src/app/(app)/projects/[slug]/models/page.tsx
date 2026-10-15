@@ -7,14 +7,15 @@ import { EmptyState } from "@/components/features/empty-state";
 import { TableSkeleton } from "@/components/features/skeletons";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getProject, listArtifacts } from "@/lib/api";
-import { formatBytes, formatMetric, formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/features/time";
+import { formatBytes, formatMetric } from "@/lib/format";
 import { ModelRowActions } from "./model-row-actions";
 
 async function Models({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const project = await getProject(slug);
   if (!project) notFound();
-  const models = await listArtifacts(project.id, "model");
+  const models = await listArtifacts(project.slug, "model");
   if (models.length === 0)
     return (
       <EmptyState
@@ -66,10 +67,10 @@ async function Models({ params }: { params: Promise<{ slug: string }> }) {
                 </Link>
               </TableCell>
               <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                {formatRelative(m.createdAt)}
+                <RelativeTime iso={m.createdAt} />
               </TableCell>
               <TableCell className="text-right">
-                <ModelRowActions id={m.id} name={m.name} isDefault={m.isDefault} />
+                <ModelRowActions id={m.id} name={m.name} isDefault={m.isDefault} slug={project.slug} />
               </TableCell>
             </TableRow>
           ))}
