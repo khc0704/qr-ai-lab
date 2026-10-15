@@ -11,7 +11,7 @@ from app.schemas.common import Ok, Page
 from app.schemas.data_source import DataSourceCreate, DataSourceRead, DataSourceUpdate
 from app.schemas.job import JobCreate, JobRead
 from app.schemas.project import MemberAdd, MemberUpdate, ProjectRead, ProjectUpdate, QuotaUpdate
-from app.schemas.upload import UploadRead
+from app.schemas.upload import PreprocessPreviewBody, UploadRead
 from app.services import (
     artifacts as artifacts_svc,
 )
@@ -123,6 +123,16 @@ async def upload(
 ) -> UploadRead:
     return UploadRead.model_validate(
         await uploads_svc.create_from_upload(session, access.user, access.project, file, format)
+    )
+
+
+@router.post(
+    "/{slug}/uploads/{upload_id}/preview",
+    summary="對上傳檔抽樣套用前處理步驟，回傳前後對照（不儲存）",
+)
+async def preview_upload(upload_id: int, body: PreprocessPreviewBody, access: Member, session: DbSession) -> dict:
+    return await uploads_svc.preview(
+        session, access.project, upload_id, body.steps, sample=body.sample, spec=body.spec, task_type=body.task_type
     )
 
 

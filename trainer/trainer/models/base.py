@@ -130,6 +130,7 @@ class BaseTrainer:
             "params": _jsonable(self.params),
             "spec": {k: v for k, v in ds.spec.items() if k not in ("columns",)},
             "n_train": len(ds),
+            "preprocess": ds.preprocess,
             **self.meta,
             **extra,
         }

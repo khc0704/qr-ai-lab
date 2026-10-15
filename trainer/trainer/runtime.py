@@ -169,6 +169,10 @@ def _train(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     reporter.set_stage("exporting")
     trainer.finalize(ds)
     artifacts = trainer.export(env.output_dir)
+    if ds.preprocess:
+        model_dir = env.output_dir / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "preprocess.json").write_text(json.dumps(ds.preprocess, ensure_ascii=False), encoding="utf-8")
     metrics_dir = env.output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     (metrics_dir / "metrics.json").write_text(
@@ -250,6 +254,10 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     info(f"model: {art['name']} v{art['version']} ({fid}) mode={mode}")
     reporter.set_stage("preparing")
     task = meta.get("task_type") or spec.get("task_type")
+    state = meta.get("preprocess")
+    if state is None:
+        local = model_path / "preprocess.json"
+        state = json.loads(local.read_text(encoding="utf-8")) if local.exists() else None
     ds = dataset.load(
         spec["data_type"],
         task,
@@ -257,6 +265,7 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
         {**(meta.get("spec") or {}), **(spec["input"].get("spec") or {})},
         ctx.work_dir,
         inline_rows=spec["input"].get("rows"),
+        preprocess_state=state,
     )
     if len(ds) == 0:
         raise ValueError("輸入資料沒有任何樣本")

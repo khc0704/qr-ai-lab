@@ -1800,6 +1800,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyyaml" },
+    { name = "qrlab-preprocess" },
     { name = "scikit-learn" },
     { name = "xgboost" },
 ]
@@ -1830,6 +1831,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2" },
     { name = "pyarrow", specifier = ">=15" },
     { name = "pyyaml", specifier = ">=6" },
+    { name = "qrlab-preprocess", editable = "../libs/preprocess" },
     { name = "safetensors", marker = "extra == 'dl'", specifier = ">=0.4" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "timm", marker = "extra == 'dl'", specifier = ">=1.0" },
@@ -1840,6 +1842,33 @@ requires-dist = [
     { name = "xgboost", specifier = ">=2.1" },
 ]
 provides-extras = ["dl"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.5" },
+]
+
+[[package]]
+name = "qrlab-preprocess"
+version = "0.1.0"
+source = { editable = "../libs/preprocess" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "pyarrow" },
+    { name = "scipy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "pyarrow", specifier = ">=15" },
+    { name = "scipy", specifier = ">=1.12" },
+]
 
 [package.metadata.requires-dev]
 dev = [

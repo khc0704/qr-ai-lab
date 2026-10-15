@@ -1,0 +1,27 @@
+[project]
+name = "qrlab-preprocess"
+version = "0.1.0"
+description = "Data preprocessing ops shared by the QR AI Lab backend (sample previews) and trainer (fit at train time, replay at inference)"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26", "pandas>=2.2", "pillow>=10", "scipy>=1.12", "pyarrow>=15"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qrlab_preprocess"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003", "RUF012"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

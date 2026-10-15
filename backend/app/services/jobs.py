@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import qrlab_preprocess
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,6 +175,17 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         mode = None
         if loader.needs_gpu(model_family) and body.requested_gpu == 0:
             raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
+
+    steps = body.input.spec.get("preprocess")
+    if steps:
+        if artifact is not None and (artifact.metadata_ or {}).get("preprocess"):
+            raise bad_request(
+                "PREPROCESS_FIXED_BY_MODEL", "此模型訓練時已內含前處理，推論會自動套用相同步驟，請移除 preprocess"
+            )
+        try:
+            qrlab_preprocess.validate(project.data_type, task_type, steps)
+        except ValueError as e:
+            raise bad_request("PREPROCESS_INVALID", str(e)) from e
 
     data_source: DataSource | None = None
     input_doc: dict[str, Any] = {"kind": body.input.kind, "format": body.input.format, "spec": body.input.spec}

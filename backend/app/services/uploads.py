@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -13,6 +14,7 @@ from typing import Any
 
 import aiofiles
 from fastapi import UploadFile
+from qrlab_preprocess.preview import run_preview
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,3 +171,35 @@ def read_head(path: Path, n: int = 5) -> list[str]:
 
 def csv_preview(text: str) -> list[list[str]]:
     return list(csv.reader(io.StringIO(text)))
+
+
+async def preview(
+    session: AsyncSession,
+    project: Project,
+    upload_id: int,
+    steps: list[dict[str, Any]],
+    *,
+    sample: int = 5,
+    spec: dict[str, Any] | None = None,
+    task_type: str | None = None,
+) -> dict[str, Any]:
+    """Apply preprocessing steps to a bounded sample of the upload and return before / after payloads."""
+    up = await get(session, project, upload_id)
+    if up.status != "pending":
+        raise conflict("UPLOAD_NOT_AVAILABLE", "此上傳已綁定任務或已過期")
+    path = get_storage().abs(up.path)
+    try:
+        return await asyncio.to_thread(
+            run_preview,
+            project.data_type,
+            path,
+            up.format,
+            steps,
+            sample=sample,
+            spec={**(up.detected_spec or {}), **(spec or {})},
+            task_type=task_type or project.task_type,
+        )
+    except ValueError as e:
+        raise bad_request("PREPROCESS_INVALID", str(e)) from e
+    except Exception as e:  # unreadable sample, bad image …
+        raise bad_request("PREVIEW_FAILED", f"無法預覽：{type(e).__name__}: {e}"[:500]) from e
