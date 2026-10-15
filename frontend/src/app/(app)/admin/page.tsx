@@ -75,15 +75,23 @@ export default async function AdminDashboardPage() {
               <ul className="grid grid-cols-3 gap-1 font-mono text-xs">
                 {(
                   [
-                    ["記憶體", node.runner.enforces.memory, node.runner.memoryWatchdog ? "watchdog" : null],
-                    ["CPU", node.runner.enforces.cpu, "threads"],
-                    ["核心", node.runner.enforces.cpuset, null],
+                    ["記憶體", node.runner.enforces.memory ? "cgroup" : node.runner.memoryWatchdog ? "watchdog" : null],
+                    ["CPU", node.runner.enforces.cpu ? "cgroup" : "threads"],
+                    ["核心", node.runner.enforces.cpuset ? (node.runner.kind === "systemd" ? "cgroup" : "affinity") : null],
                   ] as const
-                ).map(([k, on, fallback]) => (
+                ).map(([k, how]) => (
                   <li key={k} className="rounded-md bg-muted px-2 py-1">
                     <span className="text-muted-foreground">{k}</span>{" "}
-                    <span className={on ? "text-success" : fallback ? "text-warning" : "text-muted-foreground"}>
-                      {on ? "cgroup" : (fallback ?? "—")}
+                    <span
+                      className={
+                        how === "cgroup" || how === "affinity"
+                          ? "text-success"
+                          : how
+                            ? "text-warning"
+                            : "text-muted-foreground"
+                      }
+                    >
+                      {how ?? "—"}
                     </span>
                   </li>
                 ))}

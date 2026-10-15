@@ -113,15 +113,15 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
         </span>
       </div>
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>權重</TableHead>
-              <TableHead>使用的家族</TableHead>
-              <TableHead>狀態</TableHead>
-              <TableHead className="text-right">大小</TableHead>
-              <TableHead>來源 / 時間</TableHead>
-              <TableHead className="w-52" />
+              <TableHead className="w-[27%]">權重</TableHead>
+              <TableHead className="w-[17%]">使用的家族</TableHead>
+              <TableHead className="w-[15%]">狀態</TableHead>
+              <TableHead className="w-[8%] text-right">大小</TableHead>
+              <TableHead className="w-[22%]">來源 / 時間</TableHead>
+              <TableHead className="w-[11%] text-right">動作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -129,11 +129,11 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
               <TableRow key={e.id}>
                 <TableCell>
                   <div className="font-medium">{e.id}</div>
-                  <div className="font-mono text-xs text-muted-foreground">
+                  <div className="truncate font-mono text-xs text-muted-foreground" title={e.file}>
                     {e.file} · {e.kind === "hf_repo" ? "HF snapshot" : "單檔"} · {e.license ?? "—"}
                   </div>
                 </TableCell>
-                <TableCell className="text-sm">{e.families.map((f) => familyLabel(f)).join("、")}</TableCell>
+                <TableCell className="truncate text-sm">{e.families.map((f) => familyLabel(f)).join("、")}</TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1">
                     <StatusPill status={e.status} />
@@ -154,7 +154,7 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
                 <TableCell className="text-right font-mono text-xs tabular-nums">
                   {e.sizeBytes ? formatBytes(e.sizeBytes) : "—"}
                 </TableCell>
-                <TableCell className="max-w-44 truncate font-mono text-xs text-muted-foreground" title={e.importedFrom ?? e.source}>
+                <TableCell className="truncate font-mono text-xs text-muted-foreground" title={e.importedFrom ?? e.source}>
                   {e.importedFrom ?? e.source ?? "—"}
                   {e.importedAt ? <div>{e.importedAt.slice(0, 16).replace("T", " ")}</div> : null}
                 </TableCell>
@@ -176,16 +176,23 @@ export function ZooTable({ entries, verified }: { entries: ModelZooEntry[]; veri
                     />
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon-sm"
+                      aria-label="上傳"
+                      title="從瀏覽器上傳"
                       disabled={uploading === e.id || e.status === "importing"}
                       onClick={() => inputs.current[e.id]?.click()}
                     >
                       {uploading === e.id ? <LoaderCircle className="animate-spin" /> : <Upload />}
-                      上傳
                     </Button>
-                    <Button variant="ghost" size="sm" disabled={e.status === "importing"} onClick={() => setImportTarget(e)}>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="匯入"
+                      title="從伺服器路徑或內網 URL 匯入"
+                      disabled={e.status === "importing"}
+                      onClick={() => setImportTarget(e)}
+                    >
                       <FolderInput />
-                      匯入
                     </Button>
                     {e.present ? (
                       <Button variant="ghost" size="icon-sm" aria-label="移除" disabled={pending} onClick={() => remove(e)}>
