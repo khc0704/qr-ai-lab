@@ -1,0 +1,8 @@
+{
+  "name": "qr-ai-lab-scripts",
+  "private": true,
+  "description": "Dependencies for the repository scripts (node scripts/build_manual.js). Install with: npm --prefix scripts install",
+  "dependencies": {
+    "docx": "^9.0.0"
+  }
+}

@@ -4,6 +4,7 @@
 #   cp infra/.env.example infra/.env
 #   docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
 # Images come from the company's registry mirror: set DOCKER_REGISTRY in infra/.env (e.g. mirror.example.com/).
+# Pin the tags to what the mirror holds (or to a digest, mariadb:11.4@sha256:…) so a re-pull never drifts.
 name: qr-ai-lab
 
 services:

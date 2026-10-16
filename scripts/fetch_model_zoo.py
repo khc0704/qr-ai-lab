@@ -7,7 +7,8 @@ server's MODEL_ZOO_ROOT (default DATA_ROOT/model_zoo). The server itself never d
     python3 scripts/fetch_model_zoo.py --dest ./model_zoo --only yolo11s dinov2-small
     python3 scripts/fetch_model_zoo.py --dest /srv/qr-ai-lab/model_zoo --verify   # on the server, no network
 
-Hugging Face repos (kind: hf_repo) need `pip install huggingface_hub`; plain files use urllib only.
+Needs PyYAML (the catalog is YAML) — run it with backend/.venv/bin/python or `pip install pyyaml`; Hugging Face
+repos (kind: hf_repo) also need `pip install huggingface_hub`; plain files use urllib only.
 """
 
 from __future__ import annotations

@@ -1,7 +1,9 @@
 [Unit]
 Description=QR AI Lab backend API (FastAPI)
-After=network-online.target docker.service
-Wants=network-online.target
+# user@<uid>.service is the qrlab user's own systemd manager (loginctl enable-linger): the API asks it whether
+# transient scopes work so the dashboard can show the real "任務執行方式".
+After=network-online.target docker.service user@1001.service
+Wants=network-online.target user@1001.service
 
 [Service]
 Type=simple
@@ -9,11 +11,17 @@ User=qrlab
 Group=qrlab
 WorkingDirectory=/opt/qr-ai-lab/backend
 EnvironmentFile=/etc/qr-ai-lab/qrlab.env
+Environment=XDG_RUNTIME_DIR=/run/user/1001
 ExecStart=/opt/qr-ai-lab/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always
 RestartSec=3
-# the API never runs jobs itself; keep it small
 LimitNOFILE=65536
+# The API never runs jobs itself: lock it down (DATA_ROOT and the transfer folder stay writable).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/srv/qr-ai-lab
 
 [Install]
 WantedBy=multi-user.target

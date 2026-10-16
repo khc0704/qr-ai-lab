@@ -8,13 +8,20 @@ Type=simple
 User=qrlab
 Group=qrlab
 WorkingDirectory=/opt/qr-ai-lab/frontend
-# AUTH_MODE / AUTH_KEYCLOAK_* / BACKEND_URL … live in /etc/qr-ai-lab/frontend.env (template infra/systemd/frontend.env.example)
+# PORT / HOSTNAME / AUTH_* / BACKEND_URL live in /etc/qr-ai-lab/frontend.env (template infra/systemd/frontend.env.example);
+# `next start` reads PORT and HOSTNAME from the environment.
 EnvironmentFile=/etc/qr-ai-lab/frontend.env
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
-ExecStart=/usr/bin/npm run start -- -p 3000 -H 127.0.0.1
+# install.sh replaces /usr/local/bin/node with the node binary it found (must be executable by qrlab, i.e. a
+# system-wide install, not one user's nvm).
+ExecStart=/usr/local/bin/node /opt/qr-ai-lab/frontend/node_modules/next/dist/bin/next start
 Restart=always
 RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd backend && uv sync --frozen --extra gpu
+      - run: cd backend && uv run ruff check . && uv run ruff format --check .
+      - run: cd backend && uv run pytest -q
+      - run: cd libs/preprocess && ../../backend/.venv/bin/python -m pytest -q
+
+  trainer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd trainer && uv sync --frozen   # CPU-only; the deep-learning extra is exercised by the e2e run on the GPU host
+      - run: cd trainer && uv run ruff check . && uv run ruff format --check .
+      - run: cd trainer && uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run lint && npm run typecheck && npm run format:check && npm test
+      - run: python3 scripts/design_lint.py frontend/src
