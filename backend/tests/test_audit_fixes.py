@@ -349,3 +349,17 @@ async def test_cancel_and_launch_do_not_race(client, admin, user):
             await jobs_svc.mark_scheduled(s3, stale, [], [0])
         assert (await jobs_svc.get(s3, job["id"])).status == "cancelled"
     del j
+
+
+async def test_parallel_first_use_creates_one_workspace(client, user):
+    """A page renders several server components at once: /tools/workspace and /tools/jobs race on creation."""
+    import asyncio
+
+    results = await asyncio.gather(
+        client.get("/api/v1/tools/workspace", headers=user),
+        client.get("/api/v1/tools/jobs", headers=user),
+        client.get("/api/v1/tools/workspace", headers=user),
+    )
+    assert [r.status_code for r in results] == [200, 200, 200], [r.text[:200] for r in results]
+    slugs = {r.json()["slug"] for r in results if "slug" in r.json()} if isinstance(results[0].json(), dict) else set()
+    assert slugs == {results[0].json()["slug"]}

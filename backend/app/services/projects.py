@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from sqlalchemy import delete as sql_delete
@@ -25,14 +26,28 @@ def personal_slug(username: str) -> str:
     return (PERSONAL_PREFIX + base)[:60]
 
 
+_personal_locks: dict[int, asyncio.Lock] = {}
+
+
 async def personal(session: AsyncSession, user: User) -> Project:
     """The user's personal workspace: created on first use with the admin's ToolDefaults quota. It hosts the
-    preprocessing / analysis tool jobs so they go through the same queue, limits, logs and cleanup as any job."""
-    p = (
-        await session.execute(select(Project).where(Project.owner_id == user.id, Project.kind == "personal"))
-    ).scalar_one_or_none()
+    preprocessing / analysis tool jobs so they go through the same queue, limits, logs and cleanup as any job.
+    A page renders several requests in parallel, so creation is serialised per user (one API process) and the
+    unique-slug error is still handled for the multi-process case."""
+    user_id = user.id
+    stmt = select(Project).where(Project.owner_id == user_id, Project.kind == "personal")
+    p = (await session.execute(stmt)).scalar_one_or_none()
     if p is not None:
         return p
+    lock = _personal_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        p = (await session.execute(stmt.execution_options(populate_existing=True))).scalar_one_or_none()
+        if p is not None:
+            return p
+        return await _create_personal(session, user, stmt)
+
+
+async def _create_personal(session: AsyncSession, user: User, stmt) -> Project:
     d = await settings_svc.get_tool_defaults(session)
     slug = personal_slug(user.username)
     if (await session.execute(select(Project).where(Project.slug == slug))).scalar_one_or_none():
@@ -60,11 +75,11 @@ async def personal(session: AsyncSession, user: User) -> Project:
         await audit.record(session, user.id, "project.personal.create", "project", p.id, {"slug": p.slug})
         await session.commit()
     except IntegrityError:
-        # two parallel first uses of the tools raced on the unique slug: the other request created it
+        # another process created it meanwhile (unique slug). The rollback expired every loaded row, including
+        # ``user`` (lazy loads are not possible in async code), so refresh it before touching it again.
         await session.rollback()
-        p = (
-            await session.execute(select(Project).where(Project.owner_id == user.id, Project.kind == "personal"))
-        ).scalar_one()
+        await session.refresh(user)
+        p = (await session.execute(stmt.execution_options(populate_existing=True))).scalar_one()
     # commit expired the instance: reload it with its eager relationships (members, owner) for the serializer
     return (
         await session.execute(select(Project).where(Project.id == p.id).execution_options(populate_existing=True))

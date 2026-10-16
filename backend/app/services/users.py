@@ -174,7 +174,8 @@ async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) ->
     except IntegrityError:
         # The first page after login fires parallel requests; another one just inserted this user.
         await session.rollback()
-        user = (await session.execute(select(User).where(User.keycloak_sub == sub))).scalar_one_or_none()
+        stmt = select(User).where(User.keycloak_sub == sub).execution_options(populate_existing=True)
+        user = (await session.execute(stmt)).scalar_one_or_none()
         if user is None:
             raise
         user.last_login_at = utcnow()
