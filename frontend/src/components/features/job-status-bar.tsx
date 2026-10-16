@@ -17,22 +17,31 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { jobStageLabel } from "@/i18n/zh-TW";
+import { jobCopy, jobStageLabel } from "@/i18n/zh-TW";
 import { cancelJobAction } from "@/lib/actions";
 import { isAdminRole } from "@/lib/roles";
 import { Duration } from "@/components/features/time";
 import { formatMb } from "@/lib/format";
 import type { Job } from "@/types/domain";
 
-export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?: number }) {
+export function JobStatusBar({
+  job,
+  queuePosition,
+  canCancel = false,
+}: {
+  job: Job;
+  queuePosition?: number;
+  /** Computed by the page with `canCancelJob()` (members cancel their own, maintainer+ any; admins everywhere). */
+  canCancel?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const cancellable = job.status === "queued" || job.status === "scheduled" || job.status === "running";
+  const cancellable = canCancel && (job.status === "queued" || job.status === "scheduled" || job.status === "running");
   const cancel = () =>
     startTransition(async () => {
       const r = await cancelJobAction(job.id, job.projectSlug);
       if (!r.ok) toast.error(r.error);
-      else toast.success(job.status === "queued" ? "已從佇列移除" : "已送出取消請求，容器將在 10 秒內停止");
+      else toast.success(job.status === "queued" ? jobCopy.cancelRemovedFromQueue : jobCopy.cancelRequested);
     });
   return (
     <div className="space-y-3">
@@ -98,9 +107,7 @@ export function JobStatusBar({ job, queuePosition }: { job: Job; queuePosition?:
           <AlertDialogHeader>
             <AlertDialogTitle>取消任務 #{job.id}？</AlertDialogTitle>
             <AlertDialogDescription>
-              {job.status === "running"
-                ? "執行中的容器會被停止，已產生的指標會保留在 log，但不會產生產物。"
-                : "任務會從佇列移除，可以之後重新建立。"}
+              {job.status === "running" ? jobCopy.cancelRunningDescription : jobCopy.cancelQueuedDescription}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

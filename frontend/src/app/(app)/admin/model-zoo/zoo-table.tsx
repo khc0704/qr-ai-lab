@@ -1,20 +1,11 @@
 "use client";
 
-import {
-  CheckCircle2,
-  CircleAlert,
-  CircleX,
-  Download,
-  FolderInput,
-  LoaderCircle,
-  RefreshCw,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { Download, FolderInput, LoaderCircle, RefreshCw, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
+import { StatusBadge } from "@/components/features/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,33 +22,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { familyLabel } from "@/i18n/zh-TW";
 import { deleteWeightAction, importWeightAction } from "@/lib/actions";
 import { formatBytes } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import type { ModelZooEntry, ZooStatus } from "@/types/domain";
 
-const statusMeta: Record<ZooStatus, { label: string; className: string; icon: typeof CheckCircle2 }> = {
-  present: { label: "已就緒", className: "bg-success/10 text-success border-success/30", icon: CheckCircle2 },
-  missing: { label: "缺少", className: "bg-muted text-muted-foreground border-border", icon: CircleAlert },
-  mismatch: {
-    label: "sha256 不符",
-    className: "bg-destructive/10 text-destructive border-destructive/30",
-    icon: CircleX,
-  },
-  importing: { label: "匯入中", className: "bg-info/10 text-info border-info/30", icon: LoaderCircle },
-  error: { label: "匯入失敗", className: "bg-destructive/10 text-destructive border-destructive/30", icon: CircleX },
-};
-
-function StatusPill({ status }: { status: ZooStatus }) {
-  const m = statusMeta[status];
-  const Icon = m.icon;
-  return (
-    <span
-      className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", m.className)}
-    >
-      <Icon className={cn("size-3.5", status === "importing" && "animate-spin")} />
-      {m.label}
-    </span>
-  );
-}
+const zooStatusLabel: Partial<Record<ZooStatus, string>> = { error: "匯入失敗" };
 
 export function ZooTable({
   entries,
@@ -167,7 +134,7 @@ export function ZooTable({
                 <TableCell className="truncate text-sm">{e.families.map((f) => familyLabel(f)).join("、")}</TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1">
-                    <StatusPill status={e.status} />
+                    <StatusBadge status={e.status} label={zooStatusLabel[e.status]} />
                     {e.task?.state === "running" ? (
                       <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
                         {e.task.downloadedMb} MB{e.task.totalMb ? ` / ${e.task.totalMb} MB` : ""}

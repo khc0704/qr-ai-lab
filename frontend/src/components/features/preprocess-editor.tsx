@@ -1,7 +1,7 @@
 "use client";
 
 // Choose preprocessing steps and preview them on a sample of the upload (before / after).
-import { Eye, LoaderCircle, Plus, X } from "lucide-react";
+import { Eye, LoaderCircle, X } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -191,7 +191,6 @@ export function PreprocessEditor({
         {disabledReason ? <span className="text-xs text-warning">{disabledReason}</span> : null}
       </div>
       {preview ? <PreviewView payload={preview} /> : null}
-      <Plus className="hidden" />
     </div>
   );
 }

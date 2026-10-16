@@ -1,14 +1,25 @@
+import { ScrollText } from "lucide-react";
+import { Suspense } from "react";
+import { EmptyState } from "@/components/features/empty-state";
 import { UserInline } from "@/components/features/member-avatars";
+import { pageFromParam, pageHref, Pagination } from "@/components/features/pagination";
+import { TableSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { listAuditLogs } from "@/lib/api";
+import { listAuditLogsPage } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 
-export default async function AdminAuditPage() {
-  const logs = await listAuditLogs();
+const PAGE_SIZE = 50;
+
+async function AuditList({ searchParams }: { searchParams: Promise<{ page?: string | string[] }> }) {
+  const sp = await searchParams;
+  const page = pageFromParam(sp.page);
+  const logs = await listAuditLogsPage({ page, pageSize: PAGE_SIZE });
+  if (logs.items.length === 0) {
+    return <EmptyState icon={ScrollText} title="還沒有稽核紀錄" description="管理員操作與任務狀態變更會記錄在這裡。" />;
+  }
   return (
     <>
-      <PageHeader title="稽核紀錄" description="所有管理員操作與任務狀態變更。" />
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         <Table>
           <TableHeader>
@@ -21,7 +32,7 @@ export default async function AdminAuditPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {logs.map((l) => (
+            {logs.items.map((l) => (
               <TableRow key={l.id}>
                 <TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
                   <RelativeTime iso={l.createdAt} />
@@ -46,6 +57,23 @@ export default async function AdminAuditPage() {
           </TableBody>
         </Table>
       </div>
+      <Pagination
+        page={logs.page}
+        pageSize={logs.pageSize}
+        total={logs.total}
+        href={(p) => pageHref("/admin/audit", {}, p)}
+      />
+    </>
+  );
+}
+
+export default function AdminAuditPage({ searchParams }: PageProps<"/admin/audit">) {
+  return (
+    <>
+      <PageHeader title="稽核紀錄" description="所有管理員操作與任務狀態變更。" />
+      <Suspense fallback={<TableSkeleton />}>
+        <AuditList searchParams={searchParams} />
+      </Suspense>
     </>
   );
 }

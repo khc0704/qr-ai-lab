@@ -9,13 +9,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getProject, listArtifacts } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 import { formatBytes, formatMetric } from "@/lib/format";
+import { canProject, projectRole } from "@/lib/roles";
+import { getCurrentUser } from "@/lib/session";
 import { ModelRowActions } from "./model-row-actions";
 
 async function Models({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = await getProject(slug);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
   const models = await listArtifacts(project.slug, "model");
+  const role = projectRole(project, user);
+  const canSetDefault = canProject(role, "edit");
+  const canDelete = canProject(role, "manage");
   if (models.length === 0)
     return (
       <EmptyState
@@ -70,7 +75,14 @@ async function Models({ params }: { params: Promise<{ slug: string }> }) {
                 <RelativeTime iso={m.createdAt} />
               </TableCell>
               <TableCell className="text-right">
-                <ModelRowActions id={m.id} name={m.name} isDefault={m.isDefault} slug={project.slug} />
+                <ModelRowActions
+                  id={m.id}
+                  name={m.name}
+                  isDefault={m.isDefault}
+                  slug={project.slug}
+                  canSetDefault={canSetDefault}
+                  canDelete={canDelete}
+                />
               </TableCell>
             </TableRow>
           ))}

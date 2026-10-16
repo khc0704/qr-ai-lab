@@ -53,7 +53,6 @@ interface NavItem {
 export interface SidebarCounts {
   pendingRequests?: number;
   runningJobs?: number;
-  myRequestReplies?: number;
 }
 
 const activeClasses =
@@ -110,7 +109,7 @@ export function AppSidebar({ user, counts = {} }: { user: User; counts?: Sidebar
   const main: NavItem[] = [
     { href: "/", label: nav.home, icon: House, exact: true },
     { href: "/discussions", label: nav.discussions, icon: MessagesSquare },
-    { href: "/project-requests", label: nav.projectRequests, icon: ClipboardList, badge: counts.myRequestReplies },
+    { href: "/project-requests", label: nav.projectRequests, icon: ClipboardList },
     { href: "/projects", label: nav.projects, icon: FolderKanban },
     { href: "/tools/preprocess", label: nav.tools, icon: Wand2 },
     { href: "/tools/analyze", label: nav.analyze, icon: ChartScatter },

@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { dataFormatLabel } from "@/i18n/zh-TW";
+import { dataFormatLabel, jobCopy } from "@/i18n/zh-TW";
 import { createDataSourceAction } from "@/lib/actions";
 import type { DataFormat } from "@/types/domain";
 
@@ -89,7 +89,7 @@ export function NewDataSourceDialog({ slug, trigger }: { slug: string; trigger: 
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>新增資料來源</DialogTitle>
-          <DialogDescription>憑證會加密儲存，只在任務容器內使用，不會顯示給任何人。</DialogDescription>
+          <DialogDescription>{jobCopy.dataSourceCredentials}</DialogDescription>
         </DialogHeader>
         <Tabs value={kind} onValueChange={(v) => setKind(v as "minio" | "url")}>
           <TabsList className="w-full">

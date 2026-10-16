@@ -16,7 +16,8 @@ const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = process.env.API_URL ?? "http://localhost:8000/api/v1";
 const DATA = process.env.DATA_DIR ?? path.resolve("datasets");
 const ZOO = process.env.ZOO_DIR ?? path.join(DATA, "zoo"); // yolo11n.pt for the browser-upload demo
-const OUT = process.env.OUT_DIR ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
+const OUT =
+  process.env.OUT_DIR ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
 const PHASES = (process.env.PHASES ?? "all").split(",");
 const want = (p) => PHASES.includes("all") || PHASES.includes(p);
 const VIEWPORT = { width: 1440, height: 900 };
@@ -80,7 +81,8 @@ const errors = [];
 function watch(page, label) {
   page.on("pageerror", (e) => errors.push(`${label} ${page.url()}: ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error" && !/favicon|ERR_ABORTED/.test(m.text())) errors.push(`${label} ${page.url()}: ${m.text()}`);
+    if (m.type() === "error" && !/favicon|ERR_ABORTED/.test(m.text()))
+      errors.push(`${label} ${page.url()}: ${m.text()}`);
   });
   // Name the resource behind a "Failed to load resource" console error (the console message only has the page URL).
   page.on("response", (r) => {
@@ -161,11 +163,23 @@ try {
     phase = "request";
     console.log("▶ request");
     // the lab's total pool (admin setting) bounds what a request may ask for
-    await api(superTok, "PUT", "/admin/settings/resource-pool", { gpu_indices: [], cpu_cores: 4, memory_mb: 12288, max_running_jobs: 1, allow_backfill: true, gpu_share: true });
+    await api(superTok, "PUT", "/admin/settings/resource-pool", {
+      gpu_indices: [],
+      cpu_cores: 4,
+      memory_mb: 12288,
+      max_running_jobs: 1,
+      allow_backfill: true,
+      gpu_share: true,
+    });
     const page = await userCtx.newPage();
     watch(page, "user");
     await goto(page, "/login");
-    await shot(page, "login", "登入頁（AUTH_MODE=local）：開發環境用後端建立的本地帳號 superadmin / admin / user；正式環境改為 Keycloak 按鈕", { fullPage: false });
+    await shot(
+      page,
+      "login",
+      "登入頁（AUTH_MODE=local）：開發環境用後端建立的本地帳號 superadmin / admin / user；正式環境改為 Keycloak 按鈕",
+      { fullPage: false },
+    );
     await page.fill("#username", "user");
     await page.fill("#password", "user1234");
     await shot(page, "login-filled", "以一般使用者 user 登入", { fullPage: false });
@@ -186,7 +200,10 @@ try {
     await pick(page, combos.nth(0), "表格");
     await pick(page, combos.nth(1), "迴歸");
     await pick(page, combos.nth(2), "極小（< 1k）");
-    await page.fill("textarea[name=dataDescription]", "MES 匯出 CSV，約 480 筆 lot，9 欄；部分 Rs / 膜厚缺值。之後改由 MinIO 每週同步。");
+    await page.fill(
+      "textarea[name=dataDescription]",
+      "MES 匯出 CSV，約 480 筆 lot，9 欄；部分 Rs / 膜厚缺值。之後改由 MinIO 每週同步。",
+    );
     await fillNumber(page, "input[name=requestedGpu]", 0);
     await fillNumber(page, "input[name=requestedCpu]", 4);
     await fillNumber(page, "input[name=requestedMemoryMb]", 8192);
@@ -229,7 +246,12 @@ try {
     await fillNumber(page, "#q-cpu", 4);
     await fillNumber(page, "#q-mem", 8192);
     await fillNumber(page, "#q-sto", 10240);
-    await shot(page, "admin-approve-dialog", "核准對話框：指定 slug 與配額（GPU / CPU / Memory / Storage），不得超過總資源池", { fullPage: false });
+    await shot(
+      page,
+      "admin-approve-dialog",
+      "核准對話框：指定 slug 與配額（GPU / CPU / Memory / Storage），不得超過總資源池",
+      { fullPage: false },
+    );
     await page.getByRole("button", { name: "核准並建立" }).click();
     await settle(page, 1500);
     await shot(page, "admin-request-approved", "核准後：狀態 approved、專案已自動建立並連結");
@@ -276,7 +298,10 @@ try {
       if (existing) continue;
       const req = await api(userTok, "POST", "/project-requests", body);
       await api(adminTok, "POST", `/project-requests/${req.id}/review`);
-      await api(adminTok, "POST", `/project-requests/${req.id}/approve`, { ...approve, review_note: "CPU 即可，先用小資料驗證流程。" });
+      await api(adminTok, "POST", `/project-requests/${req.id}/approve`, {
+        ...approve,
+        review_note: "CPU 即可，先用小資料驗證流程。",
+      });
       state[`${key}Request`] = req.id;
     }
     await goto(page, "/admin/requests");
@@ -288,7 +313,11 @@ try {
     // the total pool is superadmin territory (admin only reads it)
     const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
     await goto(sa, "/admin");
-    await shot(sa, "admin-dashboard-pool", "superadmin 的 Dashboard：GPU 卡片、總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數、依顯存共用 GPU）、節點狀態、任務執行方式（runner）");
+    await shot(
+      sa,
+      "admin-dashboard-pool",
+      "superadmin 的 Dashboard：GPU 卡片、總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數、依顯存共用 GPU）、節點狀態、任務執行方式（runner）",
+    );
     await fillNumber(sa, "input[name=memoryMb]", 14336);
     await fillNumber(sa, "input[name=maxRunningJobs]", 2);
     await sa.getByRole("button", { name: "儲存資源池" }).click();
@@ -300,25 +329,34 @@ try {
     await sa.close();
   }
 
-
   // =====================================================================================================
   if (want("zoo")) {
     phase = "zoo";
     console.log("▶ zoo");
     const page = await uiLogin(superCtx, "superadmin", "superadmin1234");
     await goto(page, "/admin/model-zoo");
-    await shot(page, "zoo-empty", "模型庫（superadmin 才能上傳 / 匯入 / 移除）：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來");
+    await shot(
+      page,
+      "zoo-empty",
+      "模型庫（superadmin 才能上傳 / 匯入 / 移除）：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來",
+    );
     // 1) browser upload
     await page.setInputFiles('[data-testid="zoo-upload-yolo11n"]', path.join(ZOO, "yolo11n.pt"));
     await page.getByText("yolo11n 已匯入模型庫").waitFor({ timeout: 120_000 });
     await settle(page, 1500);
-    await shot(page, "zoo-uploaded", "從瀏覽器上傳 yolo11n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」");
+    await shot(
+      page,
+      "zoo-uploaded",
+      "從瀏覽器上傳 yolo11n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」",
+    );
     // 2) import from a folder mounted on the server (MODEL_ZOO_IMPORT_ROOT)
     await page.locator("tr", { hasText: "yolo11s.pt" }).getByRole("button", { name: "匯入" }).click();
     await page.getByRole("dialog").waitFor();
     await page.getByRole("tab", { name: "伺服器路徑" }).click();
     await page.fill("#zoo-path", "yolo11s.pt");
-    await shot(page, "zoo-import-path", "從伺服器路徑匯入（NAS / USB 掛載點，限 MODEL_ZOO_IMPORT_ROOT 底下）", { fullPage: false });
+    await shot(page, "zoo-import-path", "從伺服器路徑匯入（NAS / USB 掛載點，限 MODEL_ZOO_IMPORT_ROOT 底下）", {
+      fullPage: false,
+    });
     await page.getByRole("button", { name: "開始匯入" }).click();
     await settle(page, 800);
     // 3) fetch from an intranet URL (host must be in MODEL_ZOO_ALLOWED_HOSTS)
@@ -335,7 +373,11 @@ try {
       await sleep(1000);
     }
     await goto(page, "/admin/model-zoo?verify=1", 1500);
-    await shot(page, "zoo-verified", "三種方式匯入後重新驗證 sha256：三個 YOLO 權重已就緒，來源與時間都有記錄；DINO / BERT 仍缺");
+    await shot(
+      page,
+      "zoo-verified",
+      "三種方式匯入後重新驗證 sha256：三個 YOLO 權重已就緒，來源與時間都有記錄；DINO / BERT 仍缺",
+    );
     await goto(page, "/admin/audit");
     await shot(page, "zoo-audit", "稽核紀錄：模型庫的上傳 / 匯入都有操作者與來源");
     await page.close();
@@ -367,7 +409,9 @@ try {
     await page.getByRole("tab", { name: "URL" }).click();
     await page.fill("#du-name", "mes-wat-export");
     await page.fill("#du-url", "http://127.0.0.1:8099/wat_yield.csv");
-    await shot(page, "data-source-dialog", "新增 URL 資料來源（MinIO 分頁可填 endpoint / bucket / access key）", { fullPage: false });
+    await shot(page, "data-source-dialog", "新增 URL 資料來源（MinIO 分頁可填 endpoint / bucket / access key）", {
+      fullPage: false,
+    });
     await page.getByRole("button", { name: "儲存並檢查連線" }).click();
     await settle(page, 2000);
     await shot(page, "data-sources", "資料來源列表：連線檢查結果、格式、最後檢查時間");
@@ -396,7 +440,11 @@ try {
     await page.fill("#spec-id_column", "lot_id");
     await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "補值");
     await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "標準化（z-score）");
-    await shot(page, "wizard-2-fields", "② 欄位與前處理：目標欄位 yield_pct、類別欄位 line、識別欄位 lot_id；加入「補值」與「標準化」兩個步驟");
+    await shot(
+      page,
+      "wizard-2-fields",
+      "② 欄位與前處理：目標欄位 yield_pct、類別欄位 line、識別欄位 lot_id；加入「補值」與「標準化」兩個步驟",
+    );
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
     await settle(page, 800);
@@ -429,10 +477,18 @@ try {
       await sleep(500);
     }
     await sleep(1200);
-    await shot(page, "job-running", "排程器以主機子程序啟動 trainer（trainer venv，CPU 核心 affinity、記憶體 watchdog）：running，進度卡由 SSE 即時更新");
+    await shot(
+      page,
+      "job-running",
+      "排程器以主機子程序啟動 trainer（trainer venv，CPU 核心 affinity、記憶體 watchdog）：running，進度卡由 SSE 即時更新",
+    );
     await page.getByRole("tab", { name: "Log" }).click();
     await sleep(4000);
-    await shot(page, "job-log-live", "Log 分頁：trainer 直接寫 log 檔，排程器 tail 後經 SSE 即時串流（[system] 行寫明 runner 與限制方式）");
+    await shot(
+      page,
+      "job-log-live",
+      "Log 分頁：trainer 直接寫 log 檔，排程器 tail 後經 SSE 即時串流（[system] 行寫明 runner 與限制方式）",
+    );
     const done = await waitJob(userTok, state.trainJob);
     console.log("  train job", done.status);
     await sleep(2500);
@@ -461,7 +517,10 @@ try {
     await goto(page, `/projects/${slug}/jobs/new?kind=inference`);
     await shot(page, "infer-1-model", "建立推論任務 ① 模型：預設選專案的預設模型，列出支援的推論模式");
     await page.getByRole("button", { name: "下一步" }).click();
-    await page.locator("textarea").first().fill(JSON.stringify(INLINE_ROWS, null, 1));
+    await page
+      .locator("textarea")
+      .first()
+      .fill(JSON.stringify(INLINE_ROWS, null, 1));
     await shot(page, "infer-2-input", "② 輸入：直接貼 JSON 列（也可上傳檔案或用資料來源），推論模式 predict");
     await page.getByRole("button", { name: "下一步" }).click();
     await fillNumber(page, "#r-gpu", 0);
@@ -493,37 +552,45 @@ try {
     await goto(page, `/projects/${slug}`);
     await shot(page, "iqa-project", "影像品質專案（IMAGE × 異常偵測）");
     if (!state.iqaTrainJob) {
-    await goto(page, `/projects/${slug}/jobs/new`);
-    await page.setInputFiles("[data-testid=upload-input]", DS.golden);
-    await page.getByText("40 張影像").waitFor({ timeout: 60_000 });
-    await settle(page);
-    await shot(page, "iqa-upload", "上傳 golden 機台 40 張 SEM 影像（zip）");
-    await page.getByRole("button", { name: "下一步" }).click();
-    await settle(page, 300);
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.getByRole("button", { name: "手動" }).click();
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.getByRole("button", { name: "影像品質基準" }).click();
-    await shot(page, "iqa-family", "手動選「影像品質基準」：17 個無參考 IQA 指標 → 中位數 / 浮動範圍 / Mahalanobis 門檻");
-    await page.getByRole("button", { name: "下一步" }).click();
-    await fillNumber(page, "#r-gpu", 0);
-    await fillNumber(page, "#r-cpu", 1);
-    await fillNumber(page, "#r-mem", 2048);
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.fill("#job-name", "golden-tool-baseline");
-    await page.getByRole("button", { name: "建立任務" }).click();
-    await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
-    state.iqaTrainJob = Number(page.url().split("/").pop());
-    const done = await waitJob(userTok, state.iqaTrainJob);
-    console.log("  iqa train", done.status);
-    await sleep(2500);
-    await goto(page, `/projects/${slug}/jobs/${state.iqaTrainJob}`, 1200);
-    await shot(page, "iqa-train-done", "基準建立完成：golden 影像數、驗證指標、產物");
+      await goto(page, `/projects/${slug}/jobs/new`);
+      await page.setInputFiles("[data-testid=upload-input]", DS.golden);
+      await page.getByText("40 張影像").waitFor({ timeout: 60_000 });
+      await settle(page);
+      await shot(page, "iqa-upload", "上傳 golden 機台 40 張 SEM 影像（zip）");
+      await page.getByRole("button", { name: "下一步" }).click();
+      await settle(page, 300);
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.getByRole("button", { name: "手動" }).click();
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.getByRole("button", { name: "影像品質基準" }).click();
+      await shot(
+        page,
+        "iqa-family",
+        "手動選「影像品質基準」：17 個無參考 IQA 指標 → 中位數 / 浮動範圍 / Mahalanobis 門檻",
+      );
+      await page.getByRole("button", { name: "下一步" }).click();
+      await fillNumber(page, "#r-gpu", 0);
+      await fillNumber(page, "#r-cpu", 1);
+      await fillNumber(page, "#r-mem", 2048);
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.fill("#job-name", "golden-tool-baseline");
+      await page.getByRole("button", { name: "建立任務" }).click();
+      await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
+      state.iqaTrainJob = Number(page.url().split("/").pop());
+      const done = await waitJob(userTok, state.iqaTrainJob);
+      console.log("  iqa train", done.status);
+      await sleep(2500);
+      await goto(page, `/projects/${slug}/jobs/${state.iqaTrainJob}`, 1200);
+      await shot(page, "iqa-train-done", "基準建立完成：golden 影像數、驗證指標、產物");
     }
     // compare a tuned tool against the baseline
     await goto(page, `/projects/${slug}/jobs/new?kind=inference`);
     await pick(page, page.locator("#infer-mode"), "機台比對報告");
-    await shot(page, "iqa-infer-model", "推論 ① 模型：影像品質基準模型支援 compare / score / embed，選「機台比對報告」");
+    await shot(
+      page,
+      "iqa-infer-model",
+      "推論 ① 模型：影像品質基準模型支援 compare / score / embed，選「機台比對報告」",
+    );
     await page.getByRole("button", { name: "下一步" }).click();
     await page.getByRole("tab", { name: "一次性上傳" }).click();
     await page.setInputFiles("[data-testid=upload-input]", DS.tuned);
@@ -544,7 +611,11 @@ try {
     await goto(page, `/projects/${slug}/jobs/${state.iqaCompareJob}`, 1200);
     await page.getByRole("tab", { name: "結果" }).click();
     await settle(page, 300);
-    await shot(page, "iqa-compare-result", "機台比對報告：整體判定 + 逐指標（golden 中位數 / 容許範圍 / 測試中位數 / 效應量 / KS p 值 / 判定）");
+    await shot(
+      page,
+      "iqa-compare-result",
+      "機台比對報告：整體判定 + 逐指標（golden 中位數 / 容許範圍 / 測試中位數 / 效應量 / KS p 值 / 判定）",
+    );
     await page.close();
   }
 
@@ -555,39 +626,39 @@ try {
     const slug = "ocd-spectrum";
     const page = await uiLogin(userCtx, "user", "user1234");
     if (!state.spectrumJob) {
-    await goto(page, `/projects/${slug}/jobs/new`);
-    await page.setInputFiles("[data-testid=upload-input]", DS.spectra);
-    await page.getByText("264 列").waitFor({ timeout: 60_000 });
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.fill("#spec-label", "label");
-    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "SNV");
-    await page.getByRole("button", { name: "抽樣預覽" }).click();
-    await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
-    await settle(page, 800);
-    await shot(page, "spectrum-preview", "光譜前處理預覽：SNV 標準化前後的曲線");
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.getByRole("button", { name: "手動" }).click();
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.getByRole("button", { name: "光譜 Masked AE" }).click();
-    await page.fill("#p-epochs", "40");
-    await shot(page, "spectrum-family", "手動選「光譜 Masked AE」，覆寫 epochs=40（CPU 上約 30 秒）");
-    await page.getByRole("button", { name: "下一步" }).click();
-    await fillNumber(page, "#r-gpu", 0);
-    await fillNumber(page, "#r-cpu", 2);
-    await fillNumber(page, "#r-mem", 2048);
-    await page.getByRole("button", { name: "下一步" }).click();
-    await page.fill("#job-name", "ocd-mae-v1");
-    await page.getByRole("button", { name: "建立任務" }).click();
-    await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
-    state.spectrumJob = Number(page.url().split("/").pop());
-    await waitJob(userTok, state.spectrumJob, ["running", "succeeded", "failed"], 120_000);
-    await sleep(6000);
-    await shot(page, "spectrum-running", "MAE 訓練中：epoch 進度與即時指標");
-    const done = await waitJob(userTok, state.spectrumJob);
-    console.log("  spectrum", done.status);
-    await sleep(2500);
-    await goto(page, `/projects/${slug}/jobs/${state.spectrumJob}`, 1200);
-    await shot(page, "spectrum-done", "光譜鑑別器訓練完成：AUROC 等指標、重建誤差門檻");
+      await goto(page, `/projects/${slug}/jobs/new`);
+      await page.setInputFiles("[data-testid=upload-input]", DS.spectra);
+      await page.getByText("264 列").waitFor({ timeout: 60_000 });
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.fill("#spec-label", "label");
+      await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "SNV");
+      await page.getByRole("button", { name: "抽樣預覽" }).click();
+      await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
+      await settle(page, 800);
+      await shot(page, "spectrum-preview", "光譜前處理預覽：SNV 標準化前後的曲線");
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.getByRole("button", { name: "手動" }).click();
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.getByRole("button", { name: "光譜 Masked AE" }).click();
+      await page.fill("#p-epochs", "40");
+      await shot(page, "spectrum-family", "手動選「光譜 Masked AE」，覆寫 epochs=40（CPU 上約 30 秒）");
+      await page.getByRole("button", { name: "下一步" }).click();
+      await fillNumber(page, "#r-gpu", 0);
+      await fillNumber(page, "#r-cpu", 2);
+      await fillNumber(page, "#r-mem", 2048);
+      await page.getByRole("button", { name: "下一步" }).click();
+      await page.fill("#job-name", "ocd-mae-v1");
+      await page.getByRole("button", { name: "建立任務" }).click();
+      await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
+      state.spectrumJob = Number(page.url().split("/").pop());
+      await waitJob(userTok, state.spectrumJob, ["running", "succeeded", "failed"], 120_000);
+      await sleep(6000);
+      await shot(page, "spectrum-running", "MAE 訓練中：epoch 進度與即時指標");
+      const done = await waitJob(userTok, state.spectrumJob);
+      console.log("  spectrum", done.status);
+      await sleep(2500);
+      await goto(page, `/projects/${slug}/jobs/${state.spectrumJob}`, 1200);
+      await shot(page, "spectrum-done", "光譜鑑別器訓練完成：AUROC 等指標、重建誤差門檻");
     }
     await page.close();
   }
@@ -602,7 +673,10 @@ try {
     await goto(page, "/discussions/new");
     await pick(page, page.locator("button[role=combobox]").nth(0), "錯誤回報");
     await page.fill("input[name=title]", "推論結果 CSV 的 lot_id 欄位順序與輸入不同");
-    await page.fill("textarea[name=body]", "重現步驟：\n1. 用 predict 模式推論 4 筆 inline 列\n2. 下載 predictions.csv\n\n預期：lot_id 在第一欄\n實際：lot_id 在最後一欄");
+    await page.fill(
+      "textarea[name=body]",
+      "重現步驟：\n1. 用 predict 模式推論 4 筆 inline 列\n2. 下載 predictions.csv\n\n預期：lot_id 在第一欄\n實際：lot_id 在最後一欄",
+    );
     await pick(page, page.locator("button[role=combobox]").nth(1), "WAT 良率預測");
     await shot(page, "issue-form", "新增問題單：類型、標題、內容（Markdown）、關聯專案");
     await page.getByRole("button", { name: "建立問題" }).click();
@@ -614,7 +688,9 @@ try {
 
     const admin = await uiLogin(adminCtx, "admin", "admin1234");
     await goto(admin, `/discussions/${state.issueId}`);
-    await admin.getByPlaceholder(/留言|回覆/).fill("已確認是輸出欄位依 dict 順序寫入；下個版本會把 id_column 固定放第一欄。");
+    await admin
+      .getByPlaceholder(/留言|回覆/)
+      .fill("已確認是輸出欄位依 dict 順序寫入；下個版本會把 id_column 固定放第一欄。");
     await admin.getByRole("button", { name: "送出" }).click();
     await settle(admin, 1200);
     await admin.getByRole("button", { name: "關閉問題" }).click();
@@ -642,10 +718,20 @@ try {
     const long = await api(userTok, "POST", `/projects/${slug}/jobs`, {
       kind: "train",
       name: "automl-wat-yield-long",
-      input: { kind: "upload", upload_id: up.id, spec: { target: "yield_pct", categorical: "line", id_column: "lot_id" } },
+      input: {
+        kind: "upload",
+        upload_id: up.id,
+        spec: { target: "yield_pct", categorical: "line", id_column: "lot_id" },
+      },
       task_type: "regression",
       mode: "auto",
-      config: { search: { candidates: ["tabular.xgboost", "tabular.random_forest", "tabular.svm"], max_trials: 60, time_budget_minutes: 30 } },
+      config: {
+        search: {
+          candidates: ["tabular.xgboost", "tabular.random_forest", "tabular.svm"],
+          max_trials: 60,
+          time_budget_minutes: 30,
+        },
+      },
       requested_gpu: 0,
       requested_cpu: 2,
       requested_memory_mb: 2048,
@@ -654,7 +740,11 @@ try {
     const second = await api(userTok, "POST", `/projects/${slug}/jobs`, {
       kind: "train",
       name: "rf-baseline-waiting",
-      input: { kind: "data_source", data_source_id: (await api(userTok, "GET", `/projects/${slug}/data-sources`))[0]?.id, spec: { target: "yield_pct", categorical: "line", id_column: "lot_id" } },
+      input: {
+        kind: "data_source",
+        data_source_id: (await api(userTok, "GET", `/projects/${slug}/data-sources`))[0]?.id,
+        spec: { target: "yield_pct", categorical: "line", id_column: "lot_id" },
+      },
       task_type: "regression",
       mode: "manual",
       model_family: "tabular.random_forest",
@@ -671,17 +761,25 @@ try {
 
     const page = await uiLogin(adminCtx, "admin", "admin1234");
     await goto(page, "/admin/queue", 1200);
-    await shot(page, "admin-queue", "管理員佇列：執行中的 AutoML（階段、進度、分配的資源）與等待中的任務及等待原因（專案已達同時執行上限）");
+    await shot(
+      page,
+      "admin-queue",
+      "管理員佇列：執行中的 AutoML（階段、進度、分配的資源）與等待中的任務及等待原因（專案已達同時執行上限）",
+    );
     await page.getByRole("button", { name: "檢視" }).first().click();
     await page.getByRole("dialog").waitFor();
     await sleep(2500);
-    await shot(page, "admin-queue-sheet", "任務抽屜：與專案頁共用的 JobStatusBar + LogViewer（即時 log）", { fullPage: false });
+    await shot(page, "admin-queue-sheet", "任務抽屜：與專案頁共用的 JobStatusBar + LogViewer（即時 log）", {
+      fullPage: false,
+    });
     await page.keyboard.press("Escape");
     await settle(page, 400);
     await page.getByRole("button", { name: "強制中斷" }).first().click();
     await page.getByRole("alertdialog").waitFor();
     await page.fill("#stop-reason", "讓位給上線前的回歸測試；AutoML 可之後再排。");
-    await shot(page, "admin-force-stop", "強制中斷需要理由（寫入 audit_logs，並顯示給任務建立者）", { fullPage: false });
+    await shot(page, "admin-force-stop", "強制中斷需要理由（寫入 audit_logs，並顯示給任務建立者）", {
+      fullPage: false,
+    });
     await page.getByRole("alertdialog").getByRole("button", { name: "強制中斷" }).click();
     await settle(page, 1500);
     await waitJob(adminTok, long.id, ["cancelled", "failed", "succeeded"], 120_000);
@@ -691,15 +789,25 @@ try {
     await goto(page, "/admin/audit");
     await shot(page, "admin-audit", "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由");
     await goto(page, "/admin");
-    await shot(page, "admin-dashboard", "admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」");
+    await shot(
+      page,
+      "admin-dashboard",
+      "admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」",
+    );
     // restart: a finished job is re-queued as a new job with the same input / settings (admin: jobs.control)
     await waitJob(adminTok, second.id);
     await goto(page, `/projects/${slug}/jobs/${second.id}`, 1200);
-    await shot(page, "admin-job-actions", "管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行");
+    await shot(
+      page,
+      "admin-job-actions",
+      "管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行",
+    );
     await page.getByTestId("admin-restart").click();
     await page.getByRole("alertdialog").waitFor();
     await page.getByRole("alertdialog").getByRole("button", { name: "重新排入佇列" }).click();
-    await page.waitForURL((u) => /\/jobs\/\d+$/.test(u.pathname) && !u.pathname.endsWith(`/${second.id}`), { timeout: 30_000 });
+    await page.waitForURL((u) => /\/jobs\/\d+$/.test(u.pathname) && !u.pathname.endsWith(`/${second.id}`), {
+      timeout: 30_000,
+    });
     await settle(page, 1200);
     state.restartedJob = Number(page.url().split("/").pop());
     await shot(page, "admin-job-restarted", "重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留");
@@ -720,17 +828,29 @@ try {
     console.log("▶ roles");
     const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
     await goto(sa, "/admin/users");
-    await shot(sa, "roles-users", "superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用");
+    await shot(
+      sa,
+      "roles-users",
+      "superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用",
+    );
     const row = sa.locator("tr", { hasText: "一般使用者" });
     await row.getByRole("combobox").click();
     await sa.getByRole("option", { name: "管理員", exact: true }).click();
     await settle(sa, 1500);
-    await shot(sa, "roles-promoted", "把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄");
+    await shot(
+      sa,
+      "roles-promoted",
+      "把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄",
+    );
     await row.getByRole("combobox").click();
     await sa.getByRole("option", { name: "使用者", exact: true }).click();
     await settle(sa, 1200);
     await goto(sa, "/admin");
-    await shot(sa, "roles-superadmin-dashboard", "superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）");
+    await shot(
+      sa,
+      "roles-superadmin-dashboard",
+      "superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）",
+    );
     // a throwaway project so the delete can be shown end to end
     const tmpReq = await api(userTok, "POST", "/project-requests", {
       title: "暫時專案（示範刪除）",
@@ -746,13 +866,25 @@ try {
       members: [],
     });
     await api(adminTok, "POST", `/project-requests/${tmpReq.id}/review`);
-    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/approve`, { slug: "tmp-delete-demo", gpu_limit: 0, cpu_limit: 1, memory_limit_mb: 1024, storage_quota_mb: 1024, max_concurrent_jobs: 1 });
+    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/approve`, {
+      slug: "tmp-delete-demo",
+      gpu_limit: 0,
+      cpu_limit: 1,
+      memory_limit_mb: 1024,
+      storage_quota_mb: 1024,
+      max_concurrent_jobs: 1,
+    });
     await goto(sa, "/projects/tmp-delete-demo/settings");
     await shot(sa, "roles-delete-project", "superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）");
     await sa.getByTestId("delete-project").click();
     await sa.getByRole("alertdialog").waitFor();
     await sa.getByLabel("輸入 slug 確認").fill("tmp-delete-demo");
-    await shot(sa, "roles-delete-confirm", "刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）", { fullPage: false });
+    await shot(
+      sa,
+      "roles-delete-confirm",
+      "刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）",
+      { fullPage: false },
+    );
     await sa.getByRole("alertdialog").getByRole("button", { name: "永久刪除" }).click();
     await sa.waitForURL(/\/projects$/, { timeout: 30_000 });
     await settle(sa, 1200);
@@ -761,10 +893,18 @@ try {
 
     const ad = await uiLogin(adminCtx, "admin", "admin1234");
     await goto(ad, "/admin/quotas");
-    await shot(ad, "roles-admin-quotas-readonly", "admin 看專案配額：唯讀（PERMISSION_DENIED 由後端把關，前端只是不給改）");
+    await shot(
+      ad,
+      "roles-admin-quotas-readonly",
+      "admin 看專案配額：唯讀（PERMISSION_DENIED 由後端把關，前端只是不給改）",
+    );
     await goto(ad, "/admin/model-zoo");
     await shot(ad, "roles-admin-zoo-readonly", "admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除");
-    const tmpIssue = await api(userTok, "POST", "/issues", { type: "question", title: "（示範）這個討論串會被管理員刪除", body: "測試刪除討論串。" });
+    const tmpIssue = await api(userTok, "POST", "/issues", {
+      type: "question",
+      title: "（示範）這個討論串會被管理員刪除",
+      body: "測試刪除討論串。",
+    });
     await goto(ad, `/discussions/${tmpIssue.id}`);
     await ad.getByRole("button", { name: "刪除" }).click();
     await ad.getByRole("alertdialog").waitFor();
@@ -787,13 +927,25 @@ try {
     console.log("▶ usage");
     const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
     await goto(sa, "/admin/usage?range=1h", 1500);
-    await shot(sa, "usage-1h", "資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」");
+    await shot(
+      sa,
+      "usage-1h",
+      "資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」",
+    );
     await sa.getByRole("tab", { name: "系統總量" }).click();
     await settle(sa, 600);
-    await shot(sa, "usage-node-denominator", "分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比");
+    await shot(
+      sa,
+      "usage-node-denominator",
+      "分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比",
+    );
     await sa.getByRole("tab", { name: "專案配額" }).click();
     await settle(sa, 600);
-    await shot(sa, "usage-quota-denominator", "分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體");
+    await shot(
+      sa,
+      "usage-quota-denominator",
+      "分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體",
+    );
     await sa.close();
   }
 
@@ -803,9 +955,17 @@ try {
     console.log("▶ tool");
     const page = await uiLogin(userCtx, "user", "user1234");
     await goto(page, "/tools");
-    await shot(page, "tool-hub", "工具首頁：資料前處理與資料分析兩個不需專案的工具、個人工作區的配額（管理員「工具預設」）、我的工具任務");
+    await shot(
+      page,
+      "tool-hub",
+      "工具首頁：資料前處理與資料分析兩個不需專案的工具、個人工作區的配額（管理員「工具預設」）、我的工具任務",
+    );
     await goto(page, "/tools/preprocess");
-    await shot(page, "tool-empty", "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在個人工作區排隊執行）；不保存資料");
+    await shot(
+      page,
+      "tool-empty",
+      "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在個人工作區排隊執行）；不保存資料",
+    );
     await page.fill("#tool-spec-target", "yield_pct");
     await page.fill("#tool-spec-id_column", "lot_id");
     await page.setInputFiles('[data-testid="upload-input"]', DS.wat);
@@ -816,23 +976,42 @@ try {
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
     await settle(page, 800);
-    await shot(page, "tool-preview", "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽（即時，只取樣）");
+    await shot(
+      page,
+      "tool-preview",
+      "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽（即時，只取樣）",
+    );
     await page.getByTestId("tool-run").click();
     await page.getByText(/已建立前處理任務 #(\d+)/).waitFor({ timeout: 30_000 });
     await settle(page, 1500);
-    await shot(page, "tool-queued", "建立後成為個人工作區（ws-user）裡的 preprocess 任務：進佇列、受工具預設的配額限制，列表每 5 秒自動更新");
+    await shot(
+      page,
+      "tool-queued",
+      "建立後成為個人工作區（ws-user）裡的 preprocess 任務：進佇列、受工具預設的配額限制，列表每 5 秒自動更新",
+    );
     const mine = await api(userTok, "GET", "/tools/jobs");
     const pre = mine.find((j) => j.kind === "preprocess");
     state.toolJob = pre.id;
     const done = await waitJob(userTok, pre.id);
     if (done.status !== "succeeded") throw new Error(`preprocess job failed: ${done.error_message}`);
     await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1500);
-    await shot(page, "tool-job-done", "前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕");
-    const [download] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), page.getByTestId("tool-download").click()]);
+    await shot(
+      page,
+      "tool-job-done",
+      "前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕",
+    );
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 60_000 }),
+      page.getByTestId("tool-download").click(),
+    ]);
     state.toolDownload = download.suggestedFilename();
     await settle(page, 2500);
     await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1200);
-    await shot(page, "tool-downloaded", `下載 ${state.toolDownload}（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留`);
+    await shot(
+      page,
+      "tool-downloaded",
+      `下載 ${state.toolDownload}（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留`,
+    );
     await page.close();
   }
 
@@ -842,7 +1021,11 @@ try {
     console.log("▶ analyze");
     const page = await uiLogin(userCtx, "user", "user1234");
     await goto(page, "/tools/analyze");
-    await shot(page, "analyze-empty", "資料分析服務：表格資料探勘或影像品質分析，同樣以個人工作區的任務執行；只留報告不留資料");
+    await shot(
+      page,
+      "analyze-empty",
+      "資料分析服務：表格資料探勘或影像品質分析，同樣以個人工作區的任務執行；只留報告不留資料",
+    );
     await page.fill("#an-target", "yield_pct");
     await page.fill("#an-id", "lot_id");
     await page.setInputFiles('[data-testid="upload-input"]', DS.wat);
@@ -850,27 +1033,43 @@ try {
     await page.getByTestId("analysis-run").click();
     await page.getByText(/已建立分析任務 #(\d+)/).waitFor({ timeout: 30_000 });
     await settle(page, 1000);
-    const tab = (await api(userTok, "GET", "/tools/jobs")).find((j) => j.kind === "analysis" && j.config?.analysis === "tabular_profile");
+    const tab = (await api(userTok, "GET", "/tools/jobs")).find(
+      (j) => j.kind === "analysis" && j.config?.analysis === "tabular_profile",
+    );
     state.analysisTabular = tab.id;
     // image quality: three tools in three folders
     await page.getByTestId("analysis-image_quality").click();
     await page.setInputFiles('[data-testid="upload-input"]', path.join(DATA, "iqa_groups.zip"));
     await page.getByText("已上傳 iqa_groups.zip").waitFor({ timeout: 120_000 });
-    await shot(page, "analyze-image-form", "影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）");
+    await shot(
+      page,
+      "analyze-image-form",
+      "影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）",
+    );
     await page.getByTestId("analysis-run").click();
     await page.getByText(/已建立分析任務 #(\d+)/).waitFor({ timeout: 30_000 });
     await settle(page, 1500);
     await shot(page, "analyze-queued", "兩個分析任務排隊中（個人工作區同時只跑 1 個）");
-    const img = (await api(userTok, "GET", "/tools/jobs")).find((j) => j.kind === "analysis" && j.config?.analysis === "image_quality");
+    const img = (await api(userTok, "GET", "/tools/jobs")).find(
+      (j) => j.kind === "analysis" && j.config?.analysis === "image_quality",
+    );
     state.analysisImage = img.id;
     const t = await waitJob(userTok, tab.id);
     if (t.status !== "succeeded") throw new Error(`tabular analysis failed: ${t.error_message}`);
     await goto(page, `/projects/${tab.project_slug}/jobs/${tab.id}`, 1500);
-    await shot(page, "analyze-tabular-report", "表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況");
+    await shot(
+      page,
+      "analyze-tabular-report",
+      "表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況",
+    );
     const i = await waitJob(userTok, img.id);
     if (i.status !== "succeeded") throw new Error(`image analysis failed: ${i.error_message}`);
     await goto(page, `/projects/${img.project_slug}/jobs/${img.id}`, 1500);
-    await shot(page, "analyze-image-report", "影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議");
+    await shot(
+      page,
+      "analyze-image-report",
+      "影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議",
+    );
     await page.close();
   }
 
@@ -912,10 +1111,20 @@ try {
     await adminDark.close();
     await dark.close();
 
-    const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "zh-TW" });
+    const mobile = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+      locale: "zh-TW",
+    });
     const mp = await uiLogin(mobile, "user", "user1234");
     await shot(mp, "mobile-home", "手機版首頁（側欄收成抽屜）", { viewport: "mobile", fullPage: false });
-    await mp.getByRole("button", { name: /選單|Toggle Sidebar|sidebar/i }).first().click().catch(() => {});
+    await mp
+      .getByRole("button", { name: /選單|Toggle Sidebar|sidebar/i })
+      .first()
+      .click()
+      .catch(() => {});
     await settle(mp, 500);
     await shot(mp, "mobile-sidebar", "手機版側欄抽屜", { viewport: "mobile", fullPage: false });
     await mp.keyboard.press("Escape");
@@ -930,7 +1139,11 @@ try {
     phase = "logout";
     console.log("▶ logout");
     const page = await uiLogin(userCtx, "user", "user1234");
-    await page.getByRole("button", { name: /user|使用者/ }).last().click().catch(() => {});
+    await page
+      .getByRole("button", { name: /user|使用者/ })
+      .last()
+      .click()
+      .catch(() => {});
     await settle(page, 300);
     await shot(page, "user-menu", "使用者選單：主題、登出", { fullPage: false });
     await page.getByRole("menuitem", { name: "登出" }).click();

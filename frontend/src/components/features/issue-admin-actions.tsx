@@ -52,7 +52,11 @@ export function IssueAdminActions({
     });
   const deleteButton = canDelete ? (
     <>
-      <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
+      <Button
+        variant="ghost"
+        className="text-destructive hover:text-destructive"
+        onClick={() => setConfirmDelete(true)}
+      >
         <Trash2 />
         刪除
       </Button>

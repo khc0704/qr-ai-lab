@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { KindChip } from "@/components/features/chips";
-import { LogViewer } from "@/components/features/log-viewer";
+import { JobLogLive } from "@/components/features/job-live";
 import { UserInline } from "@/components/features/member-avatars";
 import { StatusBadge } from "@/components/features/status-badge";
 import {
@@ -24,11 +24,13 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { jobStageLabel } from "@/i18n/zh-TW";
+import { jobCopy, jobStageLabel } from "@/i18n/zh-TW";
 import { moveQueueAction, stopJobAction } from "@/lib/actions";
 import { Duration, RelativeTime } from "@/components/features/time";
 import { formatMb } from "@/lib/format";
-import type { Job, LogLine } from "@/types/domain";
+import type { Job, JobLogSnapshot } from "@/types/domain";
+
+const EMPTY_LOG: JobLogSnapshot = { lines: [], total: 0 };
 
 function Resources({ job }: { job: Job }) {
   return (
@@ -45,7 +47,8 @@ export function QueueTable({
 }: {
   running: Job[];
   queued: Job[];
-  logs: Record<number, LogLine[]>;
+  /** Log tail per job from the server; the drawer continues live from `lastEventId` while it is open. */
+  logs: Record<number, JobLogSnapshot>;
 }) {
   const order = queued;
   const [stopTarget, setStopTarget] = useState<Job | null>(null);
@@ -253,9 +256,7 @@ export function QueueTable({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>強制中斷任務 #{stopTarget?.id}？</AlertDialogTitle>
-            <AlertDialogDescription>
-              容器會在 10 秒寬限後停止，任務標記為「已取消」，理由會寫入 log 與稽核紀錄並顯示給任務建立者。
-            </AlertDialogDescription>
+            <AlertDialogDescription>{jobCopy.forceStopDescription}</AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2">
             <Label htmlFor="stop-reason">理由（必填）</Label>
@@ -296,7 +297,7 @@ export function QueueTable({
                 </SheetDescription>
               </SheetHeader>
               <div className="px-4 pb-4">
-                <LogViewer lines={logs[sheetJob.id] ?? []} status={sheetJob.status} maxHeight="max-h-[60vh]" />
+                <JobLogLive job={sheetJob} log={logs[sheetJob.id] ?? EMPTY_LOG} maxHeight="max-h-[60vh]" />
               </div>
             </>
           ) : null}

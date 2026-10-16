@@ -20,23 +20,52 @@ import { cn } from "@/lib/utils";
 import type { DataType, PreprocessOp, PreprocessStep, ToolUpload, Upload } from "@/types/domain";
 
 export const TOOL_TYPES: { value: DataType; hint: string; accept: string; files: string }[] = [
-  { value: "TABULAR", hint: "表格資料：csv / parquet / jsonl", accept: ".csv,.parquet,.jsonl", files: "csv / parquet / jsonl" },
-  { value: "IMAGE", hint: "影像：zip（資料夾結構保留）或單張圖片", accept: ".zip,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp", files: "zip 或單張影像" },
-  { value: "SEQUENCE", hint: "時間序列：長表 csv（series_id, t, 特徵…）或 npy", accept: ".csv,.npy", files: "csv / npy" },
+  {
+    value: "TABULAR",
+    hint: "表格資料：csv / parquet / jsonl",
+    accept: ".csv,.parquet,.jsonl",
+    files: "csv / parquet / jsonl",
+  },
+  {
+    value: "IMAGE",
+    hint: "影像：zip（資料夾結構保留）或單張圖片",
+    accept: ".zip,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp",
+    files: "zip 或單張影像",
+  },
+  {
+    value: "SEQUENCE",
+    hint: "時間序列：長表 csv（series_id, t, 特徵…）或 npy",
+    accept: ".csv,.npy",
+    files: "csv / npy",
+  },
   { value: "SPECTRUM", hint: "光譜：寬表 csv（每列一條光譜）或 npy", accept: ".csv,.npy", files: "csv / npy" },
-  { value: "TEXT", hint: "文字：csv / jsonl，含文字欄位", accept: ".csv,.parquet,.jsonl", files: "csv / parquet / jsonl" },
+  {
+    value: "TEXT",
+    hint: "文字：csv / jsonl，含文字欄位",
+    accept: ".csv,.parquet,.jsonl",
+    files: "csv / parquet / jsonl",
+  },
 ];
 
 const SPEC_FIELDS: Record<DataType, { key: string; label: string; hint?: string }[]> = {
-  TABULAR: [{ key: "target", label: "目標欄位（不會被處理）", hint: "例：yield_pct" }, { key: "id_column", label: "ID 欄位（不會被處理）" }],
-  TEXT: [{ key: "text_column", label: "文字欄位", hint: "預設 text" }, { key: "label_column", label: "標籤欄位（不會被處理）" }],
+  TABULAR: [
+    { key: "target", label: "目標欄位（不會被處理）", hint: "例：yield_pct" },
+    { key: "id_column", label: "ID 欄位（不會被處理）" },
+  ],
+  TEXT: [
+    { key: "text_column", label: "文字欄位", hint: "預設 text" },
+    { key: "label_column", label: "標籤欄位（不會被處理）" },
+  ],
   SEQUENCE: [
     { key: "series_id", label: "序列 ID 欄位", hint: "預設 series_id" },
     { key: "time", label: "時間欄位", hint: "預設 t" },
     { key: "window", label: "視窗長度", hint: "預設 256" },
     { key: "label", label: "標籤欄位（排除）" },
   ],
-  SPECTRUM: [{ key: "label", label: "標籤欄位（排除）" }, { key: "id_column", label: "ID 欄位（排除）" }],
+  SPECTRUM: [
+    { key: "label", label: "標籤欄位（排除）" },
+    { key: "id_column", label: "ID 欄位（排除）" },
+  ],
   IMAGE: [],
 };
 
@@ -134,7 +163,8 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
             ) : null}
             <Dropzone
               key={`${dataType}-${resetKey}`}
-              endpoint={`/api/tools/upload?data_type=${dataType}`}
+              endpoint="/api/tools/upload"
+              fields={{ data_type: dataType }}
               accept={type.accept}
               hint={`${type.files}；大小上限 2 GB`}
               onUploaded={onUploaded}
@@ -166,7 +196,8 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
         <CardHeader>
           <CardTitle>3. 建立任務</CardTitle>
           <CardDescription>
-            整個檔案的處理是一個任務：進入全域佇列、受個人工作區的 CPU / 記憶體配額限制、有即時 log。完成後到任務頁下載 zip；下載一次就刪除。
+            整個檔案的處理是一個任務：進入全域佇列、受個人工作區的 CPU / 記憶體配額限制、有即時 log。完成後到任務頁下載
+            zip；下載一次就刪除。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
@@ -174,12 +205,19 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
             {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
             建立前處理任務
           </Button>
-          <Button variant="ghost" onClick={discard} disabled={!upload || pending} className="text-destructive hover:text-destructive">
+          <Button
+            variant="ghost"
+            onClick={discard}
+            disabled={!upload || pending}
+            className="text-destructive hover:text-destructive"
+          >
             <Trash2 />
             刪除暫存檔
           </Button>
           {upload && steps.length === 0 ? (
-            <p className="basis-full text-xs text-muted-foreground">沒有加入任何步驟時，任務只會把檔案原樣打包（可用來確認格式）。</p>
+            <p className="basis-full text-xs text-muted-foreground">
+              沒有加入任何步驟時，任務只會把檔案原樣打包（可用來確認格式）。
+            </p>
           ) : null}
         </CardContent>
       </Card>

@@ -1,4 +1,4 @@
-import { Copy, Download, PackageOpen } from "lucide-react";
+import { Copy, Download, Info, PackageOpen } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
@@ -17,6 +17,7 @@ import { PageSkeleton } from "@/components/features/skeletons";
 import { StatCard } from "@/components/features/stat-card";
 import { RelativeTime } from "@/components/features/time";
 import { PageHeader } from "@/components/layout/page-header";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -25,11 +26,13 @@ import {
   artifactKindLabel,
   familyLabel,
   inferenceModeLabel,
+  jobCopy,
   jobKindLabel,
   jobModeLabel,
 } from "@/i18n/zh-TW";
-import { getArtifact, getJob, getJobLog, listArtifactsForJob } from "@/lib/api";
+import { getArtifact, getJob, getJobLog, getProject, listArtifactsForJob } from "@/lib/api";
 import { formatBytes, formatMetric } from "@/lib/format";
+import { canCancelJob, canProject, projectRole } from "@/lib/roles";
 import { can, getCurrentUser } from "@/lib/session";
 import type { AnalysisKind, InferenceMode, PreprocessStep } from "@/types/domain";
 
@@ -37,13 +40,17 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
   const { slug, jobId } = await params;
   const job = await getJob(Number(jobId));
   if (!job || job.projectSlug !== slug) notFound();
-  const [log, artifacts, model, user] = await Promise.all([
+  const [log, artifacts, model, user, project] = await Promise.all([
     getJobLog(job.id),
     listArtifactsForJob(job.id),
     job.artifactId ? getArtifact(job.artifactId) : undefined,
     getCurrentUser(),
+    getProject(job.projectSlug),
   ]);
   const controlsJobs = can(user, "jobs.control");
+  const role = projectRole(project, user);
+  const canCancel = canCancelJob(role, user, job.createdBy.id);
+  const canRun = canProject(role, "run");
   const { leaderboard, ...metrics } = job.metrics ?? {};
   // Live metrics (job.metrics) are whatever the trainer reported last. Once a training job has a result, or
   // an AutoML leaderboard, the headline cards show the best model instead of the last trial.
@@ -72,8 +79,22 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
   const isTool = job.kind === "preprocess" || job.kind === "analysis";
   const analysisKind = job.config?.analysis as AnalysisKind | undefined;
 
+  // AutoML runs stopped early (time budget / cancel) still export the best trial so far; say so next to the metrics.
+  const stoppedNote =
+    job.result?.stopped === "deadline"
+      ? jobCopy.stoppedDeadline
+      : job.result?.stopped === "cancelled"
+        ? jobCopy.stoppedCancelled
+        : undefined;
+
   const overview = (
     <>
+      {stoppedNote ? (
+        <Alert>
+          <Info />
+          <AlertDescription>{stoppedNote}</AlertDescription>
+        </Alert>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label={
@@ -266,7 +287,13 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
                 <TableCell className="font-mono text-xs text-muted-foreground">{a.path}</TableCell>
                 <TableCell className="text-right font-mono text-xs tabular-nums">{formatBytes(a.sizeBytes)}</TableCell>
                 <TableCell className="text-right">
-                  <ArtifactRowActions id={a.id} slug={slug} kind={a.kind} isDefault={a.isDefault} />
+                  <ArtifactRowActions
+                    id={a.id}
+                    slug={slug}
+                    kind={a.kind}
+                    isDefault={a.isDefault}
+                    canSetDefault={canProject(role, "edit")}
+                  />
                 </TableCell>
               </TableRow>
             ))}
@@ -336,7 +363,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {controlsJobs ? <AdminJobActions job={job} /> : null}
-            {isTool ? null : (
+            {isTool || !canRun ? null : (
               <Button variant="outline" size="sm" asChild>
                 <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>
                   <Copy />
@@ -347,10 +374,10 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
           </div>
         }
       />
-      <JobStatusBar job={job} />
+      <JobStatusBar job={job} canCancel={canCancel} />
       <JobLive
         job={job}
-        initialLines={log}
+        log={log}
         overview={overview}
         results={results}
         resultsLabel={job.kind === "train" ? "產物" : job.kind === "analysis" ? "報告" : "結果"}

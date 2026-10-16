@@ -38,7 +38,8 @@ export function LeaderboardChart({
     <figure className="space-y-2">
       <figcaption className="flex items-baseline justify-between text-xs text-muted-foreground">
         <span>
-          每個 trial 的 <span className="font-mono">{metricName}</span>（{direction === "maximize" ? "越高越好" : "越低越好"}）
+          每個 trial 的 <span className="font-mono">{metricName}</span>（
+          {direction === "maximize" ? "越高越好" : "越低越好"}）
         </span>
         <span className="font-mono tabular-nums">{rows.length} trials</span>
       </figcaption>
@@ -61,10 +62,22 @@ export function LeaderboardChart({
               key={r.trial}
               onMouseEnter={() => setHover(i)}
               onFocus={() => setHover(i)}
+              onBlur={() => setHover(null)}
               tabIndex={0}
-              className="outline-none"
+              role="listitem"
+              aria-label={`trial ${r.trial} ${familyLabel(r.family)} ${metricName} ${formatMetric(r.metric)}`}
+              className="group outline-none"
             >
-              <rect x={0} y={y} width={width} height={ROW_H} className="fill-transparent" />
+              {/* row hit area; doubles as the keyboard focus ring (outline on <g> is unreliable across browsers) */}
+              <rect
+                x={1}
+                y={y + 1}
+                width={width - 2}
+                height={ROW_H - 2}
+                rx={4}
+                className="fill-transparent stroke-transparent group-focus-visible:stroke-ring"
+                strokeWidth={1.5}
+              />
               <text
                 x={LABEL_W - 8}
                 y={y + ROW_H / 2}

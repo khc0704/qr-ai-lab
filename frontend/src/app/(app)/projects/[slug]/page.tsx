@@ -14,16 +14,19 @@ import { projectRoleLabel } from "@/i18n/zh-TW";
 import { getProject, listArtifacts, listJobs } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 import { formatBytes, formatMb, formatMetric } from "@/lib/format";
+import { canProject, projectRole } from "@/lib/roles";
+import { getCurrentUser } from "@/lib/session";
 
 async function Overview({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = await getProject(slug);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
   const [jobs, models] = await Promise.all([
     listJobs({ slug: project.slug, limit: 5 }),
     listArtifacts(project.slug, "model"),
   ]);
   const def = models.find((m) => m.isDefault);
+  const canRun = canProject(projectRole(project, user), "run") && project.status === "active";
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
       <div className="space-y-6">
@@ -72,12 +75,14 @@ async function Overview({ params }: { params: Promise<{ slug: string }> }) {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>最近任務</CardTitle>
-            <Button size="sm" asChild>
-              <Link href={`/projects/${project.slug}/jobs/new`}>
-                <Plus />
-                新建訓練
-              </Link>
-            </Button>
+            {canRun ? (
+              <Button size="sm" asChild>
+                <Link href={`/projects/${project.slug}/jobs/new`}>
+                  <Plus />
+                  新建訓練
+                </Link>
+              </Button>
+            ) : null}
           </CardHeader>
           <CardContent className="p-0">
             <Table>

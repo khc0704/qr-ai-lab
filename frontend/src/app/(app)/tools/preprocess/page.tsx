@@ -21,8 +21,9 @@ export default async function PreprocessToolPage() {
         <Info />
         <AlertTitle>本服務不保存資料</AlertTitle>
         <AlertDescription>
-          上傳檔只放在暫存資料夾；建立任務時移進任務的輸入區，任務結束即刪。結果 zip 下載一次就刪除，沒下載的也會在管理員設定的期限（預設 24 小時）後刪除。
-          pipeline.json 記錄了步驟與擬合出的數值，之後建立訓練任務可用相同步驟重現。
+          上傳檔只放在暫存資料夾；建立任務時移進任務的輸入區，任務結束即刪。結果 zip
+          下載一次就刪除，沒下載的也會在管理員設定的期限（預設 24 小時）後刪除。 pipeline.json
+          記錄了步驟與擬合出的數值，之後建立訓練任務可用相同步驟重現。
         </AlertDescription>
       </Alert>
       <PreprocessTool ops={ops} />

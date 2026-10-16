@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { projectRoleLabel } from "@/i18n/zh-TW";
 import { approveRequestAction, rejectRequestAction, reviewRequestAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import type { ProjectRequest, ResourcePool } from "@/types/domain";
@@ -176,7 +177,7 @@ export function RequestReviewPanel({ request, pool }: { request: ProjectRequest;
                       }
                     />
                     <span className="font-mono text-xs">{m.email}</span>
-                    <span className="text-muted-foreground">{m.role}</span>
+                    <span className="text-muted-foreground">{projectRoleLabel[m.role] ?? m.role}</span>
                   </label>
                 ))}
               </div>

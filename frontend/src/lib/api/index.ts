@@ -11,8 +11,9 @@ import {
   toDataSource,
   toIssue,
   toJob,
-  toLogLines,
+  toLogSnapshot,
   toNode,
+  toPage,
   toPool,
   toPreprocessOp,
   toProject,
@@ -34,9 +35,10 @@ import type {
   DataType,
   Issue,
   Job,
-  LogLine,
+  JobLogSnapshot,
   ModelZooEntry,
   NodeStatus,
+  Page,
   PreprocessOp,
   Project,
   ProjectRequest,
@@ -49,10 +51,10 @@ import type {
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
-interface Page<T> {
-  items: T[];
-  total: number;
-}
+
+/** Backend list endpoints cap page_size at 100 (audit: 200). */
+export const DEFAULT_PAGE_SIZE = 20;
+const clampPage = (n: number | undefined) => (Number.isFinite(n) && (n as number) >= 1 ? Math.floor(n as number) : 1);
 
 const q = (params: Record<string, string | number | boolean | undefined>) => {
   const sp = new URLSearchParams();
@@ -110,12 +112,31 @@ export async function listJobs(opts?: {
 }): Promise<Job[]> {
   const status = opts?.status?.join(",");
   if (opts?.slug) {
-    const page = await apiFetch<Page<J>>(
+    const page = await apiFetch<J>(
       `/projects/${encodeURIComponent(opts.slug)}/jobs${q({ status, kind: opts.kind, page_size: opts.limit ?? 100 })}`,
     );
-    return page.items.map(toJob);
+    return toPage(page, toJob).items;
   }
   return (await apiFetch<J[]>(`/jobs${q({ status, kind: opts?.kind, limit: opts?.limit ?? 20 })}`)).map(toJob);
+}
+
+/** One page of a project's jobs (`GET /projects/{slug}/jobs?page&page_size`), newest first. */
+export async function listJobsPage(opts: {
+  slug: string;
+  page?: number;
+  pageSize?: number;
+  status?: Job["status"][];
+  kind?: Job["kind"];
+}): Promise<Page<Job>> {
+  const raw = await apiFetch<J>(
+    `/projects/${encodeURIComponent(opts.slug)}/jobs${q({
+      status: opts.status?.join(","),
+      kind: opts.kind,
+      page: clampPage(opts.page),
+      page_size: opts.pageSize ?? DEFAULT_PAGE_SIZE,
+    })}`,
+  );
+  return toPage(raw, toJob);
 }
 
 export async function getJob(id: number): Promise<Job | undefined> {
@@ -129,9 +150,9 @@ export async function getQueue(): Promise<{ running: Job[]; queued: Job[] }> {
   return { running: r.running.map(toJob), queued: r.queued.map(toJob) };
 }
 
-export async function getJobLog(jobId: number, limit = 2000): Promise<LogLine[]> {
-  const r = await apiFetch<{ lines: string[]; offset: number; total: number }>(`/jobs/${jobId}/logs${q({ limit })}`);
-  return toLogLines(r.lines, r.offset);
+/** The last `limit` log lines plus the SSE cursor (`last_event_id`) to resume the live stream without replay. */
+export async function getJobLog(jobId: number, limit = 2000): Promise<JobLogSnapshot> {
+  return toLogSnapshot(await apiFetch<J>(`/jobs/${encodeURIComponent(String(jobId))}/logs${q({ limit })}`));
 }
 
 export async function listArtifactsForJob(jobId: number): Promise<Artifact[]> {
@@ -149,9 +170,25 @@ export async function listProjectRequests(opts?: {
   applicantId?: number;
   status?: ProjectRequest["status"][];
 }): Promise<ProjectRequest[]> {
-  const page = await apiFetch<Page<J>>(`/project-requests${q({ status: opts?.status?.join(","), page_size: 100 })}`);
-  const rows = page.items.map(toRequest);
+  const page = await apiFetch<J>(`/project-requests${q({ status: opts?.status?.join(","), page_size: 100 })}`);
+  const rows = toPage(page, toRequest).items;
   return opts?.applicantId ? rows.filter((r) => r.applicant.id === opts.applicantId) : rows;
+}
+
+/** One page of project requests; the backend already limits non-admins to their own applications. */
+export async function listProjectRequestsPage(opts?: {
+  status?: ProjectRequest["status"][];
+  page?: number;
+  pageSize?: number;
+}): Promise<Page<ProjectRequest>> {
+  const raw = await apiFetch<J>(
+    `/project-requests${q({
+      status: opts?.status?.join(","),
+      page: clampPage(opts?.page),
+      page_size: opts?.pageSize ?? DEFAULT_PAGE_SIZE,
+    })}`,
+  );
+  return toPage(raw, toRequest);
 }
 
 export async function getProjectRequest(id: number): Promise<ProjectRequest | undefined> {
@@ -160,8 +197,25 @@ export async function getProjectRequest(id: number): Promise<ProjectRequest | un
 }
 
 export async function listIssues(opts?: { status?: Issue["status"]; type?: Issue["type"] }): Promise<Issue[]> {
-  const page = await apiFetch<Page<J>>(`/issues${q({ status: opts?.status, type: opts?.type, page_size: 100 })}`);
-  return page.items.map(toIssue);
+  const page = await apiFetch<J>(`/issues${q({ status: opts?.status, type: opts?.type, page_size: 100 })}`);
+  return toPage(page, toIssue).items;
+}
+
+export async function listIssuesPage(opts?: {
+  status?: Issue["status"];
+  type?: Issue["type"];
+  page?: number;
+  pageSize?: number;
+}): Promise<Page<Issue>> {
+  const raw = await apiFetch<J>(
+    `/issues${q({
+      status: opts?.status,
+      type: opts?.type,
+      page: clampPage(opts?.page),
+      page_size: opts?.pageSize ?? DEFAULT_PAGE_SIZE,
+    })}`,
+  );
+  return toPage(raw, toIssue);
 }
 
 export async function getIssue(id: number): Promise<Issue | undefined> {
@@ -177,7 +231,14 @@ export async function listComments(targetType: CommentTarget, targetId: number):
 // --- users / admin ---------------------------------------------------------------------------------
 
 export async function listUsers(): Promise<User[]> {
-  return (await apiFetch<Page<J>>("/users?page_size=100")).items.map(toUser);
+  return toPage(await apiFetch<J>("/users?page_size=100"), toUser).items;
+}
+
+export async function listUsersPage(opts?: { page?: number; pageSize?: number; q?: string }): Promise<Page<User>> {
+  const raw = await apiFetch<J>(
+    `/users${q({ q: opts?.q, page: clampPage(opts?.page), page_size: opts?.pageSize ?? 50 })}`,
+  );
+  return toPage(raw, toUser);
 }
 
 /** Pool + current allocation; readable by every user (request form, home page). */
@@ -198,8 +259,9 @@ export async function getUsageHistory(range: UsageRange = "24h"): Promise<UsageH
   return toUsageHistory(await apiFetch<J>(`/admin/usage${q({ range })}`));
 }
 
-export async function listAuditLogs(limit = 50): Promise<AuditLog[]> {
-  return (await apiFetch<Page<J>>(`/admin/audit${q({ page_size: limit })}`)).items.map(toAudit);
+export async function listAuditLogsPage(opts?: { page?: number; pageSize?: number }): Promise<Page<AuditLog>> {
+  const raw = await apiFetch<J>(`/admin/audit${q({ page: clampPage(opts?.page), page_size: opts?.pageSize ?? 50 })}`);
+  return toPage(raw, toAudit);
 }
 
 export async function getAdminOverview() {

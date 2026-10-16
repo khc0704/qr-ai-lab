@@ -3,13 +3,14 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/features/empty-state";
 import { UserAvatar } from "@/components/features/member-avatars";
+import { pageFromParam, pageHref, Pagination } from "@/components/features/pagination";
 import { TableSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { issueTypeLabel } from "@/i18n/zh-TW";
-import { listIssues } from "@/lib/api";
+import { listIssuesPage } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 import { cn } from "@/lib/utils";
 import type { IssueStatus, IssueType } from "@/types/domain";
@@ -20,11 +21,25 @@ const statusTabs: { value: IssueStatus | "all"; label: string }[] = [
   { value: "all", label: "全部" },
 ];
 
-async function IssueList({ searchParams }: { searchParams: Promise<{ status?: string; type?: string }> }) {
+const PAGE_SIZE = 20;
+const issueTypes: IssueType[] = ["question", "bug", "feature"];
+
+async function IssueList({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; type?: string; page?: string | string[] }>;
+}) {
   const sp = await searchParams;
   const status = (statusTabs.some((t) => t.value === sp.status) ? sp.status : "open") as IssueStatus | "all";
-  const type = sp.type as IssueType | undefined;
-  const issues = await listIssues({ status: status === "all" ? undefined : status, type });
+  const type = issueTypes.includes(sp.type as IssueType) ? (sp.type as IssueType) : undefined;
+  const page = pageFromParam(sp.page);
+  const issues = await listIssuesPage({
+    status: status === "all" ? undefined : status,
+    type,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+  const href = (p: number) => pageHref("/discussions", { status, type }, p);
 
   return (
     <div className="space-y-4">
@@ -44,7 +59,7 @@ async function IssueList({ searchParams }: { searchParams: Promise<{ status?: st
           </Link>
         ))}
         <div className="ml-auto flex items-center gap-1 pb-2">
-          {(["question", "bug", "feature"] as IssueType[]).map((t) => (
+          {issueTypes.map((t) => (
             <Link
               key={t}
               href={`/discussions?status=${status}${type === t ? "" : `&type=${t}`}`}
@@ -60,7 +75,7 @@ async function IssueList({ searchParams }: { searchParams: Promise<{ status?: st
           ))}
         </div>
       </div>
-      {issues.length === 0 ? (
+      {issues.items.length === 0 ? (
         <EmptyState icon={MessagesSquare} title="沒有符合的問題" description="換個篩選條件，或開一個新問題。" />
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -77,7 +92,7 @@ async function IssueList({ searchParams }: { searchParams: Promise<{ status?: st
               </TableRow>
             </TableHeader>
             <TableBody>
-              {issues.map((i) => (
+              {issues.items.map((i) => (
                 <TableRow key={i.id}>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
                     {i.id}
@@ -112,6 +127,7 @@ async function IssueList({ searchParams }: { searchParams: Promise<{ status?: st
           </Table>
         </div>
       )}
+      <Pagination page={issues.page} pageSize={issues.pageSize} total={issues.total} href={href} />
     </div>
   );
 }

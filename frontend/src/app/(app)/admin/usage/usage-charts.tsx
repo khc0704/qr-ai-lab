@@ -3,7 +3,7 @@
 // Usage history: one line chart per resource (single hue; the denominator line is the only second mark),
 // then the per-project window share as sorted bars. The denominator toggle picks what 100 % means.
 import { ChartLine, Info } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { EmptyState } from "@/components/features/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,11 +17,26 @@ const W = 640;
 const H = 160;
 const PAD = { l: 44, r: 12, t: 10, b: 22 };
 
-function fmtTime(iso: string, range: UsageHistory["range"]) {
+// The server (and the first client render, before hydration) has no idea of the viewer's time zone, so axis
+// labels are formatted in UTC until the component is mounted, then switch to local time (same pattern as
+// components/features/time.tsx: useSyncExternalStore with a stable server snapshot → no hydration mismatch).
+const noopSubscribe = () => () => {};
+const useLocalTime = () =>
+  useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false,
+  );
+
+function fmtTime(iso: string, range: UsageHistory["range"], local: boolean) {
   const d = new Date(iso);
-  const hh = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (range === "7d" || range === "30d") return `${d.getMonth() + 1}/${d.getDate()} ${hh}`;
-  return hh;
+  const hours = local ? d.getHours() : d.getUTCHours();
+  const minutes = local ? d.getMinutes() : d.getUTCMinutes();
+  const month = (local ? d.getMonth() : d.getUTCMonth()) + 1;
+  const day = local ? d.getDate() : d.getUTCDate();
+  const hh = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  const t = range === "7d" || range === "30d" ? `${month}/${day} ${hh}` : hh;
+  return local ? t : `${t}Z`;
 }
 
 function LineChart({
@@ -44,6 +59,7 @@ function LineChart({
   unit?: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  const local = useLocalTime();
   const data = points.map((p) => value(p));
   const defined = data.filter((v): v is number => v != null);
   if (defined.length === 0) {
@@ -79,7 +95,7 @@ function LineChart({
         <div className="font-mono text-xs text-muted-foreground tabular-nums">
           {hover != null && hv != null ? (
             <>
-              {fmtTime(points[hover].t, range)} · {format(hv)}
+              {fmtTime(points[hover].t, range, local)} · {format(hv)}
               {unit ?? ""}
             </>
           ) : (
@@ -146,10 +162,10 @@ function LineChart({
           </g>
         ) : null}
         <text x={PAD.l} y={H - 6} className="fill-muted-foreground font-mono text-[10px]">
-          {fmtTime(points[0].t, range)}
+          {fmtTime(points[0].t, range, local)}
         </text>
         <text x={W - PAD.r} y={H - 6} textAnchor="end" className="fill-muted-foreground font-mono text-[10px]">
-          {fmtTime(points[points.length - 1].t, range)}
+          {fmtTime(points[points.length - 1].t, range, local)}
         </text>
       </svg>
     </Card>

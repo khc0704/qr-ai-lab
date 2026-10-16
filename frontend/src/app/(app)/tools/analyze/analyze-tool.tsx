@@ -45,7 +45,8 @@ export function AnalyzeTool() {
   const [pending, startTransition] = useTransition();
   const [resetKey, setResetKey] = useState(0);
   const current = KINDS.find((k) => k.value === kind)!;
-  const onUploaded = (u: Upload | null, raw?: Record<string, unknown>) => setUpload(u && raw ? toToolUpload(raw) : null);
+  const onUploaded = (u: Upload | null, raw?: Record<string, unknown>) =>
+    setUpload(u && raw ? toToolUpload(raw) : null);
   const submit = () =>
     startTransition(async () => {
       if (!upload) return;
@@ -105,7 +106,8 @@ export function AnalyzeTool() {
           </div>
           <Dropzone
             key={`${kind}-${resetKey}`}
-            endpoint={`/api/tools/upload?data_type=${current.dataType}`}
+            endpoint="/api/tools/upload"
+            fields={{ data_type: current.dataType }}
             accept={current.accept}
             hint={`${current.files}；大小上限 2 GB`}
             onUploaded={onUploaded}
@@ -124,12 +126,24 @@ export function AnalyzeTool() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label htmlFor="an-target">目標欄位（選填）</Label>
-                <Input id="an-target" value={target} placeholder="例：yield_pct" onChange={(e) => setTarget(e.target.value)} />
-                <p className="text-xs text-muted-foreground">填了才會算每個欄位對目標的解釋力與推薦；留空只做相關性 / 共線性。</p>
+                <Input
+                  id="an-target"
+                  value={target}
+                  placeholder="例：yield_pct"
+                  onChange={(e) => setTarget(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  填了才會算每個欄位對目標的解釋力與推薦；留空只做相關性 / 共線性。
+                </p>
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="an-id">ID 欄位（排除）</Label>
-                <Input id="an-id" value={idColumn} placeholder="例：lot_id" onChange={(e) => setIdColumn(e.target.value)} />
+                <Input
+                  id="an-id"
+                  value={idColumn}
+                  placeholder="例：lot_id"
+                  onChange={(e) => setIdColumn(e.target.value)}
+                />
               </div>
             </div>
           ) : (
@@ -148,7 +162,12 @@ export function AnalyzeTool() {
               {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
               建立分析任務
             </Button>
-            <Button variant="ghost" onClick={discard} disabled={!upload || pending} className="text-destructive hover:text-destructive">
+            <Button
+              variant="ghost"
+              onClick={discard}
+              disabled={!upload || pending}
+              className="text-destructive hover:text-destructive"
+            >
               <Trash2 />
               刪除暫存檔
             </Button>

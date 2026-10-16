@@ -3,12 +3,13 @@
 import { CheckCircle2, CircleAlert, CircleX } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { jobCopy } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type Row = Record<string, unknown>;
 
-const HIDDEN = new Set(["mode", "model_artifact_id", "preview", "artifacts", "per_metric"]);
+const HIDDEN = new Set(["mode", "model_artifact_id", "preview", "artifacts", "per_metric", "stopped"]);
 
 function cell(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -33,10 +34,7 @@ export function VerdictBadge({ verdict }: { verdict: string }) {
   const Icon = t.icon;
   return (
     <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
-        t.className,
-      )}
+      className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", t.className)}
     >
       <Icon className="size-3.5" />
       {t.label}
@@ -51,9 +49,16 @@ export function JobResults({ result }: { result: Record<string, unknown> }) {
   const preview = Array.isArray(result.preview) ? (result.preview as Row[]) : [];
   const columns = preview.length ? Array.from(new Set(preview.flatMap((r) => Object.keys(r)))).slice(0, 12) : [];
   const verdict = typeof result.verdict === "string" ? result.verdict : undefined;
+  const stoppedNote =
+    result.stopped === "deadline"
+      ? jobCopy.stoppedDeadline
+      : result.stopped === "cancelled"
+        ? jobCopy.stoppedCancelled
+        : undefined;
 
   return (
     <div className="space-y-4">
+      {stoppedNote ? <p className="text-xs text-muted-foreground">{stoppedNote}</p> : null}
       {summary.length ? (
         <Card>
           <CardHeader>
@@ -125,7 +130,8 @@ export function JobResults({ result }: { result: Record<string, unknown> }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              預測結果預覽 <span className="font-mono text-xs font-normal text-muted-foreground">前 {preview.length} 筆</span>
+              預測結果預覽{" "}
+              <span className="font-mono text-xs font-normal text-muted-foreground">前 {preview.length} 筆</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -144,7 +150,11 @@ export function JobResults({ result }: { result: Record<string, unknown> }) {
                   {preview.map((r, i) => (
                     <TableRow key={i}>
                       {columns.map((c) => (
-                        <TableCell key={c} className="max-w-56 truncate font-mono text-xs tabular-nums" title={cell(r[c])}>
+                        <TableCell
+                          key={c}
+                          className="max-w-56 truncate font-mono text-xs tabular-nums"
+                          title={cell(r[c])}
+                        >
                           {typeof r[c] === "string" && verdictTone[r[c] as string] ? (
                             <VerdictBadge verdict={r[c] as string} />
                           ) : (

@@ -1,7 +1,9 @@
 // Auth.js (next-auth v5) with the company Keycloak as the only provider. Used when AUTH_MODE=keycloak:
 // the browser signs in at Keycloak, the server keeps access/refresh/id tokens in the encrypted session
 // cookie (jwt strategy) and forwards the access token to FastAPI, which validates it against the realm JWKS.
-// AUTH_MODE=local (dev) never touches this file at request time.
+// The `jwt` callback below refreshes the access token, but it is only ever run from src/proxy.ts (the Auth.js
+// middleware wrapper writes the rotated cookie back); server code reads the token through src/lib/backend.ts
+// without callbacks. AUTH_MODE=local (dev) never touches this file at request time.
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import Keycloak from "next-auth/providers/keycloak";
@@ -33,7 +35,12 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       expires_in?: number;
       error?: string;
     };
-    if (!res.ok || !data.access_token) return { ...token, error: "RefreshTokenError" };
+    if (!res.ok || !data.access_token) {
+      // Keycloak said no (rotated / revoked / expired refresh token): drop it so the proxy stops retrying on
+      // every request until the user signs in again. A transport error keeps the token and retries next time.
+      const definitive = res.status === 400 || res.status === 401 || data.error === "invalid_grant";
+      return { ...token, error: "RefreshTokenError", refreshToken: definitive ? undefined : token.refreshToken };
+    }
     return {
       ...token,
       accessToken: data.access_token,

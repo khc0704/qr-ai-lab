@@ -5,51 +5,79 @@ import { Suspense } from "react";
 import { EmptyState } from "@/components/features/empty-state";
 import { FamilyText, InputKindChip, KindChip } from "@/components/features/chips";
 import { UserInline } from "@/components/features/member-avatars";
+import { pageFromParam, pageHref, Pagination } from "@/components/features/pagination";
 import { TableSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { jobModeLabel } from "@/i18n/zh-TW";
 import { Duration, RelativeTime } from "@/components/features/time";
-import { getProject, listJobs } from "@/lib/api";
+import { getProject, listJobsPage } from "@/lib/api";
 import { formatMb } from "@/lib/format";
+import { canProject, projectRole } from "@/lib/roles";
+import { getCurrentUser } from "@/lib/session";
 
-async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
-  const project = await getProject(slug);
+const PAGE_SIZE = 20;
+
+async function Jobs({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ page?: string | string[] }>;
+}) {
+  const [{ slug }, sp] = await Promise.all([params, searchParams]);
+  const page = pageFromParam(sp.page);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
-  const jobs = await listJobs({ slug: project.slug });
+  const jobs = await listJobsPage({ slug: project.slug, page, pageSize: PAGE_SIZE });
+  const canRun = canProject(projectRole(project, user), "run") && project.status === "active";
+  const href = (p: number) => pageHref(`/projects/${project.slug}/jobs`, {}, p);
   return (
     <>
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-muted-foreground tabular-nums">
-          {jobs.length} 個任務 · 同時上限 {project.maxConcurrentJobs}
+          {jobs.total} 個任務 · 同時上限 {project.maxConcurrentJobs}
         </span>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/projects/${project.slug}/jobs/new?kind=inference`}>
-              <Sparkles />
-              新建推論
-            </Link>
-          </Button>
-          <Button size="sm" asChild>
-            <Link href={`/projects/${project.slug}/jobs/new`}>
-              <Plus />
-              新建訓練
-            </Link>
-          </Button>
-        </div>
+        {canRun ? (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/projects/${project.slug}/jobs/new?kind=inference`}>
+                <Sparkles />
+                新建推論
+              </Link>
+            </Button>
+            <Button size="sm" asChild>
+              <Link href={`/projects/${project.slug}/jobs/new`}>
+                <Plus />
+                新建訓練
+              </Link>
+            </Button>
+          </div>
+        ) : null}
       </div>
-      {jobs.length === 0 ? (
+      {jobs.items.length === 0 ? (
         <EmptyState
           icon={Brain}
-          title="還沒有任務"
-          description="先新建一個訓練任務；不確定選什麼模型就用自動模式。"
+          title={jobs.total === 0 ? "還沒有任務" : "這一頁沒有任務"}
+          description={
+            jobs.total === 0
+              ? canRun
+                ? "先新建一個訓練任務；不確定選什麼模型就用自動模式。"
+                : "專案成員建立任務後會列在這裡。"
+              : "回到第一頁查看。"
+          }
           dots
           action={
-            <Button asChild>
-              <Link href={`/projects/${project.slug}/jobs/new`}>新建訓練</Link>
-            </Button>
+            jobs.total === 0 && canRun ? (
+              <Button asChild>
+                <Link href={`/projects/${project.slug}/jobs/new`}>新建訓練</Link>
+              </Button>
+            ) : jobs.total > 0 ? (
+              <Button variant="outline" asChild>
+                <Link href={href(1)}>第一頁</Link>
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -68,7 +96,7 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {jobs.map((j) => (
+              {jobs.items.map((j) => (
                 <TableRow key={j.id}>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -104,7 +132,9 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
                     <div className="flex items-center gap-2">
                       <StatusBadge status={j.status} />
                       {j.status === "queued" ? (
-                        <span className="font-mono text-xs text-muted-foreground tabular-nums">#{j.queuePosition ?? "—"}</span>
+                        <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                          #{j.queuePosition ?? "—"}
+                        </span>
                       ) : null}
                     </div>
                   </TableCell>
@@ -118,7 +148,11 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
                     <UserInline user={j.createdBy} />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {j.startedAt ? <Duration start={j.startedAt} end={j.finishedAt} /> : <RelativeTime iso={j.createdAt} />}
+                    {j.startedAt ? (
+                      <Duration start={j.startedAt} end={j.finishedAt} />
+                    ) : (
+                      <RelativeTime iso={j.createdAt} />
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -126,14 +160,15 @@ async function Jobs({ params }: { params: Promise<{ slug: string }> }) {
           </Table>
         </div>
       )}
+      <Pagination page={jobs.page} pageSize={jobs.pageSize} total={jobs.total} href={href} />
     </>
   );
 }
 
-export default function JobsPage({ params }: PageProps<"/projects/[slug]/jobs">) {
+export default function JobsPage({ params, searchParams }: PageProps<"/projects/[slug]/jobs">) {
   return (
     <Suspense fallback={<TableSkeleton />}>
-      <Jobs params={params} />
+      <Jobs params={params} searchParams={searchParams} />
     </Suspense>
   );
 }

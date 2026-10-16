@@ -11,16 +11,19 @@ export function ArtifactRowActions({
   slug,
   kind,
   isDefault,
+  canSetDefault = true,
 }: {
   id: number;
   slug: string;
   kind: string;
   isDefault: boolean;
+  /** Project role `edit` (member+); viewers only download. */
+  canSetDefault?: boolean;
 }) {
   const [pending, start] = useTransition();
   return (
     <div className="flex justify-end gap-1">
-      {kind === "model" && !isDefault ? (
+      {kind === "model" && !isDefault && canSetDefault ? (
         <Button
           variant="ghost"
           size="sm"

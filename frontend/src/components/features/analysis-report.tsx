@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { analysisCopy } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -238,17 +239,20 @@ export function TabularProfileReport({ result }: { result: J }) {
               {"holdout_score" in model
                 ? ` 隨機森林保留集 ${String(model.metric)} = ${num(model.holdout_score).toFixed(3)}（${num(model.train_rows)} / ${num(model.test_rows)} 列）。`
                 : ""}
+              {typeof model.permutation_rows === "number" || Array.isArray(model.columns_used)
+                ? ` 置換重要度${typeof model.permutation_rows === "number" ? `以 ${num(model.permutation_rows)} 列計算` : ""}${
+                    Array.isArray(model.columns_used) ? `，使用 ${arr<string>(model.columns_used).length} 欄` : ""
+                  }；未納入模型的欄位顯示「${analysisCopy.permutationSkipped}」。`
+                : ""}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <BarList
-              rows={feats
-                .slice(0, 15)
-                .map((f) => ({
-                  label: String(f.name),
-                  value: num(f.score),
-                  hint: f.kind === "categorical" ? "類別" : undefined,
-                }))}
+              rows={feats.slice(0, 15).map((f) => ({
+                label: String(f.name),
+                value: num(f.score),
+                hint: f.kind === "categorical" ? "類別" : undefined,
+              }))}
               max={1}
               format={(v) => v.toFixed(3)}
             />
@@ -274,7 +278,13 @@ export function TabularProfileReport({ result }: { result: J }) {
                         {f.corr_target == null ? "—" : num(f.corr_target).toFixed(3)}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">
-                        {f.permutation_importance == null ? "—" : num(f.permutation_importance).toFixed(4)}
+                        {f.permutation_skipped === true ? (
+                          <span className="font-sans text-muted-foreground">{analysisCopy.permutationSkipped}</span>
+                        ) : f.permutation_importance == null ? (
+                          "—"
+                        ) : (
+                          num(f.permutation_importance).toFixed(4)
+                        )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs font-semibold tabular-nums">
                         {num(f.score).toFixed(3)}
@@ -316,13 +326,11 @@ export function TabularProfileReport({ result }: { result: J }) {
           <CardContent>
             {vif.length ? (
               <BarList
-                rows={vif
-                  .slice(0, 15)
-                  .map((v) => ({
-                    label: String(v.name),
-                    value: v.vif == null ? 100 : Math.min(100, num(v.vif)),
-                    hint: v.vif == null ? "∞" : undefined,
-                  }))}
+                rows={vif.slice(0, 15).map((v) => ({
+                  label: String(v.name),
+                  value: v.vif == null ? 100 : Math.min(100, num(v.vif)),
+                  hint: v.vif == null ? "∞" : undefined,
+                }))}
                 max={100}
                 format={(v) => (v >= 100 ? "≥100" : v.toFixed(1))}
               />
@@ -387,6 +395,10 @@ export function TabularProfileReport({ result }: { result: J }) {
 export function ImageQualityReport({ result }: { result: J }) {
   const groups = arr<J>(result.groups);
   const drift = arr<J>(result.drift);
+  // Metrics without enough images (< 3 per group) or zero within-group spread have no ratio: shown as
+  // "樣本不足" with the backend's note and left out of the ranking.
+  const insufficient = (d: J) => d.insufficient === true || typeof d.drift_ratio !== "number";
+  const ranked = drift.filter((d) => !insufficient(d));
   const sim = (result.similarity as J) ?? {};
   const labels = arr<string>(sim.labels);
   const matrix = arr<number[]>(sim.matrix);
@@ -416,16 +428,18 @@ export function ImageQualityReport({ result }: { result: J }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <BarList
-            rows={drift
-              .slice(0, 10)
-              .map((d) => ({
+          {ranked.length ? (
+            <BarList
+              rows={ranked.slice(0, 10).map((d) => ({
                 label: String(d.label ?? d.metric),
                 value: num(d.drift_ratio),
                 hint: d.p_value == null ? undefined : `p=${num(d.p_value).toExponential(1)}`,
               }))}
-            format={(v) => `${v.toFixed(2)}×`}
-          />
+              format={(v) => `${v.toFixed(2)}×`}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">每個群組至少需要 3 張影像才能計算飄移比。</p>
+          )}
           <div className="overflow-auto rounded-lg border border-border">
             <Table>
               <TableHeader>
@@ -435,6 +449,9 @@ export function ImageQualityReport({ result }: { result: J }) {
                     <TableHead key={String(g.name)} className="text-right">
                       {String(g.name)}{" "}
                       <span className="font-mono text-[10px] text-subtle-foreground">n={num(g.images)}</span>
+                      {g.insufficient === true ? (
+                        <span className="ml-1 text-[10px] text-warning">{analysisCopy.insufficient}</span>
+                      ) : null}
                     </TableHead>
                   ))}
                   <TableHead className="text-right">飄移比</TableHead>
@@ -449,14 +466,24 @@ export function ImageQualityReport({ result }: { result: J }) {
                         {formatMetric(num((d.group_medians as J)?.[String(g.name)]))}
                       </TableCell>
                     ))}
-                    <TableCell
-                      className={cn(
-                        "text-right font-mono text-xs tabular-nums",
-                        num(d.drift_ratio) > 1 && "font-semibold text-warning",
-                      )}
-                    >
-                      {num(d.drift_ratio).toFixed(2)}
-                    </TableCell>
+                    {insufficient(d) ? (
+                      <TableCell
+                        className="text-right text-xs text-muted-foreground"
+                        title={d.note ? String(d.note) : undefined}
+                      >
+                        {analysisCopy.insufficient}
+                        {d.note ? <span className="ml-1 text-subtle-foreground">（{String(d.note)}）</span> : null}
+                      </TableCell>
+                    ) : (
+                      <TableCell
+                        className={cn(
+                          "text-right font-mono text-xs tabular-nums",
+                          num(d.drift_ratio) > 1 && "font-semibold text-warning",
+                        )}
+                      >
+                        {num(d.drift_ratio).toFixed(2)}
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>

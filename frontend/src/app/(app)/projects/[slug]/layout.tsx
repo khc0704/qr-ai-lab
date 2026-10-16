@@ -9,12 +9,15 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getProject } from "@/lib/api";
+import { canProject, projectRole } from "@/lib/roles";
+import { getCurrentUser } from "@/lib/session";
 import { ProjectTabs } from "./project-tabs";
 
 async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = await getProject(slug);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  const canSettings = canProject(projectRole(project, user), "settings");
   return (
     <PageHeader
       eyebrow={<span className="font-mono normal-case">{project.slug}</span>}
@@ -28,12 +31,14 @@ async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) 
       actions={
         <>
           <MemberAvatars users={project.members.map((m) => m.user)} />
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/projects/${project.slug}/settings`}>
-              <Settings2 />
-              設定
-            </Link>
-          </Button>
+          {canSettings ? (
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/projects/${project.slug}/settings`}>
+                <Settings2 />
+                設定
+              </Link>
+            </Button>
+          ) : null}
         </>
       }
     >

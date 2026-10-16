@@ -18,7 +18,10 @@ async function Shell({ children }: { children: ReactNode }) {
     <>
       <AppSidebar
         user={user}
-        counts={{ pendingRequests: overview?.pendingRequests || undefined, runningJobs: overview?.running || undefined }}
+        counts={{
+          pendingRequests: overview?.pendingRequests || undefined,
+          runningJobs: overview?.running || undefined,
+        }}
       />
       <SidebarInset className="min-w-0">
         <Topbar

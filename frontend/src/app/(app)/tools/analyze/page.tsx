@@ -19,8 +19,8 @@ export default function AnalyzeToolPage() {
         <Info />
         <AlertTitle>只保留報告，不保留資料</AlertTitle>
         <AlertDescription>
-          上傳檔在任務結束時刪除；留下的只有報告（任務頁可看、也登記為 report 產物）。影像分析請把不同機台 / 條件放在 zip
-          的不同子資料夾，資料夾名稱就是群組。
+          上傳檔在任務結束時刪除；留下的只有報告（任務頁可看、也登記為 report 產物）。影像分析請把不同機台 / 條件放在
+          zip 的不同子資料夾，資料夾名稱就是群組。
         </AlertDescription>
       </Alert>
       <AnalyzeTool />

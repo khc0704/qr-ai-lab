@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { getProject } from "@/lib/api";
+import { canProject, projectRole } from "@/lib/roles";
 import { can, getCurrentUser } from "@/lib/session";
 import { ProjectSettingsForm } from "./project-settings-form";
 
@@ -15,6 +16,7 @@ async function Settings({ params }: { params: Promise<{ slug: string }> }) {
       description={project.description}
       slug={project.slug}
       archived={project.status === "archived"}
+      canEdit={canProject(projectRole(project, user), "settings")}
       canDelete={can(user, "projects.delete")}
     />
   );

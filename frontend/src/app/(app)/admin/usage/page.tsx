@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
@@ -27,9 +28,9 @@ async function Usage({ searchParams }: { searchParams: Promise<{ range?: string 
           <div className="flex flex-wrap gap-1" role="tablist" aria-label="時間範圍">
             {RANGES.map((r) => (
               <Button key={r.value} variant={r.value === range ? "secondary" : "ghost"} size="sm" asChild>
-                <a href={`/admin/usage?range=${r.value}`} role="tab" aria-selected={r.value === range}>
+                <Link href={`/admin/usage?range=${r.value}`} role="tab" aria-selected={r.value === range}>
                   {r.label}
-                </a>
+                </Link>
               </Button>
             ))}
           </div>

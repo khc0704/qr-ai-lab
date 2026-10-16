@@ -17,12 +17,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { dataTypeLabel, familyLabel, inferenceModeLabel, taskTypeLabel } from "@/i18n/zh-TW";
+import { dataTypeLabel, familyLabel, inferenceModeLabel, jobCopy, taskTypeLabel } from "@/i18n/zh-TW";
 import { createJobAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
   Catalog,
+  CatalogFamily,
   DataFormat,
   DataSourceKind,
   DataType,
@@ -59,7 +60,17 @@ interface ModelInfo {
   inferenceModes: string[];
 }
 
-const specFields: Record<DataType, { key: string; label: string; placeholder: string; hint?: string }[]> = {
+type FieldKind = "string" | "number" | "boolean";
+interface SpecField {
+  key: string;
+  label: string;
+  placeholder: string;
+  hint?: string;
+  /** Only fields declared numeric are coerced; column names such as "2024" or "null" stay strings. */
+  type?: FieldKind;
+}
+
+const specFields: Record<DataType, SpecField[]> = {
   TABULAR: [
     { key: "target", label: "目標欄位", placeholder: "例：yield_pct", hint: "訓練必填；異常偵測可留空" },
     { key: "categorical", label: "類別欄位（逗號分隔，可選）", placeholder: "line,shift" },
@@ -67,8 +78,8 @@ const specFields: Record<DataType, { key: string; label: string; placeholder: st
   ],
   IMAGE: [{ key: "classes", label: "類別（自動偵測，可修改）", placeholder: "scratch,dent,particle" }],
   SEQUENCE: [
-    { key: "window", label: "視窗長度", placeholder: "256" },
-    { key: "stride", label: "步長", placeholder: "128" },
+    { key: "window", label: "視窗長度", placeholder: "256", type: "number" },
+    { key: "stride", label: "步長", placeholder: "128", type: "number" },
     { key: "series_id", label: "序列 id 欄位", placeholder: "series_id" },
     { key: "label", label: "標籤欄位（可選）", placeholder: "label" },
   ],
@@ -90,13 +101,33 @@ function automlCandidates(catalog: Catalog, dataType: DataType, task: TaskType) 
   return entry ? { candidates: entry.candidates, budget: entry.budget } : null;
 }
 
-function parseValue(v: string): unknown {
+/** Text input → typed value, but only for the kind the catalog / field table declares; "" means "use default". */
+function coerceValue(v: string, kind: FieldKind, nullable = false): unknown {
   if (v === "") return undefined;
-  if (v === "true") return true;
-  if (v === "false") return false;
-  if (v === "null") return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? v : n;
+  if (nullable && v.trim().toLowerCase() === "null") return null;
+  if (kind === "number") {
+    const n = Number(v);
+    return v.trim() !== "" && !Number.isNaN(n) ? n : v;
+  }
+  if (kind === "boolean") return v === "true" ? true : v === "false" ? false : v;
+  return v;
+}
+
+/** What type a hyper-parameter has: the search space's declared type first, then the default value's type. */
+function paramKind(family: CatalogFamily | undefined, key: string): { kind: FieldKind; nullable: boolean } {
+  const space = family?.search_space?.[key];
+  if (space?.type === "int" || space?.type === "float") return { kind: "number", nullable: false };
+  if (space?.type === "categorical" && space.choices?.length) {
+    const kinds = new Set(space.choices.map((c) => typeof c));
+    if (kinds.size === 1 && kinds.has("number")) return { kind: "number", nullable: false };
+    if (kinds.size === 1 && kinds.has("boolean")) return { kind: "boolean", nullable: false };
+    return { kind: "string", nullable: false };
+  }
+  const def = family?.defaults?.[key];
+  if (def === null) return { kind: "number", nullable: true }; // e.g. max_depth: null → unlimited or an int
+  if (typeof def === "number") return { kind: "number", nullable: false };
+  if (typeof def === "boolean") return { kind: "boolean", nullable: false };
+  return { kind: "string", nullable: false };
 }
 
 export function NewJobWizard({
@@ -199,7 +230,8 @@ export function NewJobWizard({
     startTransition(async () => {
       const specOut: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(spec)) {
-        const parsed = parseValue(v);
+        const kind = specFields[project.dataType].find((f) => f.key === k)?.type ?? "string";
+        const parsed = coerceValue(v, kind);
         if (parsed !== undefined) specOut[k] = parsed;
       }
       if (preprocess.length) specOut.preprocess = preprocess;
@@ -215,8 +247,10 @@ export function NewJobWizard({
       }
       const config: Record<string, unknown> = {};
       if (isTrain && mode === "manual") {
+        const fam = catalog.families[family];
         for (const [k, v] of Object.entries(params)) {
-          const parsed = parseValue(v);
+          const { kind, nullable } = paramKind(fam, k);
+          const parsed = coerceValue(v, kind, nullable);
           if (parsed !== undefined) config[k] = parsed;
         }
       }
@@ -275,7 +309,7 @@ export function NewJobWizard({
     <Card>
       <CardHeader>
         <CardTitle>{isTrain ? "資料" : "輸入"}</CardTitle>
-        <CardDescription>一次性上傳的檔案只存在於這個任務執行期間；資料來源則由任務容器直接抓取。</CardDescription>
+        <CardDescription>{jobCopy.wizardInputNotice}</CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs value={inputKind} onValueChange={(v) => setInputKind(v as typeof inputKind)}>

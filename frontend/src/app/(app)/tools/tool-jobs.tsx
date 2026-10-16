@@ -44,7 +44,10 @@ export async function ToolJobs({ kind }: { kind?: "preprocess" | "analysis" }) {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <KindChip kind={j.kind} />
-                        <Link href={`/projects/${j.projectSlug}/jobs/${j.id}`} className="font-medium hover:text-brand-ink">
+                        <Link
+                          href={`/projects/${j.projectSlug}/jobs/${j.id}`}
+                          className="font-medium hover:text-brand-ink"
+                        >
                           {j.name}
                         </Link>
                         <span className="font-mono text-xs text-subtle-foreground">#{j.id}</span>
@@ -59,7 +62,7 @@ export async function ToolJobs({ kind }: { kind?: "preprocess" | "analysis" }) {
                       <StatusBadge status={j.status} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {j.status === "running" && j.currentStage ? jobStageLabel[j.currentStage] : j.waitReason ?? "—"}
+                      {j.status === "running" && j.currentStage ? jobStageLabel[j.currentStage] : (j.waitReason ?? "—")}
                       {j.status === "running" ? (
                         <span className="ml-2 font-mono text-xs tabular-nums">{j.progress}%</span>
                       ) : null}

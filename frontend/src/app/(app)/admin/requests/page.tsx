@@ -2,10 +2,11 @@ import { ClipboardCheck } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/features/empty-state";
+import { pageFromParam, pageHref, Pagination } from "@/components/features/pagination";
 import { RequestTable } from "@/components/features/request-table";
 import { TableSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
-import { listProjectRequests } from "@/lib/api";
+import { listProjectRequestsPage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { RequestStatus } from "@/types/domain";
 
@@ -16,12 +17,17 @@ const tabs: { value: "pending" | RequestStatus | "all"; label: string }[] = [
   { value: "all", label: "全部" },
 ];
 
-async function List({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+const PAGE_SIZE = 20;
+
+async function List({ searchParams }: { searchParams: Promise<{ status?: string; page?: string | string[] }> }) {
   const sp = await searchParams;
   const status = (tabs.some((t) => t.value === sp.status) ? sp.status : "pending") as (typeof tabs)[number]["value"];
-  const requests = await listProjectRequests(
-    status === "all" ? undefined : { status: status === "pending" ? ["submitted", "in_review"] : [status] },
-  );
+  const page = pageFromParam(sp.page);
+  const requests = await listProjectRequestsPage({
+    status: status === "all" ? undefined : status === "pending" ? ["submitted", "in_review"] : [status],
+    page,
+    pageSize: PAGE_SIZE,
+  });
   return (
     <div className="space-y-4">
       <div className="flex gap-1 border-b border-border">
@@ -40,11 +46,17 @@ async function List({ searchParams }: { searchParams: Promise<{ status?: string 
           </Link>
         ))}
       </div>
-      {requests.length === 0 ? (
-        <EmptyState icon={ClipboardCheck} title="沒有待審的申請" />
+      {requests.items.length === 0 ? (
+        <EmptyState icon={ClipboardCheck} title={status === "pending" ? "沒有待審的申請" : "沒有符合的申請"} />
       ) : (
-        <RequestTable requests={requests} showApplicant />
+        <RequestTable requests={requests.items} showApplicant />
       )}
+      <Pagination
+        page={requests.page}
+        pageSize={requests.pageSize}
+        total={requests.total}
+        href={(p) => pageHref("/admin/requests", { status }, p)}
+      />
     </div>
   );
 }

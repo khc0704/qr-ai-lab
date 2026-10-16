@@ -10,36 +10,40 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { RelativeTime } from "@/components/features/time";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { dataFormatLabel } from "@/i18n/zh-TW";
+import { dataFormatLabel, jobCopy } from "@/i18n/zh-TW";
 import { getProject, listDataSources } from "@/lib/api";
+import { canProject, projectRole } from "@/lib/roles";
+import { getCurrentUser } from "@/lib/session";
 import { NewDataSourceDialog } from "./new-data-source-dialog";
 import { SourceRowActions } from "./source-row-actions";
 
 async function Sources({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = await getProject(slug);
+  const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
   const sources = await listDataSources(project.slug);
+  const canEdit = canProject(projectRole(project, user), "edit");
   return (
     <>
       <Alert>
         <Info />
-        <AlertDescription>
-          本服務不保存資料，只記錄連線資訊；任務執行時由任務容器直接向你的 MinIO / URL
-          抓取，結束即刪除副本。一次性上傳請在「新建訓練」中進行。
-        </AlertDescription>
+        <AlertDescription>{jobCopy.dataSourceNotice}</AlertDescription>
       </Alert>
       <div className="flex items-center justify-between">
         <span className="font-mono text-xs text-muted-foreground tabular-nums">{sources.length} 個資料來源</span>
-        <NewDataSourceDialog
-          slug={project.slug}
-          trigger={
-            <Button size="sm">
-              <Plus />
-              新增資料來源
-            </Button>
-          }
-        />
+        {canEdit ? (
+          <NewDataSourceDialog
+            slug={project.slug}
+            trigger={
+              <Button size="sm">
+                <Plus />
+                新增資料來源
+              </Button>
+            }
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">檢視者無法新增資料來源</span>
+        )}
       </div>
       {sources.length === 0 ? (
         <EmptyState
@@ -88,7 +92,7 @@ async function Sources({ params }: { params: Promise<{ slug: string }> }) {
                     <UserInline user={s.createdBy} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <SourceRowActions slug={project.slug} id={s.id} name={s.name} />
+                    <SourceRowActions slug={project.slug} id={s.id} name={s.name} canEdit={canEdit} />
                   </TableCell>
                 </TableRow>
               ))}

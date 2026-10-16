@@ -438,6 +438,23 @@ export interface LogLine {
   text: string;
 }
 
+/** GET /jobs/{id}/logs: the tail of the log file plus the SSE cursor to resume from without replaying it. */
+export interface JobLogSnapshot {
+  lines: LogLine[];
+  /** Total lines in the file (the snapshot holds the last `lines.length`). */
+  total: number;
+  /** Id of the last job event already reflected in `lines`; sent as Last-Event-ID when the stream opens. */
+  lastEventId?: string;
+}
+
+/** One page of a paginated list endpoint (`{items,total,page,page_size}`). */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 /** GET /catalog — kept close to the yaml (snake_case keys) because it is configuration, not a record. */
 export interface CatalogFamily {
   label: string;

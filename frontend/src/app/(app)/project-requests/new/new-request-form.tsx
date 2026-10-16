@@ -16,6 +16,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Textarea } from "@/components/ui/textarea";
 import { dataScaleLabel, dataTypeLabel, projectRoleLabel, taskTypeLabel } from "@/i18n/zh-TW";
 import { createProjectRequestAction } from "@/lib/actions";
+import { projectRequestFormSchema } from "@/lib/schemas";
 import { formatMb } from "@/lib/format";
 import type { DataScale, DataType, ProjectRequest, ProjectRole, TaskType } from "@/types/domain";
 
@@ -30,26 +31,7 @@ const sop: Record<DataType, string> = {
   SPECTRUM: "一筆樣本一條光譜。處理方式同序列，切 patch 後做異常偵測或迴歸；小資料 CPU 即可。",
 };
 
-const schema = z.object({
-  title: z.string().min(4, "至少 4 個字").max(200),
-  purpose: z.string().min(20, "請說明目的與背景（至少 20 個字）"),
-  dataType: z.enum(["TABULAR", "IMAGE", "SEQUENCE", "TEXT", "SPECTRUM"]),
-  taskType: z.enum(["classification", "regression", "detection", "segmentation", "anomaly_detection"]),
-  dataScale: z.enum(["tiny", "small", "medium", "large"]),
-  dataDescription: z.string().optional(),
-  requestedGpu: z.number().int().min(0),
-  requestedCpu: z.number().min(1),
-  requestedMemoryMb: z.number().int().min(1024),
-  requestedStorageMb: z.number().int().min(1024),
-  proposedSlug: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9-]{1,62}$/, "小寫英數與連字號，2–63 字")
-    .optional()
-    .or(z.literal("")),
-  members: z.array(
-    z.object({ email: z.string().email("email 格式不正確"), role: z.enum(["maintainer", "member", "viewer"]) }),
-  ),
-});
+const schema = projectRequestFormSchema;
 type Values = z.infer<typeof schema>;
 
 export function NewRequestForm({
@@ -79,7 +61,10 @@ export function NewRequestForm({
       requestedMemoryMb: initial?.requestedMemoryMb ?? 4096,
       requestedStorageMb: initial?.requestedStorageMb ?? 10240,
       proposedSlug: initial?.proposedSlug ?? "",
-      members: (initial?.members ?? []).filter((m) => m.role !== "owner") as { email: string; role: "maintainer" | "member" | "viewer" }[],
+      members: (initial?.members ?? []).filter((m) => m.role !== "owner") as {
+        email: string;
+        role: "maintainer" | "member" | "viewer";
+      }[],
     },
   });
   const members = useFieldArray({ control: form.control, name: "members" });

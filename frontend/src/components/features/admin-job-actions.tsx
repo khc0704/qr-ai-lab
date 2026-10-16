@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { jobCopy } from "@/i18n/zh-TW";
 import { deleteJobAction, restartJobAction, stopJobAction } from "@/lib/actions";
 import type { Job } from "@/types/domain";
 
@@ -96,9 +97,7 @@ export function AdminJobActions({ job }: { job: Job }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>強制中斷任務 #{job.id}？</AlertDialogTitle>
-            <AlertDialogDescription>
-              程序會在 10 秒寬限後停止，任務標記為「已取消」，理由會寫入 log 與稽核紀錄並顯示給任務建立者。
-            </AlertDialogDescription>
+            <AlertDialogDescription>{jobCopy.forceStopDescription}</AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2">
             <Label htmlFor="admin-stop-reason">理由（必填）</Label>

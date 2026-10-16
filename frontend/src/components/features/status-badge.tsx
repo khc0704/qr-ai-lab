@@ -1,8 +1,9 @@
 import { cn } from "@/lib/utils";
 import { issueStatusLabel, jobStatusLabel, projectStatusLabel, requestStatusLabel } from "@/i18n/zh-TW";
-import type { IssueStatus, JobStatus, ProjectStatus, RequestStatus } from "@/types/domain";
+import type { IssueStatus, JobStatus, ProjectStatus, RequestStatus, ZooStatus } from "@/types/domain";
 
-export type AnyStatus = JobStatus | RequestStatus | IssueStatus | ProjectStatus | "pending" | "purged" | "ok" | "error";
+export type AnyStatus =
+  JobStatus | RequestStatus | IssueStatus | ProjectStatus | ZooStatus | "pending" | "purged" | "ok" | "error";
 type Tone = "muted" | "info" | "primary" | "success" | "warning" | "destructive";
 
 /** DESIGN.md §2.5 — the only mapping from status to color. */
@@ -26,6 +27,11 @@ const toneOf: Record<AnyStatus, Tone> = {
   rejected: "destructive",
   error: "destructive",
   in_review: "warning",
+  // model zoo weights
+  present: "success",
+  missing: "muted",
+  mismatch: "destructive",
+  importing: "info",
 };
 
 const labelOf: Record<AnyStatus, string> = {
@@ -37,6 +43,10 @@ const labelOf: Record<AnyStatus, string> = {
   purged: "已清除",
   ok: "正常",
   error: "異常",
+  present: "已就緒",
+  missing: "缺少",
+  mismatch: "sha256 不符",
+  importing: "匯入中",
 };
 
 const toneClasses: Record<Tone, { badge: string; dot: string }> = {
@@ -64,7 +74,7 @@ export function StatusBadge({ status, label, className }: { status: AnyStatus; l
         className={cn(
           "size-1.5 rounded-full",
           t.dot,
-          status === "running" && "animate-pulse-dot motion-reduce:animate-none",
+          (status === "running" || status === "importing") && "animate-pulse-dot motion-reduce:animate-none",
         )}
       />
       {label ?? labelOf[status]}

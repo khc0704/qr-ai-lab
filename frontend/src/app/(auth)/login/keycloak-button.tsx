@@ -5,6 +5,7 @@ import { signIn } from "next-auth/react";
 import { useTransition } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { safeNext } from "@/lib/safe-next";
 
 const errorText: Record<string, string> = {
   Configuration: "Keycloak 設定不完整（AUTH_KEYCLOAK_* / AUTH_SECRET），請聯絡系統管理員。",
@@ -36,7 +37,7 @@ export function KeycloakButton({ next, expired, error }: { next: string; expired
         // on the same origin the callback comes back to, which a server action cannot guarantee behind a proxy.
         onClick={() =>
           startTransition(async () => {
-            await signIn("keycloak", { redirectTo: next.startsWith("/") && !next.startsWith("//") ? next : "/" });
+            await signIn("keycloak", { redirectTo: safeNext(next) });
           })
         }
       >

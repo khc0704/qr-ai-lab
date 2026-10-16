@@ -59,25 +59,50 @@ async function kcLogin(ctx, username) {
 try {
   const ctx = await browser.newContext({ viewport: VIEWPORT, locale: "zh-TW", colorScheme: "light" });
   const page = await kcLogin(ctx, "superadmin");
-  await shot(page, "kc-login", "AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）", { fullPage: false });
+  await shot(
+    page,
+    "kc-login",
+    "AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）",
+    { fullPage: false },
+  );
   await page.getByRole("button", { name: /Keycloak/ }).click();
   await page.waitForURL(/openid-connect\/auth/, { timeout: 30_000 });
   await settle(page);
-  await shot(page, "kc-realm-login", "Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）", { fullPage: false });
+  await shot(
+    page,
+    "kc-realm-login",
+    "Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）",
+    { fullPage: false },
+  );
   await page.selectOption("#username", "superadmin");
   await page.getByRole("button", { name: "登入" }).click();
-  await page.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), { timeout: 60_000 });
+  await page.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), {
+    timeout: 60_000,
+  });
   await settle(page, 1200);
-  await shot(page, "kc-home-superadmin", "回到首頁：Keycloak 的 superadmin realm role 經 KEYCLOAK_ROLE_MAP 對應成系統角色 superadmin；同名的本地帳號被接管（auth_provider=keycloak）");
+  await shot(
+    page,
+    "kc-home-superadmin",
+    "回到首頁：Keycloak 的 superadmin realm role 經 KEYCLOAK_ROLE_MAP 對應成系統角色 superadmin；同名的本地帳號被接管（auth_provider=keycloak）",
+  );
   await page.goto(`${BASE}/admin/users`);
   await settle(page, 1000);
-  await shot(page, "kc-users", "使用者頁：Keycloak 登入過的帳號標記 keycloak；角色仍可在這裡調整（token 沒帶對應 role 時以這裡為準）");
+  await shot(
+    page,
+    "kc-users",
+    "使用者頁：Keycloak 登入過的帳號標記 keycloak；角色仍可在這裡調整（token 沒帶對應 role 時以這裡為準）",
+  );
   await page.getByRole("button", { name: /使用者選單/ }).click();
   await settle(page, 300);
   await page.getByRole("menuitem", { name: "登出" }).click();
   await page.waitForURL(/\/login/, { timeout: 60_000 });
   await settle(page);
-  await shot(page, "kc-logged-out", "登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login", { fullPage: false });
+  await shot(
+    page,
+    "kc-logged-out",
+    "登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login",
+    { fullPage: false },
+  );
   await page.close();
   await ctx.close();
 
@@ -87,9 +112,15 @@ try {
   await p2.waitForURL(/openid-connect\/auth/, { timeout: 30_000 });
   await p2.selectOption("#username", "alice");
   await p2.getByRole("button", { name: "登入" }).click();
-  await p2.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), { timeout: 60_000 });
+  await p2.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), {
+    timeout: 60_000,
+  });
   await settle(p2, 1200);
-  await shot(p2, "kc-home-alice", "第一次登入的新帳號 alice：users 表自動建立；她的 client role qr-admin 對應到 admin（KEYCLOAK_ROLE_MAP=…,qr-admin:admin），所以看得到「管理」選單");
+  await shot(
+    p2,
+    "kc-home-alice",
+    "第一次登入的新帳號 alice：users 表自動建立；她的 client role qr-admin 對應到 admin（KEYCLOAK_ROLE_MAP=…,qr-admin:admin），所以看得到「管理」選單",
+  );
   await p2.goto(`${BASE}/admin`);
   await settle(p2, 1000);
   await shot(p2, "kc-alice-admin", "alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕");

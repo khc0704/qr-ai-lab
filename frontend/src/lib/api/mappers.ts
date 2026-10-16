@@ -25,6 +25,8 @@ import type {
   UsageProject,
   ToolDefaults,
   ToolUpload,
+  JobLogSnapshot,
+  Page,
 } from "@/types/domain";
 
 type J = Record<string, unknown>;
@@ -37,6 +39,21 @@ const isoOpt = (v: unknown): string | undefined => (v ? iso(v) : undefined);
 const num = (v: unknown, d = 0): number => (typeof v === "number" ? v : v == null ? d : Number(v));
 const str = (v: unknown, d = ""): string => (v == null ? d : String(v));
 const opt = <T>(v: unknown): T | undefined => (v == null ? undefined : (v as T));
+/**
+ * Enum-like fields: a value the backend sends is passed through typed as the union (a new state added on the
+ * backend must not silently turn into something else in the UI); only a missing / empty value gets the default.
+ */
+const asEnum = <T extends string>(v: unknown, d: T): T => (typeof v === "string" && v !== "" ? (v as T) : d);
+
+/** `{items,total,page,page_size}` → Page<T> with each item mapped. */
+export function toPage<T>(raw: J, map: (row: J) => T): Page<T> {
+  return {
+    items: ((raw.items as J[]) ?? []).map(map),
+    total: num(raw.total),
+    page: num(raw.page, 1),
+    pageSize: num(raw.page_size, ((raw.items as J[]) ?? []).length || 20),
+  };
+}
 
 export interface UserRead {
   id: number;
@@ -55,6 +72,7 @@ export function toUser(u: UserRead | J): User {
     username: str(x.username),
     email: str(x.email),
     displayName: str(x.display_name) || str(x.username),
+    // least privilege on purpose: an unknown system role must never unlock admin UI
     role: x.role === "superadmin" || x.role === "admin" ? x.role : "user",
     isActive: Boolean(x.is_active),
     lastLoginAt: isoOpt(x.last_login_at),
@@ -73,8 +91,8 @@ export function toProject(p: J): Project {
     description: str(p.description),
     dataType: p.data_type as Project["dataType"],
     taskType: p.task_type as Project["taskType"],
-    status: p.status === "archived" ? "archived" : "active",
-    kind: p.kind === "personal" ? "personal" : "standard",
+    status: asEnum<Project["status"]>(p.status, "active"),
+    kind: asEnum<Project["kind"]>(p.kind, "standard"),
     owner: toUser(p.owner as J),
     gpuLimit: num(p.gpu_limit),
     cpuLimit: num(p.cpu_limit),
@@ -85,7 +103,7 @@ export function toProject(p: J): Project {
     defaultJobTimeoutMinutes: opt<number>(p.default_job_timeout_minutes),
     members: ((p.members as J[]) ?? []).map((m) => ({
       user: toUser(m.user as J),
-      role: m.role as Project["members"][number]["role"],
+      role: asEnum<Project["members"][number]["role"]>(m.role, "viewer"),
       addedAt: iso(m.created_at),
     })),
     createdAt: iso(p.created_at),
@@ -103,7 +121,7 @@ export function toDataSource(d: J): DataSource {
     id: num(d.id),
     projectId: num(d.project_id),
     name: str(d.name),
-    kind: d.kind === "minio" ? "minio" : "url",
+    kind: asEnum<DataSource["kind"]>(d.kind, "url"),
     endpoint: opt<string>(d.endpoint),
     bucket: opt<string>(d.bucket),
     objectPath: opt<string>(d.object_path),
@@ -149,9 +167,9 @@ export function toJob(j: J): Job {
     projectId: num(j.project_id),
     projectSlug: str(j.project_slug),
     projectName: str(j.project_name),
-    kind: (["inference", "preprocess", "analysis"].includes(String(j.kind)) ? j.kind : "train") as Job["kind"],
+    kind: asEnum<Job["kind"]>(j.kind, "train"),
     name: str(j.name),
-    status: j.status as Job["status"],
+    status: asEnum<Job["status"]>(j.status, "queued"),
     queueRank: num(j.queue_rank),
     queuePosition: opt<number>(j.queue_position),
     requestedGpu: num(j.requested_gpu),
@@ -169,7 +187,7 @@ export function toJob(j: J): Job {
     dataSourceId: opt<number>(j.data_source_id),
     artifactId: opt<number>(j.artifact_id),
     input: {
-      kind: (input.kind as Job["input"]["kind"]) ?? "upload",
+      kind: asEnum<Job["input"]["kind"]>(input.kind, "upload"),
       originalFilename: opt<string>(input.original_filename),
       sizeBytes: opt<number>(input.size_bytes),
       dataSourceName: opt<string>(input.data_source_name),
@@ -198,7 +216,7 @@ export function toArtifact(a: J): Artifact {
     jobId: num(a.job_id),
     name: str(a.name),
     version: num(a.version, 1),
-    kind: a.kind as Artifact["kind"],
+    kind: asEnum<Artifact["kind"]>(a.kind, "model"),
     modelFamily: str(a.model_family) as Artifact["modelFamily"],
     framework: str(a.framework),
     path: str(a.path),
@@ -227,9 +245,9 @@ export function toRequest(r: J): ProjectRequest {
     proposedSlug: opt<string>(r.proposed_slug),
     members: ((r.members as J[]) ?? []).map((m) => ({
       email: str(m.email),
-      role: (m.role as ProjectRequest["members"][number]["role"]) ?? "member",
+      role: asEnum<ProjectRequest["members"][number]["role"]>(m.role, "member"),
     })),
-    status: r.status as ProjectRequest["status"],
+    status: asEnum<ProjectRequest["status"]>(r.status, "submitted"),
     reviewer: r.reviewer ? toUser(r.reviewer as J) : undefined,
     reviewNote: opt<string>(r.review_note),
     reviewedAt: isoOpt(r.reviewed_at),
@@ -242,10 +260,10 @@ export function toRequest(r: J): ProjectRequest {
 export function toIssue(i: J): Issue {
   return {
     id: num(i.id),
-    type: i.type as Issue["type"],
+    type: asEnum<Issue["type"]>(i.type, "question"),
     title: str(i.title),
     body: str(i.body),
-    status: i.status === "closed" ? "closed" : "open",
+    status: asEnum<Issue["status"]>(i.status, "open"),
     author: toUser(i.author as J),
     assignee: i.assignee ? toUser(i.assignee as J) : undefined,
     projectSlug: opt<string>(i.project_slug),
@@ -262,7 +280,7 @@ export function toComment(c: J): Comment {
     targetType: c.target_type as Comment["targetType"],
     targetId: num(c.target_id),
     author: c.author ? toUser(c.author as J) : undefined,
-    kind: c.kind === "system" ? "system" : "comment",
+    kind: asEnum<Comment["kind"]>(c.kind, "comment"),
     body: str(c.body),
     createdAt: iso(c.created_at),
   };
@@ -383,7 +401,7 @@ export function toAudit(l: J): AuditLog {
 export function toGpuReset(r: J): GpuResetResult {
   return {
     index: num(r.index),
-    mode: (r.mode as GpuResetResult["mode"]) ?? "jobs",
+    mode: asEnum<GpuResetResult["mode"]>(r.mode, "jobs"),
     stoppedJobs: ((r.stopped_jobs as number[]) ?? []).map(Number),
     killedPids: ((r.killed_pids as number[]) ?? []).map(Number),
     skippedPids: ((r.skipped_pids as number[]) ?? []).map(Number),
@@ -536,4 +554,14 @@ export function toLogLines(lines: string[], offset: number): LogLine[] {
     const level = (m?.[2] === "WARNING" ? "WARN" : (m?.[2] ?? "INFO")) as LogLine["level"];
     return { n: offset + i + 1, ts: m ? iso(m[1]) : "", level, text: m ? m[3] : raw };
   });
+}
+
+/** GET /jobs/{id}/logs → lines + the SSE cursor (`last_event_id`, null when the job has not emitted events). */
+export function toLogSnapshot(r: J): JobLogSnapshot {
+  const lines = Array.isArray(r.lines) ? (r.lines as string[]) : [];
+  return {
+    lines: toLogLines(lines, num(r.offset)),
+    total: num(r.total, lines.length),
+    lastEventId: typeof r.last_event_id === "string" && r.last_event_id ? r.last_event_id : undefined,
+  };
 }

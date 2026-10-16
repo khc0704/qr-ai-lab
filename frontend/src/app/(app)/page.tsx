@@ -17,15 +17,17 @@ import { getCurrentUser, isAdmin } from "@/lib/session";
 export default async function HomePage() {
   const user = await getCurrentUser();
   const admin = isAdmin(user);
-  const [projects, jobs, requests, capacity, overview] = await Promise.all([
+  const [projects, jobs, runningJobs, requests, capacity, overview] = await Promise.all([
     listProjects(),
     listJobs({ limit: 6 }),
+    // counted separately: the six newest jobs are not a sample of what is running right now
+    listJobs({ status: ["running"], limit: 100 }),
     listProjectRequests({ applicantId: user.id }),
     getCapacity(),
     admin ? getAdminOverview() : null,
   ]);
   const { pool, allocated } = capacity;
-  const running = jobs.filter((j) => j.status === "running").length;
+  const running = runningJobs.length;
   const storage = projects.reduce((s, p) => s + p.storageUsedBytes, 0);
   const freeGpu = pool.gpuIndices.length - allocated.gpu;
 

@@ -15,13 +15,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { issueTypeLabel } from "@/i18n/zh-TW";
 import { createIssueAction } from "@/lib/actions";
+import { issueFormSchema } from "@/lib/schemas";
 
-const schema = z.object({
-  type: z.enum(["question", "bug", "feature"]),
-  title: z.string().min(4, "至少 4 個字").max(200),
-  body: z.string().min(10, "請多描述一些（至少 10 個字）"),
-  projectSlug: z.string().optional(),
-});
+const schema = issueFormSchema;
 
 export function NewIssueForm({ projects }: { projects: { slug: string; name: string }[] }) {
   const router = useRouter();

@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { common } from "@/i18n/zh-TW";
 import { AUTH_MODE } from "@/lib/backend";
+import { safeNext } from "@/lib/safe-next";
 import { KeycloakButton } from "./keycloak-button";
 import { LoginForm } from "./login-form";
 
@@ -18,7 +19,7 @@ async function LoginFormWithNext({
   searchParams: Promise<{ next?: string; reason?: string; error?: string }>;
 }) {
   const sp = await searchParams;
-  const next = sp.next ?? "/";
+  const next = safeNext(sp.next);
   const expired = sp.reason === "expired";
   // Everything that depends on AUTH_MODE renders here (dynamic, request time) so the prerendered shell never
   // bakes the build machine's mode in.

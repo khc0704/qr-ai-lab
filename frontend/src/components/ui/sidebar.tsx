@@ -146,7 +146,7 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
 }) {
-  const { state, openMobile, setOpenMobile } = useSidebar()
+  const { state, openMobile, setOpenMobile } = useSidebar();
   // Read the breakpoint here (not from the provider's context): this component lives in a later-hydrated
   // Suspense boundary, and useSyncExternalStore only guarantees the server snapshot during *its own*
   // hydration. Taking the provider's already-updated value would render the mobile Sheet against desktop HTML.

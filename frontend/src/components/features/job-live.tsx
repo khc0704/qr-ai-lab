@@ -1,38 +1,20 @@
 "use client";
 
-// Live job view: one EventSource per page (proxied through /api/stream/jobs/{id}) feeds the progress
-// card and the log viewer; status / metric / end events trigger a throttled router.refresh() so the
-// server-rendered tabs (metrics, leaderboard, artifacts, results) catch up without a manual reload.
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+// Live job views built on useJobStream (one EventSource per mounted view, proxied through /api/stream/jobs/{id}):
+//   - JobLive: the project job page (progress card + tabs: overview / log / results / config);
+//   - JobLogLive: just the live LogViewer, used by the admin queue drawer so both share the same stream path.
 import { LogViewer } from "@/components/features/log-viewer";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useJobStream } from "@/hooks/use-job-stream";
 import { jobStageLabel } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
-import type { Job, JobStage, JobStatus, LogLine } from "@/types/domain";
-
-const ACTIVE: JobStatus[] = ["queued", "scheduled", "running"];
-const REFRESH_MS = 1500;
-
-interface LiveState {
-  status: JobStatus;
-  progress: number;
-  stage?: JobStage;
-  message?: string;
-  metrics: Record<string, number>;
-}
-
-function fromJob(job: Job): LiveState {
-  const metrics: Record<string, number> = {};
-  for (const [k, v] of Object.entries(job.metrics ?? {})) if (typeof v === "number") metrics[k] = v;
-  return { status: job.status, progress: job.progress, stage: job.currentStage, metrics };
-}
+import type { Job, JobLogSnapshot } from "@/types/domain";
 
 export function JobLive({
   job,
-  initialLines,
+  log,
   overview,
   results,
   resultsLabel,
@@ -40,100 +22,14 @@ export function JobLive({
   defaultTab = "overview",
 }: {
   job: Job;
-  initialLines: LogLine[];
+  log: JobLogSnapshot;
   overview: React.ReactNode;
   results: React.ReactNode;
   resultsLabel: string;
   config: React.ReactNode;
   defaultTab?: string;
 }) {
-  const router = useRouter();
-  const [lines, setLines] = useState(initialLines);
-  const [live, setLive] = useState(() => fromJob(job));
-  // Server props change after router.refresh(): adopt the authoritative snapshot (derived state).
-  const [prev, setPrev] = useState({ job, initialLines });
-  if (prev.job !== job || prev.initialLines !== initialLines) {
-    setPrev({ job, initialLines });
-    setLines(initialLines);
-    setLive(fromJob(job));
-  }
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const active = ACTIVE.includes(job.status);
-
-  useEffect(() => {
-    if (!active) return;
-    const es = new EventSource(`/api/stream/jobs/${job.id}`);
-    const scheduleRefresh = () => {
-      if (refreshTimer.current) return;
-      refreshTimer.current = setTimeout(() => {
-        refreshTimer.current = null;
-        router.refresh();
-      }, REFRESH_MS);
-    };
-    const parse = (e: MessageEvent) => {
-      try {
-        return JSON.parse(e.data) as Record<string, unknown>;
-      } catch {
-        return {};
-      }
-    };
-    es.addEventListener("log", (e) => {
-      const d = parse(e as MessageEvent);
-      const level = String(d.level ?? "INFO").toUpperCase();
-      setLines((ls) => [
-        ...ls,
-        {
-          n: (ls[ls.length - 1]?.n ?? 0) + 1,
-          ts: new Date().toISOString(),
-          level: (level === "WARNING" ? "WARN" : level) as LogLine["level"],
-          text: String(d.text ?? ""),
-        },
-      ]);
-    });
-    es.addEventListener("status", (e) => {
-      const d = parse(e as MessageEvent);
-      setLive((s) => ({ ...s, status: (d.status as JobStatus) ?? s.status }));
-      scheduleRefresh();
-    });
-    es.addEventListener("progress", (e) => {
-      const d = parse(e as MessageEvent);
-      setLive((s) => ({
-        ...s,
-        progress: typeof d.progress === "number" ? Math.round(d.progress) : s.progress,
-        stage: (d.stage as JobStage | undefined) ?? s.stage,
-        message: typeof d.message === "string" ? d.message : s.message,
-        status: d.status === "running" ? "running" : s.status,
-      }));
-    });
-    es.addEventListener("metric", (e) => {
-      const d = parse(e as MessageEvent);
-      const m = (d.metrics as Record<string, number> | undefined) ?? {};
-      setLive((s) => ({
-        ...s,
-        metrics: {
-          ...s.metrics,
-          ...m,
-          ...(typeof d.trial === "number" ? { trial: d.trial } : {}),
-          ...(typeof d.epoch === "number" ? { epoch: d.epoch } : {}),
-        },
-      }));
-      scheduleRefresh();
-    });
-    es.addEventListener("end", (e) => {
-      const d = parse(e as MessageEvent);
-      setLive((s) => ({ ...s, status: (d.status as JobStatus) ?? s.status }));
-      es.close();
-      scheduleRefresh();
-    });
-    return () => {
-      es.close();
-      if (refreshTimer.current) {
-        clearTimeout(refreshTimer.current);
-        refreshTimer.current = null;
-      }
-    };
-  }, [active, job.id, router]);
-
+  const { lines, dropped, live, connection } = useJobStream(job, log);
   const search = job.config?.search as { max_trials?: number } | undefined;
   const best = Object.entries(live.metrics).filter(([k]) => k.startsWith("best_"));
   const running = live.status === "running" || live.status === "scheduled";
@@ -173,6 +69,8 @@ export function JobLive({
       <TabsContent value="log" className="pt-4">
         <LogViewer
           lines={lines}
+          dropped={dropped}
+          connection={connection}
           status={live.status}
           title="job.log"
           maxHeight="max-h-[640px]"
@@ -186,5 +84,21 @@ export function JobLive({
         {config}
       </TabsContent>
     </Tabs>
+  );
+}
+
+/** Live log only (admin queue drawer). Mount it while the drawer is open; the stream closes on unmount. */
+export function JobLogLive({ job, log, maxHeight }: { job: Job; log: JobLogSnapshot; maxHeight?: string }) {
+  const { lines, dropped, live, connection } = useJobStream(job, log);
+  return (
+    <LogViewer
+      lines={lines}
+      dropped={dropped}
+      connection={connection}
+      status={live.status}
+      title="job.log"
+      maxHeight={maxHeight}
+      downloadHref={`/api/download/jobs/${job.id}/logs/download`}
+    />
   );
 }

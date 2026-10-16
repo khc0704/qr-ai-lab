@@ -22,19 +22,23 @@ export function ModelRowActions({
   name,
   isDefault,
   slug,
+  canSetDefault = true,
   canDelete = true,
 }: {
   id: number;
   name: string;
   isDefault: boolean;
   slug: string;
+  /** Project role `edit` (member+). */
+  canSetDefault?: boolean;
+  /** Project role `manage` (maintainer+): the backend requires maintainer to delete artifacts. */
   canDelete?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   return (
     <div className="flex justify-end gap-1">
-      {!isDefault ? (
+      {!isDefault && canSetDefault ? (
         <Button
           variant="ghost"
           size="sm"

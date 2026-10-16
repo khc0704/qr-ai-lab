@@ -213,6 +213,56 @@ export const routeLabel: Record<string, string> = {
   new: "新增",
 };
 
+/** Job lifecycle copy. Jobs are host processes (trainer venv subprocesses), never containers. */
+export const jobCopy = {
+  cancelRemovedFromQueue: "已從佇列移除",
+  cancelRequested: "已送出取消請求，程序將在 10 秒內停止",
+  cancelRunningDescription: "執行中的程序會被停止，已產生的指標會保留在 log，但不會產生產物。",
+  cancelQueuedDescription: "任務會從佇列移除，可以之後重新建立。",
+  forceStopDescription: "程序會在 10 秒寬限後停止，任務標記為「已取消」，理由會寫入 log 與稽核紀錄並顯示給任務建立者。",
+  wizardInputNotice: "一次性上傳的檔案只存在於這個任務執行期間；資料來源則由任務程序直接抓取。",
+  dataSourceNotice:
+    "本服務不保存資料，只記錄連線資訊；任務執行時由任務程序直接向你的 MinIO / URL 抓取，結束即刪除副本。一次性上傳請在「新建訓練」中進行。",
+  dataSourceCredentials: "憑證會加密儲存，只在任務程序內使用，不會顯示給任何人。",
+  noLogYet: "尚無 log。任務排程後會在此即時顯示。",
+  streaming: "即時串流中…",
+  reconnecting: "連線中斷，重新連線中…",
+  logTruncated: (n: number) => `畫面只保留最後 ${n} 行，更早的內容請下載完整 log。`,
+  /** AutoML runs that exported the best-so-far model before finishing (`result.stopped`). */
+  stoppedDeadline: "搜尋因逾時提前結束，已匯出目前最佳模型",
+  stoppedCancelled: "取消時已匯出目前最佳模型",
+} as const;
+
+export const analysisCopy = {
+  insufficient: "樣本不足",
+  permutationSkipped: "未計算",
+} as const;
+
+export const pagination = {
+  previous: "上一頁",
+  next: "下一頁",
+  summary: (page: number, pages: number, total: number) => `第 ${page} / ${pages} 頁 · 共 ${total} 筆`,
+} as const;
+
+export const errorCopy = {
+  title: "這個頁面出了點問題",
+  description: "資料暫時載入不了。先重試一次；若持續發生，請到討論區回報並附上下面的錯誤代碼。",
+  retry: "重試",
+  home: "回首頁",
+  digest: "錯誤代碼",
+  globalTitle: "應用程式發生錯誤",
+  globalDescription: "整個頁面無法載入。請重新整理；若持續發生，請聯絡系統管理員。",
+  authTitle: "登入頁面發生錯誤",
+  authDescription: "請重試；若持續發生，請聯絡系統管理員確認認證設定。",
+} as const;
+
+export const uploadCopy = {
+  tooLarge: (limit: string, actual: string) => `檔案太大：${actual}，上限 ${limit}`,
+  failed: (reason: string) => `上傳失敗：${reason}`,
+  rejectedByServer: (status: number) =>
+    status === 413 ? "檔案超過伺服器允許的大小" : status === 401 ? "登入已過期，請重新登入" : `HTTP ${status}`,
+} as const;
+
 export const common = {
   appName: "QR AI Lab",
   search: "搜尋",
