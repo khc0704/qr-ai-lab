@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -97,8 +98,10 @@ class YoloTrainer(BaseTrainer):
         def on_epoch_end(trainer) -> None:
             m = {k.split("/")[-1]: float(v) for k, v in (trainer.metrics or {}).items()}
             mapped = _map_yolo_metrics(m, self.task)
-            ctx.epoch(int(trainer.epoch) + 1, mapped)
-            ctx.progress((int(trainer.epoch) + 1) / epochs, "training")
+            e = int(trainer.epoch) + 1
+            info(f"epoch {e}/{epochs} " + " ".join(f"{k}={v:.4f}" for k, v in (mapped or m).items()))
+            ctx.epoch(e, mapped)
+            ctx.progress(e / epochs, "training")
 
         model.add_callback("on_fit_epoch_end", on_epoch_end)
         kwargs: dict[str, Any] = {
@@ -116,9 +119,10 @@ class YoloTrainer(BaseTrainer):
             "exist_ok": True,
             "pretrained": bool(self.params.get("pretrained", True)),
             "plots": False,
-            "verbose": True,
+            "verbose": False,  # per-epoch lines come from on_epoch_end; YOLO_VERBOSE=false silences its bars
             "seed": int(self.params.get("seed", 42)),
-            "amp": ctx.device == "cuda",
+            # AMP off unless asked (config `amp: true`): ultralytics' AMP check wants to download a checkpoint
+            "amp": bool(self.params.get("amp", False)) and ctx.device == "cuda",
         }
         try:
             results = model.train(**kwargs)
@@ -789,6 +793,7 @@ class DinoPatchCoreInferencer(BaseInferencer):
         rows = []
         heat_dir = out / "heatmaps"
         save_heat = bool(options.get("save_heatmaps", True))
+        seen: set[str] = set()
         for i, s, m in zip(ids, scores, maps, strict=True):
             hot = int(m.argmax())
             row = {
@@ -799,7 +804,7 @@ class DinoPatchCoreInferencer(BaseInferencer):
                 "hot_patch_col": hot % grid,
             }
             if save_heat:
-                row["heatmap"] = _save_heatmap(heat_dir, i, m.reshape(grid, grid), threshold)
+                row["heatmap"] = _save_heatmap(heat_dir, _heatmap_name(i, seen), m.reshape(grid, grid), threshold)
             rows.append(row)
         extra = (
             [ArtifactOut(name="heatmaps", kind="report", path="output/heatmaps", framework="torch")]
@@ -820,13 +825,26 @@ class DinoPatchCoreInferencer(BaseInferencer):
         )
 
 
-def _save_heatmap(heat_dir: Path, image_id: str, grid: np.ndarray, threshold: float) -> str:
+def _heatmap_name(image_id: Any, seen: set[str]) -> str:
+    """Heatmap file name from the image's relative path (``a/x.jpg`` → ``a__x.png``) so images with the same
+    base name in different folders do not overwrite each other; ``seen`` breaks any remaining tie."""
+    p = PurePosixPath(str(image_id).replace("\\", "/"))
+    rel = (p.with_suffix("") if p.name else p).as_posix().strip("/")
+    flat = re.sub(r"[^\w.\-]+", "_", rel.replace("/", "__")).strip("._") or "image"
+    name, k = f"{flat}.png", 1
+    while name in seen:
+        k += 1
+        name = f"{flat}_{k}.png"
+    seen.add(name)
+    return name
+
+
+def _save_heatmap(heat_dir: Path, name: str, grid: np.ndarray, threshold: float) -> str:
     from PIL import Image
 
     heat_dir.mkdir(parents=True, exist_ok=True)
     norm = np.clip(grid / max(threshold * 1.5, 1e-6), 0, 1)
     img = Image.fromarray((norm * 255).astype(np.uint8), mode="L").resize((224, 224), Image.BILINEAR)
-    name = Path(image_id).with_suffix("").name + ".png"
     img.save(heat_dir / name)
     return f"heatmaps/{name}"
 

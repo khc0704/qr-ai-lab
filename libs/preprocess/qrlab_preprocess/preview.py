@@ -21,6 +21,10 @@ MAX_IMAGES = 8
 MAX_ROWS_FOR_STATS = 5000
 MAX_CURVE_POINTS = 512
 THUMB = 256
+# zip previews run in the API process: bound what one archive can make it read / decode
+MAX_ZIP_ENTRY_BYTES = 64 * 1024 * 1024  # uncompressed size of one image entry
+MAX_ZIP_RATIO = 100  # uncompressed / compressed above this (for entries > 1 MB) is a zip bomb
+MAX_ZIP_ENTRIES_SCANNED = 20_000  # directory entries looked at while picking the sample
 
 
 def run_preview(
@@ -110,26 +114,52 @@ def _read_sequences(
     return np.stack(wins), ids
 
 
+def check_zip_entry(info: zipfile.ZipInfo) -> None:
+    """Refuse entries that would make the reader decode far more than the archive holds."""
+    if info.file_size > MAX_ZIP_ENTRY_BYTES:
+        raise ValueError(
+            f"zip 內的 {info.filename} 解壓後 {info.file_size / 2**20:.0f} MB，"
+            f"超過預覽上限 {MAX_ZIP_ENTRY_BYTES // 2**20} MB"
+        )
+    if info.file_size > 2**20 and info.file_size > MAX_ZIP_RATIO * max(1, info.compress_size):
+        raise ValueError(f"zip 內的 {info.filename} 壓縮比超過 {MAX_ZIP_RATIO} 倍，疑似 zip bomb，已拒絕")
+
+
+def read_zip_entry(z: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    """Read one entry with a hard byte cap (the header can lie about ``file_size``)."""
+    check_zip_entry(info)
+    with z.open(info) as fh:
+        data = fh.read(MAX_ZIP_ENTRY_BYTES + 1)
+    if len(data) > MAX_ZIP_ENTRY_BYTES:
+        raise ValueError(f"zip 內的 {info.filename} 超過預覽上限 {MAX_ZIP_ENTRY_BYTES // 2**20} MB")
+    return data
+
+
 def _read_images(path: Path, n: int) -> tuple[list[Image.Image], list[str]]:
     images, ids = [], []
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as z:
-            names = [m for m in z.namelist() if m.lower().endswith(IMAGE_EXT) and not Path(m).name.startswith(".")]
+            infos = [
+                i
+                for i in z.infolist()[:MAX_ZIP_ENTRIES_SCANNED]
+                if i.filename.lower().endswith(IMAGE_EXT)
+                and not Path(i.filename).name.startswith(".")
+                and not i.is_dir()
+            ]
             # spread the sample across folders (classes)
-            by_dir: dict[str, list[str]] = {}
-            for m in names:
-                by_dir.setdefault(str(Path(m).parent), []).append(m)
-            picked: list[str] = []
+            by_dir: dict[str, list[zipfile.ZipInfo]] = {}
+            for i in infos:
+                by_dir.setdefault(str(Path(i.filename).parent), []).append(i)
+            picked: list[zipfile.ZipInfo] = []
             while len(picked) < n and any(by_dir.values()):
                 for d in list(by_dir):
                     if by_dir[d] and len(picked) < n:
                         picked.append(by_dir[d].pop(0))
-            for m in picked:
-                with z.open(m) as fh:
-                    im = Image.open(io.BytesIO(fh.read()))
-                    im.load()
-                    images.append(im)
-                    ids.append(m)
+            for info in picked:
+                im = Image.open(io.BytesIO(read_zip_entry(z, info)))
+                im.load()
+                images.append(im)
+                ids.append(info.filename)
     elif path.is_dir():
         for p in sorted(q for q in path.rglob("*") if q.suffix.lower() in IMAGE_EXT)[:n]:
             images.append(Image.open(p))

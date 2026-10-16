@@ -21,6 +21,9 @@ from trainer.data.tabular import find_table, read_table, split_xy
 from trainer.data.text import read_text_table, split_text
 from trainer.log import info
 
+IMAGE_FIT_SAMPLE = 256  # fitted image ops (alignment reference …) learn from at most this many images
+IMAGE_BATCH = 64  # images decoded in memory at once while the tree is written through the pipeline
+
 
 @dataclass
 class Dataset:
@@ -120,8 +123,16 @@ class _Pre:
     def array(self, X):
         return self._run(X)
 
-    def images(self, images):
-        return self._run(images)
+    def image_stream(self, items):
+        """Yield (key, image) for an iterable of (key, PIL image): fit on a bounded sample, then stream."""
+        from qrlab_preprocess.process import process_image_stream
+
+        if self.pipe is None:
+            yield from items
+            return
+        yield from process_image_stream(
+            self.pipe, items, fit=not self.replay, fit_sample=IMAGE_FIT_SAMPLE, batch=IMAGE_BATCH
+        )
 
     def state(self):
         return self.pipe.to_json() if self.pipe else None
@@ -203,8 +214,9 @@ def _load_images(ds: Dataset, input_dir: Path, work_dir: Path, pre: _Pre) -> Non
 
 
 def _preprocess_image_tree(root: Path, target: Path, pre: _Pre) -> Path:
-    """Copy the dataset tree (labels, data.yaml …) and write every image through the pipeline. Fitted ops see
-    the whole image set at once (e.g. alignment reference = first image)."""
+    """Copy the dataset tree (labels, data.yaml …) and write every image through the pipeline. Fitted ops learn
+    from the first ``IMAGE_FIT_SAMPLE`` images (e.g. alignment reference = first image); the rest streams
+    through in batches so a large set never sits decoded in memory at once."""
     import shutil
 
     from PIL import Image
@@ -213,21 +225,25 @@ def _preprocess_image_tree(root: Path, target: Path, pre: _Pre) -> Path:
         shutil.rmtree(target)
     shutil.copytree(root, target, ignore=shutil.ignore_patterns(*[f"*{e}" for e in IMAGE_EXT]))
     paths = all_images(root)
-    images = []
-    for p in paths:
-        im = Image.open(p)
-        im.load()
-        images.append(im)
-    out = pre.images(images)
-    for p, im in zip(paths, out, strict=True):
+
+    def decoded():
+        for p in paths:
+            im = Image.open(p)
+            im.load()
+            yield p, im
+
+    n = 0
+    for p, im in pre.image_stream(decoded()):
         dst = target / p.relative_to(root)
         dst.parent.mkdir(parents=True, exist_ok=True)
         if im.mode not in ("L", "RGB"):
             im = im.convert("RGB")
         im.save(dst)
+        n += 1
     yaml_path = find_data_yaml(target)
     if yaml_path is not None:
         text = yaml_path.read_text(encoding="utf-8")
         yaml_path.write_text(text.replace(str(root), str(target)), encoding="utf-8")
-    info(f"preprocess: {len(paths)} images written to {target.name}/")
+    fitted = "" if pre.replay else f" (fitted on the first {min(n, IMAGE_FIT_SAMPLE)}, batches of {IMAGE_BATCH})"
+    info(f"preprocess: {n} images written to {target.name}/{fitted}")
     return target

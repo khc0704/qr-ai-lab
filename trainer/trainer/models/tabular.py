@@ -89,6 +89,17 @@ class TabularTrainer(BaseTrainer):
         if self.family == "tabular.xgboost":
             import xgboost as xgb
 
+            device = "cpu"
+            if self.ctx.device == "cuda":
+                if self.ctx.gpu_memory_mb:
+                    # XGBoost's CUDA allocator ignores torch's per-process memory fraction: on a shared GPU it
+                    # would grow into the other job's share, so the tree method stays on the CPU grant.
+                    info(
+                        f"xgboost: GPU is shared (JOB_GPU_MEMORY_MB={self.ctx.gpu_memory_mb}) → "
+                        f"device=cpu, n_jobs={n_jobs}"
+                    )
+                else:
+                    device = "cuda"
             kw = {
                 "n_estimators": int(p.get("n_estimators", 500)),
                 "learning_rate": float(p.get("learning_rate", 0.05)),
@@ -99,7 +110,7 @@ class TabularTrainer(BaseTrainer):
                 "reg_lambda": float(p.get("reg_lambda", 1.0)),
                 "n_jobs": n_jobs,
                 "tree_method": "hist",
-                "device": "cuda" if self.ctx.device == "cuda" else "cpu",
+                "device": device,
                 "random_state": seed,
             }
             if task == "classification":

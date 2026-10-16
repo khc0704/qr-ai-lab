@@ -86,23 +86,63 @@ class Truncate(_TextMap):
         return s.str.slice(0, self.p["max_chars"])
 
 
+MAX_PATTERN_LEN = 200
+
+
+def _repeat_depth(nodes, depth: int = 0) -> int:
+    """Deepest nesting of repeat operators in a parsed pattern (``(a+)+`` → 2, ``a+b*`` → 1)."""
+    parser = re._parser  # the stdlib's own parser; the tree is what re.compile uses
+    deepest = depth
+    for op, av in nodes:
+        if op in (parser.MAX_REPEAT, parser.MIN_REPEAT, parser.POSSESSIVE_REPEAT):
+            _lo, hi, body = av
+            inner = 1 if (hi == parser.MAXREPEAT or hi > 1) else 0
+            deepest = max(deepest, _repeat_depth(body, depth + inner))
+        elif op == parser.SUBPATTERN:
+            deepest = max(deepest, _repeat_depth(av[3], depth))
+        elif op == parser.BRANCH:
+            for branch in av[1]:
+                deepest = max(deepest, _repeat_depth(branch, depth))
+        elif op in (parser.ASSERT, parser.ASSERT_NOT):
+            deepest = max(deepest, _repeat_depth(av[1], depth))
+        elif op == parser.ATOMIC_GROUP:
+            deepest = max(deepest, _repeat_depth(av, depth))
+    return deepest
+
+
+def check_regex(pattern: str) -> None:
+    """Reject patterns that can backtrack catastrophically: a repeated group that itself contains a repeat,
+    e.g. ``(a+)+``, ``(a*)*``, ``(a|b+)*``, ``(a{2,})+``. Previews run in the API process."""
+    if len(pattern) > MAX_PATTERN_LEN:
+        raise ValueError(f"pattern 太長（最多 {MAX_PATTERN_LEN} 字元）")
+    try:
+        tree = re._parser.parse(pattern)
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"pattern 無效：{e}") from e
+    if _repeat_depth(tree) > 1:
+        raise ValueError("pattern 含巢狀量詞（例如 (a+)+、(a*)*、(a{2,})+），可能造成災難性回溯，請改寫")
+
+
 @register
 class ReplaceRegex(_TextMap):
     id = "text.replace_regex"
     label = "正規表達式取代"
+    description = "Python 正規表達式；為避免災難性回溯，不接受巢狀量詞（如 (a+)+、(a*)*、(a{2,})+）。"
     params = (
-        Param("pattern", "樣式", "str", default=""),
+        Param(
+            "pattern",
+            "樣式",
+            "str",
+            default="",
+            help=f"Python 正規表達式，最多 {MAX_PATTERN_LEN} 字元；不接受巢狀量詞（(a+)+、(a*)*、(a{{2,}})+ 等）",
+        ),
         Param("replacement", "取代為", "str", default=""),
     )
 
     def __init__(self, **params) -> None:
         super().__init__(**params)
-        if len(self.p["pattern"]) > 200:
-            raise ValueError("pattern 太長")
-        try:
-            re.compile(self.p["pattern"])
-        except re.error as e:
-            raise ValueError(f"pattern 無效：{e}") from e
+        check_regex(self.p["pattern"])
 
     def transform_text(self, s: pd.Series) -> pd.Series:
         return s.str.replace(self.p["pattern"], self.p["replacement"], regex=True)

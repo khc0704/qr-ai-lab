@@ -8,6 +8,7 @@ backend/app/catalog/model_catalog.yaml.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,11 @@ class Pruned(Exception):
     """AutoML decided this trial is not worth finishing."""
 
 
+class TrialTimeout(Pruned):
+    """The job's time budget ran out mid-trial (``Context.deadline`` passed). AutoML records the trial as
+    pruned (optuna ``TrialPruned`` semantics) and stops with the best model so far."""
+
+
 @dataclass
 class Context:
     """What a trainer may use: resources, scratch dir, zoo resolver, progress / epoch callbacks."""
@@ -31,14 +37,22 @@ class Context:
     work_dir: Path
     cpu: int = 1
     gpu: int = 0
+    gpu_memory_mb: int | None = None  # set when the GPU is shared (JOB_GPU_MEMORY_MB); None = exclusive
     zoo: Callable[[str], Path] | None = None  # weight id → local path (raises if missing)
     on_progress: Callable[[float, str | None], None] | None = None
     on_epoch: Callable[[int, dict[str, float]], None] | None = None
     cancelled: bool = False
+    deadline: float | None = None  # time.monotonic() after which epoch() / progress() raise TrialTimeout
 
     def check(self) -> None:
         if self.cancelled:
             raise Cancelled()
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            raise TrialTimeout()
+
+    def remaining(self) -> float | None:
+        """Seconds left before the deadline (None = no deadline)."""
+        return None if self.deadline is None else max(0.0, self.deadline - time.monotonic())
 
     def progress(self, frac: float, stage: str | None = None) -> None:
         self.check()
@@ -46,7 +60,7 @@ class Context:
             self.on_progress(max(0.0, min(1.0, frac)), stage)
 
     def epoch(self, epoch: int, metrics: dict[str, float]) -> None:
-        """Report per-epoch metrics; AutoML may raise Pruned from here."""
+        """Report per-epoch metrics; AutoML may raise Pruned / TrialTimeout from here."""
         self.check()
         if self.on_epoch:
             self.on_epoch(epoch, metrics)
@@ -130,10 +144,31 @@ class BaseTrainer:
             "params": _jsonable(self.params),
             "spec": {k: v for k, v in ds.spec.items() if k not in ("columns",)},
             "n_train": len(ds),
-            "preprocess": ds.preprocess,
+            "preprocess": preprocess_summary(ds.preprocess),
             **self.meta,
             **extra,
         }
+
+
+PREPROCESS_STATE_FILE = "preprocess.json"
+
+
+def preprocess_summary(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """What goes into artifact metadata (returned by every artifact list): op ids + params only. The fitted
+    state (alignment reference images, MSC references …) stays in ``model/preprocess.json`` next to the model;
+    ``has_state`` tells the inference runtime that the file is required."""
+    if not steps:
+        return None
+    return [
+        {"op": s.get("op"), "params": dict(s.get("params") or {}), "has_state": bool(s.get("state"))} for s in steps
+    ]
+
+
+def preprocess_state_is_complete(steps: list[dict[str, Any]] | None) -> bool:
+    """True when ``steps`` can be replayed as-is (full state present, or nothing was ever fitted)."""
+    if not steps:
+        return True
+    return all("state" in s or not s.get("has_state") for s in steps)
 
 
 class BaseInferencer:

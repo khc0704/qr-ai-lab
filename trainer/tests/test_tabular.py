@@ -87,3 +87,22 @@ def test_text_linear_tfidf(tmp_path, ctx):
         Dataset("TEXT", "classification", {}, X=pd.Series(["溫度 警報", "保養 正常"])), "predict", {}, tmp_path
     )
     assert [r["prediction"] for r in res.rows] == ["alarm", "info"]
+
+
+def test_xgboost_falls_back_to_cpu_on_a_shared_gpu(tmp_path):
+    from trainer.models.base import Context
+
+    class CudaContext(Context):
+        @property
+        def device(self) -> str:
+            return "cuda"
+
+    exclusive = CudaContext(work_dir=tmp_path, cpu=3, gpu=1)
+    shared = CudaContext(work_dir=tmp_path, cpu=3, gpu=1, gpu_memory_mb=4096)
+    est = registry.create_trainer("tabular.xgboost", "regression", {}, exclusive)._estimator()
+    assert est.get_params()["device"] == "cuda"
+    est = registry.create_trainer("tabular.xgboost", "regression", {}, shared)._estimator()
+    assert est.get_params()["device"] == "cpu" and est.get_params()["n_jobs"] == 3
+    cpu_only = Context(work_dir=tmp_path, cpu=2, gpu=0)
+    est = registry.create_trainer("tabular.xgboost", "regression", {}, cpu_only)._estimator()
+    assert est.get_params()["device"] == "cpu"

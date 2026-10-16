@@ -38,7 +38,8 @@ def test_tabular_full_run_writes_csv_pipeline_and_summary(tmp_path):
 
 def test_spectrum_and_image_full_runs(tmp_path):
     src = tmp_path / "spec.csv"
-    pd.DataFrame(np.random.rand(6, 32).astype(np.float32), columns=[f"w{i}" for i in range(32)]).to_csv(src, index=False)
+    frame = pd.DataFrame(np.random.rand(6, 32).astype(np.float32), columns=[f"w{i}" for i in range(32)])
+    frame.to_csv(src, index=False)
     out = tmp_path / "spec_out"
     summary = run_full("SPECTRUM", src, "csv", [{"op": "sequence.snv"}], out)
     X = np.load(out / "processed.npy")
@@ -51,6 +52,7 @@ def test_spectrum_and_image_full_runs(tmp_path):
             Image.new("RGB", (40, 30), (i * 40, 100, 200)).save(buf, format="PNG")
             z.writestr(f"ok/img{i}.png", buf.getvalue())
     out = tmp_path / "img_out"
-    summary = run_full("IMAGE", zpath, "image_folder", [{"op": "image.resize", "params": {"width": 20, "height": 15}}], out)
+    steps = [{"op": "image.resize", "params": {"width": 20, "height": 15}}]
+    summary = run_full("IMAGE", zpath, "image_folder", steps, out)
     assert summary["after"]["images"] == 3
     assert Image.open(out / "images" / "ok" / "img1.png").size == (20, 15)

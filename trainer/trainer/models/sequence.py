@@ -373,7 +373,7 @@ class SpectrumMAETrainer(_SeqTrainer):
 class _SeqInferencer(BaseInferencer):
     def load(self, model_path: Path, metadata: dict[str, Any]) -> None:
         torch = _torch()
-        blob = torch.load(model_path / "model.pt", map_location="cpu", weights_only=False)
+        blob = torch.load(model_path / "model.pt", map_location="cpu", weights_only=True)
         self.config = blob["config"]
         c = self.config
         if c["kind"] == "mae":

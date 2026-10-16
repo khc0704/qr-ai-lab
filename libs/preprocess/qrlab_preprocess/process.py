@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,11 @@ import pandas as pd
 from PIL import Image
 
 from qrlab_preprocess import Pipeline, jsonable
+from qrlab_preprocess.paths import safe_join, safe_relpath
 from qrlab_preprocess.preview import IMAGE_EXT, _read_sequences
 
 IMAGE_FIT_SAMPLE = 64  # fitted image ops (alignment reference …) learn from the first N images
+IMAGE_BATCH = 64  # images held in memory at once while streaming the rest through the pipeline
 
 
 def run_full(
@@ -43,10 +46,10 @@ def run_full(
     summary: dict[str, Any] = {"data_type": data_type, "format": fmt, "steps": pipe.describe(), "files": []}
     if data_type in ("TABULAR", "TEXT"):
         df = _read_frame_all(path, fmt)
-        summary["before"] = {"rows": int(len(df)), "columns": [str(c) for c in df.columns]}
+        summary["before"] = {"rows": len(df), "columns": [str(c) for c in df.columns]}
         out = pipe.fit_transform(df)
         name = _write_frame(out, out_dir, fmt)
-        summary["after"] = {"rows": int(len(out)), "columns": [str(c) for c in out.columns]}
+        summary["after"] = {"rows": len(out), "columns": [str(c) for c in out.columns]}
         summary["files"].append(name)
     elif data_type in ("SEQUENCE", "SPECTRUM"):
         X, ids = _read_sequences(path, fmt, spec, data_type, max_rows=10_000_000)
@@ -108,12 +111,14 @@ def _write_frame(df: pd.DataFrame, out_dir: Path, fmt: str) -> str:
 # --- images ------------------------------------------------------------------------------------------
 
 
-def _iter_images(path: Path):
-    """Yield (relative name, PIL image) for a zip, a folder or a single file."""
+def _iter_images(path: Path) -> Iterator[tuple[str, Image.Image]]:
+    """Yield (relative name, PIL image) for a zip, a folder or a single file. Zip member names are validated
+    before anything is read so a crafted archive fails with the offending entry in the message."""
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as z:
             for m in z.namelist():
                 if m.lower().endswith(IMAGE_EXT) and not Path(m).name.startswith(".") and not m.endswith("/"):
+                    safe_relpath(m)
                     with z.open(m) as fh:
                         im = Image.open(io.BytesIO(fh.read()))
                         im.load()
@@ -130,38 +135,54 @@ def _iter_images(path: Path):
 def _save_image(im: Image.Image, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     ext = target.suffix.lower()
-    if im.mode not in ("L", "RGB", "RGBA", "I;16", "I", "F") or (ext in (".jpg", ".jpeg") and im.mode not in ("L", "RGB")):
+    jpeg_needs_rgb = ext in (".jpg", ".jpeg") and im.mode not in ("L", "RGB")
+    if im.mode not in ("L", "RGB", "RGBA", "I;16", "I", "F") or jpeg_needs_rgb:
         im = im.convert("RGB")
     if im.mode in ("I", "F") and ext in (".jpg", ".jpeg", ".bmp", ".webp"):
         target = target.with_suffix(".png")
     im.save(target)
 
 
+def process_image_stream(
+    pipe: Pipeline,
+    items: Iterable[tuple[str, Image.Image]],
+    *,
+    fit: bool = True,
+    fit_sample: int = IMAGE_FIT_SAMPLE,
+    batch: int = IMAGE_BATCH,
+) -> Iterator[tuple[str, Image.Image]]:
+    """Run ``items`` through the pipeline without holding the whole set in memory: fitted ops learn from the
+    first ``fit_sample`` images (one batch), every image after that is only transformed, ``batch`` at a time.
+    With ``fit=False`` (replaying a stored state) nothing is fitted."""
+    names: list[str] = []
+    pending: list[Image.Image] = []
+    fitted = not fit
+    limit = max(1, int(fit_sample)) if not fitted else max(1, int(batch))
+
+    def flush() -> Iterator[tuple[str, Image.Image]]:
+        nonlocal fitted, limit
+        if not pending:
+            return
+        processed = pipe.transform(pending) if fitted else pipe.fit_transform(pending)
+        fitted, limit = True, max(1, int(batch))
+        yield from zip(names, processed, strict=True)
+        names.clear()
+        pending.clear()
+
+    for name, im in items:
+        names.append(name)
+        pending.append(im)
+        if len(pending) >= limit:
+            yield from flush()
+    yield from flush()
+
+
 def _process_images(pipe: Pipeline, path: Path, out_dir: Path) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
-    names: list[str] = []
-    batch: list[Image.Image] = []
-    fitted = False
     n = 0
-
-    def flush() -> None:
-        nonlocal fitted, n
-        if not batch:
-            return
-        processed = pipe.transform(batch) if fitted else pipe.fit_transform(batch)
-        fitted = True
-        for name, im in zip(names, processed, strict=True):
-            _save_image(im, out_dir / name)
-            n += 1
-        names.clear()
-        batch.clear()
-
-    for name, im in _iter_images(path):
-        names.append(name)
-        batch.append(im)
-        if len(batch) >= IMAGE_FIT_SAMPLE:
-            flush()
-    flush()
+    for name, im in process_image_stream(pipe, _iter_images(path)):
+        _save_image(im, safe_join(out_dir, name))
+        n += 1
     if n == 0:
         raise ValueError("找不到影像檔")
     return n

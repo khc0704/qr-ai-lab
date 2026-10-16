@@ -23,14 +23,14 @@ class FakeBackend:
     def status(self, **kw) -> None:
         self.statuses.append(kw)
 
-    def metrics(self, metrics, *, epoch=None, trial=None, leaderboard_row=None) -> None:
-        self.metrics_.append({"metrics": metrics, "trial": trial, "leaderboard_row": leaderboard_row})
+    def metrics(self, metrics, *, epoch=None, trial=None, leaderboard_row=None, retry="short") -> None:
+        self.metrics_.append({"metrics": metrics, "trial": trial, "leaderboard_row": leaderboard_row, "retry": retry})
 
     def artifact(self, **kw) -> dict:
         self.artifacts_.append(kw)
         return {"id": len(self.artifacts_), "version": 1}
 
-    def result(self, result=None, output_path=None) -> None:
+    def result(self, result=None, output_path=None, *, retry="long") -> None:
         self.result_ = (result, output_path)
 
 

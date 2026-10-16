@@ -8,9 +8,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from trainer.log import info
+
 MAX_ROWS = 50_000
 MAX_CORR_COLUMNS = 40
 MAX_CATEGORIES = 50
+MAX_PERM_COLUMNS = 50  # permutation importance: top columns by mutual information
+MAX_PERM_ROWS = 2000  # permutation importance: holdout rows (5 repeats × columns × rows predictions)
 
 
 def _dtype(s: pd.Series) -> str:
@@ -205,7 +209,13 @@ def profile(
                 from sklearn.model_selection import train_test_split
 
                 strat = yv if task == "classification" and len(np.unique(yv)) > 1 and len(yv) >= 40 else None
-                Xtr, Xte, ytr, yte = train_test_split(X, yv, test_size=0.3, random_state=0, stratify=strat)
+                # the quick model sees the top columns by mutual information; the rest are reported as skipped
+                cols = (
+                    sorted(np.argsort(-mi)[:MAX_PERM_COLUMNS].tolist())
+                    if X.shape[1] > MAX_PERM_COLUMNS
+                    else list(range(X.shape[1]))
+                )
+                Xtr, Xte, ytr, yte = train_test_split(X[:, cols], yv, test_size=0.3, random_state=0, stratify=strat)
                 est = (
                     RandomForestRegressor(n_estimators=200, random_state=0, n_jobs=max(1, n_jobs))
                     if task == "regression"
@@ -213,18 +223,35 @@ def profile(
                 )
                 est.fit(Xtr, ytr)
                 score = float(est.score(Xte, yte))
-                perm = permutation_importance(est, Xte, yte, n_repeats=5, random_state=0, n_jobs=max(1, n_jobs))
-                imp = perm.importances_mean
+                Xpe, ype = Xte, yte
+                if len(Xte) > MAX_PERM_ROWS:
+                    sel = np.sort(np.random.default_rng(0).choice(len(Xte), MAX_PERM_ROWS, replace=False))
+                    Xpe, ype = Xte[sel], yte[sel]
+                capped = []
+                if len(cols) < X.shape[1]:
+                    capped.append(f"columns {X.shape[1]} → top {len(cols)} by mutual information")
+                if len(Xpe) < len(Xte):
+                    capped.append(f"holdout rows {len(Xte)} → {len(Xpe)}")
+                if capped:
+                    info("tabular profile: permutation importance capped (" + "; ".join(capped) + ")")
+                perm = permutation_importance(est, Xpe, ype, n_repeats=5, random_state=0, n_jobs=max(1, n_jobs))
+                imp = np.zeros(X.shape[1])
+                imp[cols] = perm.importances_mean
                 imp_sum = float(np.clip(imp, 0, None).sum()) or 1.0
+                used = set(cols)
                 for k, n in enumerate(names):
                     feats[n]["permutation_importance"] = round(float(imp[k]), 4)
                     feats[n]["importance_share"] = round(float(max(0.0, imp[k]) / imp_sum), 4)
+                    if k not in used:
+                        feats[n]["permutation_skipped"] = True
                 relevance["model"] = {
                     "estimator": type(est).__name__,
                     "metric": "r2" if task == "regression" else "accuracy",
                     "holdout_score": round(score, 4),
                     "train_rows": len(ytr),
                     "test_rows": len(yte),
+                    "columns_used": len(cols),
+                    "permutation_rows": len(Xpe),
                 }
             except Exception as e:  # the profile is still useful without the model
                 relevance["model"] = {"error": f"{type(e).__name__}: {e}"[:300]}

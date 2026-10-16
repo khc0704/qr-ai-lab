@@ -45,10 +45,13 @@ def test_tabular_preprocess_fit_then_replay(tmp_path, monkeypatch):
     backend = FakeBackend(spec)
     assert runtime.run(backend) == 0, backend.statuses[-1]
     model = next(a for a in backend.artifacts_ if a["kind"] == "model")
-    fitted = model["metadata"]["preprocess"]
-    assert [s["op"] for s in fitted] == [s["op"] for s in steps]
+    # artifact metadata (returned by every artifact list) carries the steps only; the fitted state is a file
+    listed = model["metadata"]["preprocess"]
+    assert [s["op"] for s in listed] == [s["op"] for s in steps]
+    assert all("state" not in s for s in listed) and [s["has_state"] for s in listed] == [False, True, True]
+    fitted = json.loads((out1 / "model" / "preprocess.json").read_text())
     assert fitted[1]["state"]["values"]["x1"] is not None and "x1" in fitted[2]["state"]["stats"]
-    assert json.loads((out1 / "model" / "preprocess.json").read_text())[2]["op"] == "tabular.standardize"
+    assert fitted[2]["op"] == "tabular.standardize"
 
     # inference rows with a missing value are imputed with the training median and scaled the same way
     spec2 = {

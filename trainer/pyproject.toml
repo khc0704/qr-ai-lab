@@ -1,7 +1,7 @@
 [project]
 name = "qr-ai-lab-trainer"
 version = "0.1.0"
-description = "QR AI Lab training / inference runtime (runs inside the job container)"
+description = "QR AI Lab training / inference runtime (jobs are host subprocesses in trainer/.venv)"
 requires-python = ">=3.12"
 dependencies = [
   "numpy>=1.26",
@@ -18,7 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Deep-learning families. Installed in the CUDA image (infra/trainer/Dockerfile); weights come from the model zoo only.
+# Deep-learning families. Installed into trainer/.venv on the GPU host (torch CUDA wheel, see infra/install.sh);
+# pretrained weights come from the model zoo only (no downloads at job time).
 dl = ["torch>=2.4", "torchvision>=0.19", "ultralytics>=8.3", "transformers>=4.44", "timm>=1.0", "safetensors>=0.4"]
 
 [dependency-groups]

@@ -1,4 +1,9 @@
-"""AutoML: Optuna over the candidate families' search spaces, sequential trials, median pruning, time budget."""
+"""AutoML: Optuna over the candidate families' search spaces, sequential trials, median pruning, time budget.
+
+The search stops early, keeping the best trainer so far, when the time budget / job deadline passes mid-trial
+(``TrialTimeout`` from ``ctx.epoch`` / ``ctx.progress``) or when the job is cancelled (SIGTERM) after at least
+one trial finished; ``summary["stopped"]`` tells the runtime why.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,10 @@ from typing import Any
 from trainer.dataset import Dataset
 from trainer.log import info, warn
 from trainer.models import registry
-from trainer.models.base import BaseTrainer, Cancelled, Context, Pruned
+from trainer.models.base import BaseTrainer, Cancelled, Context, Pruned, TrialTimeout
+
+# metrics every family reports without ground truth (anomaly scores on the holdout, reconstruction loss)
+LABEL_FREE_METRICS = frozenset({"score_mean", "score_std", "flagged_ratio", "threshold", "val_loss", "loss"})
 
 
 def _sample(trial, fid: str, space: dict[str, Any]) -> dict[str, Any]:
@@ -23,6 +31,26 @@ def _sample(trial, fid: str, space: dict[str, Any]) -> dict[str, Any]:
         elif t == "categorical":
             out[name] = trial.suggest_categorical(key, list(d["choices"]))
     return out
+
+
+def check_metric_available(metric: str, ds: Dataset, task: str | None, candidates: list[str]) -> None:
+    """Fail before the first trial when the search metric cannot be computed on this data (it needs labels the
+    dataset does not have), instead of silently ranking trials by whatever metric came first."""
+    if metric in LABEL_FREE_METRICS:
+        return
+    hint = f"請改用手動模式指定單一模型（候選：{', '.join(candidates)}）"
+    if task == "anomaly_detection":
+        from trainer.models.tabular import _binary_anomaly_labels
+
+        if not ds.has_labels or set(_binary_anomaly_labels(ds.y).tolist()) != {0, 1}:
+            raise ValueError(
+                f"AutoML 的評分指標 {metric} 需要「正常」與「異常」兩種標籤才能計算，"
+                "但這份異常偵測資料沒有標籤（或只有一類）。"
+                f"{hint}，或提供含標籤的資料（good / normal 與異常資料夾、或標籤欄位）。"
+            )
+        return
+    if not ds.has_labels:
+        raise ValueError(f"AutoML 的評分指標 {metric} 需要標籤，但資料沒有標籤欄位。{hint}，或補上標籤再訓練。")
 
 
 def run(
@@ -41,6 +69,7 @@ def run(
     task = spec["task_type"]
     families: dict[str, Any] = spec.get("families") or {}
     user_overrides = {k: v for k, v in spec["config"].items() if k != "search"}
+    check_metric_available(metric, ds, task, candidates)
 
     study = optuna.create_study(
         direction=direction,
@@ -49,16 +78,19 @@ def run(
     )
     info(
         f"automl: candidates={candidates} metric={metric} ({direction}) "
-        f"max_trials={max_trials} budget={budget_s / 60:g}min"
+        f"max_trials={max_trials} budget={budget_s / 60:g}min deadline={(deadline - time.monotonic()) / 60:.1f}min"
     )
     outer_progress = ctx.on_progress
     best: dict[str, Any] = {"value": None}
     rows: list[dict[str, Any]] = []
     done = 0
+    stopped: str | None = None
+    ctx.deadline = deadline
     try:
         for i in range(max_trials):
             if time.monotonic() > deadline:
                 info("automl: time budget reached")
+                stopped = "deadline"
                 break
             trial = study.ask()
             fid = trial.suggest_categorical("family", candidates)
@@ -77,14 +109,25 @@ def run(
                 m = trainer.evaluate()
                 value = m.get(metric)
                 if value is None:
-                    value = next(iter(m.values()))
+                    study.tell(trial, state=optuna.trial.TrialState.FAIL)
+                    warn(f"trial {i + 1}/{max_trials} {fid} 沒有回報指標 {metric}（只有 {sorted(m)}），不計入")
+                    continue
                 study.tell(trial, float(value))
+            except TrialTimeout:
+                study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+                warn(f"trial {i + 1}/{max_trials} {fid} 超過時間上限，停止搜尋（{time.monotonic() - t0:.0f}s）")
+                stopped = "deadline"
+                break
             except Pruned:
                 study.tell(trial, state=optuna.trial.TrialState.PRUNED)
                 info(f"trial {i + 1}/{max_trials} {fid} pruned")
                 continue
             except Cancelled:
-                raise
+                if best.get("trainer") is None:
+                    raise
+                warn(f"trial {i + 1}/{max_trials} {fid} 被中斷；保留目前最佳模型")
+                stopped = "cancelled"
+                break
             except Exception as e:
                 study.tell(trial, state=optuna.trial.TrialState.FAIL)
                 warn(f"trial {i + 1}/{max_trials} {fid} failed: {e!r}")
@@ -102,7 +145,10 @@ def run(
                 "seconds": round(dt, 1),
             }
             rows.append(row)
-            backend.metrics(m, trial=i, leaderboard_row=row)
+            try:
+                backend.metrics(m, trial=i, leaderboard_row=row)
+            except Exception as e:  # a lost leaderboard row must not fail the job
+                warn(f"leaderboard row for trial {i + 1} not delivered: {e}")
             info(f"trial {i + 1}/{max_trials} {fid} {metric}={float(value):.4f} ({dt:.1f}s) {_short(params)}")
             if best["value"] is None or _better(float(value), best["value"], direction):
                 best = {
@@ -116,10 +162,17 @@ def run(
     finally:
         ctx.on_progress = outer_progress
         ctx.on_epoch = None
+        ctx.deadline = None
     if best.get("trainer") is None:
+        if stopped == "deadline":
+            raise RuntimeError("AutoML 在時間上限內沒有完成任何 trial，請拉長時間上限或改用手動模式")
         raise RuntimeError("AutoML 沒有任何成功的 trial，請檢查資料與欄位設定")
     rows.sort(key=lambda r: r["metric"], reverse=(direction == "maximize"))
-    info(f"automl: best trial {best['trial'] + 1} {best['family']} {metric}={best['value']:.4f} ({done} trials)")
+    info(
+        f"automl: best trial {best['trial'] + 1} {best['family']} {metric}={best['value']:.4f} ({done} trials"
+        + (f", stopped: {stopped}" if stopped else "")
+        + ")"
+    )
     summary = {
         "family": best["family"],
         "params": _plain(best["params"]),
@@ -130,6 +183,8 @@ def run(
         "direction": direction,
         "leaderboard": rows[:20],
     }
+    if stopped:
+        summary["stopped"] = stopped
     return best["trainer"], summary
 
 

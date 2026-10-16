@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import shutil
 import signal
 import time
@@ -20,7 +21,14 @@ from trainer.config import Env
 from trainer.fetch import fetch_data_source
 from trainer.log import error, info, warn
 from trainer.models import registry, zoo
-from trainer.models.base import ArtifactOut, BaseTrainer, Cancelled, Context
+from trainer.models.base import (
+    PREPROCESS_STATE_FILE,
+    ArtifactOut,
+    BaseTrainer,
+    Cancelled,
+    Context,
+    preprocess_state_is_complete,
+)
 
 # stage → (start, end) of the overall progress bar
 TRAIN_PHASES = {
@@ -85,9 +93,10 @@ def run(backend: Backend | None = None) -> int:
     try:
         spec = backend.spec()
         res = spec.get("resources") or {}
-        ctx.cpu = max(1, int(float(res.get("cpu") or 1)))
+        ctx.cpu = max(1, math.ceil(float(res.get("cpu") or 1)))  # the runner pins ceil(cpu) cores
         ctx.gpu = int(res.get("gpu") or 0)
-        limits.apply_from_env(ctx.cpu)  # clamp BLAS / OpenMP / torch pools to the grant, cap shared-GPU memory
+        lim = limits.apply_from_env(ctx.cpu)  # clamp BLAS / OpenMP / torch pools to the grant, cap shared-GPU memory
+        ctx.gpu_memory_mb = lim.gpu_memory_mb
         ctx.zoo = zoo.resolver(env.zoo_root, spec.get("zoo_weights") or {})
         info(
             f"job {spec['job_id']} kind={spec['kind']} project={spec['project_slug']} data_type={spec['data_type']} "
@@ -104,18 +113,18 @@ def run(backend: Backend | None = None) -> int:
         else:
             result, output_path = _infer(spec, env, ctx, backend)
         backend.result(result=result, output_path=output_path)
-        backend.status(status="succeeded", progress=100, stage="done")
+        backend.status(status="succeeded", progress=100, stage="done", retry="long")
         info("done")
         return 0
     except Cancelled:
         warn("cancelled by request; stopping")
-        _safe(lambda: backend.status(status="failed", stage="cancelled", message="cancelled"))
+        _safe(lambda: backend.status(status="failed", stage="cancelled", message="cancelled", retry="none"))
         return 143
     except Exception as e:
         for line in traceback.format_exc().rstrip().splitlines():
             error(line)
         msg = f"{type(e).__name__}: {e}"[:2000]
-        _safe(lambda: backend.status(status="failed", stage="failed", message=msg))
+        _safe(lambda: backend.status(status="failed", stage="failed", message=msg, retry="short"))
         return 1
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -155,10 +164,12 @@ def _train(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
         raise ValueError("輸入資料沒有任何樣本")
     reporter.set_stage("training")
     deadline_s = spec["timeout_minutes"] * 60 * 0.85
+    stopped: str | None = None
     if spec.get("mode") == "auto":
         from trainer import automl
 
         trainer, summary = automl.run(spec, ds, ctx, backend, deadline_s=deadline_s)
+        stopped = summary.get("stopped")
     else:
         fid = spec["model_family"]
         fam = (spec.get("families") or {}).get(fid) or {}
@@ -169,15 +180,21 @@ def _train(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
         trainer = registry.create_trainer(fid, spec.get("task_type"), params, ctx)
         trainer.fit(ds)
         metrics = trainer.evaluate()
-        backend.metrics(metrics)
+        backend.metrics(metrics, retry="long")
         summary = {"family": fid, "params": params, "metrics": metrics}
-    reporter.set_stage("exporting")
-    trainer.finalize(ds)
+    if stopped == "cancelled":
+        info("stage: exporting (cancelled; salvaging the best model so far, no progress heartbeat)")
+    else:
+        reporter.set_stage("exporting")
+    if stopped:
+        warn(f"training stopped early ({stopped}): exporting the best model so far, skipping the final refit")
+    else:
+        trainer.finalize(ds)
     artifacts = trainer.export(env.output_dir)
     if ds.preprocess:
         model_dir = env.output_dir / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / "preprocess.json").write_text(json.dumps(ds.preprocess, ensure_ascii=False), encoding="utf-8")
+        (model_dir / PREPROCESS_STATE_FILE).write_text(json.dumps(ds.preprocess, ensure_ascii=False), encoding="utf-8")
     metrics_dir = env.output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     (metrics_dir / "metrics.json").write_text(
@@ -186,16 +203,29 @@ def _train(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     artifacts.append(
         ArtifactOut(name="metrics", kind="metrics", path="metrics/metrics.json", framework=trainer.framework)
     )
-    registered = _register(backend, artifacts, family=summary["family"], ds=ds, trainer=trainer)
-    result = {
+    # cancelled: SIGTERM gives 10 s before SIGKILL, so the salvage is one attempt per call, best effort
+    retry = "none" if stopped == "cancelled" else "long"
+    result: dict[str, Any] = {
         "model_family": summary["family"],
         "metrics": summary["metrics"],
         "params": summary.get("params"),
         "n_samples": len(ds),
-        "artifacts": registered,
     }
     if "leaderboard" in summary:
         result.update({k: summary[k] for k in ("n_trials", "trial", "metric", "direction")})
+    if stopped:
+        result["stopped"] = stopped
+    if stopped == "cancelled":
+        try:
+            result["artifacts"] = _register(
+                backend, artifacts, family=summary["family"], ds=ds, trainer=trainer, retry=retry
+            )
+            backend.result(result=result, output_path="metrics/metrics.json", retry=retry)
+            info("cancelled: best-so-far model registered")
+        except Exception as e:  # the job is cancelled either way
+            warn(f"cancelled: could not register the best-so-far model: {e}")
+        raise Cancelled()
+    result["artifacts"] = _register(backend, artifacts, family=summary["family"], ds=ds, trainer=trainer, retry=retry)
     return result, "metrics/metrics.json"
 
 
@@ -206,6 +236,7 @@ def _register(
     family: str,
     ds=None,
     trainer: BaseTrainer | None = None,
+    retry: str = "long",
 ) -> list[dict[str, Any]]:
     out = []
     for a in artifacts:
@@ -222,6 +253,7 @@ def _register(
             metrics=a.metrics,
             metadata=meta or None,
             set_default=a.set_default,
+            retry=retry,
         )
         info(f"artifact: {a.kind} {a.name} v{r.get('version')} ← {a.path}")
         out.append(
@@ -259,10 +291,13 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     info(f"model: {art['name']} v{art['version']} ({fid}) mode={mode}")
     reporter.set_stage("preparing")
     task = meta.get("task_type") or spec.get("task_type")
+    # the fitted preprocessing state travels with the model dir; artifact metadata only lists the steps
     state = meta.get("preprocess")
-    if state is None:
-        local = model_path / "preprocess.json"
-        state = json.loads(local.read_text(encoding="utf-8")) if local.exists() else None
+    local = model_path / PREPROCESS_STATE_FILE
+    if local.exists():
+        state = json.loads(local.read_text(encoding="utf-8"))
+    elif not preprocess_state_is_complete(state):
+        raise RuntimeError(f"模型缺少前處理狀態檔 model/{PREPROCESS_STATE_FILE}，無法重現訓練時的前處理")
     ds = dataset.load(
         spec["data_type"],
         task,

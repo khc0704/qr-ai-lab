@@ -14,9 +14,15 @@ OFFLINE_ENV = {
     "ULTRALYTICS_OFFLINE": "1",
 }
 
+# stdout is the job log: no progress bars, no per-batch library chatter (set before the libraries import)
+QUIET_ENV = {
+    "YOLO_VERBOSE": "false",  # ultralytics: logger level + its TQDM bars
+    "TQDM_DISABLE": "1",  # tqdm (transformers / huggingface_hub)
+}
+
 
 def force_offline() -> None:
-    for k, v in OFFLINE_ENV.items():
+    for k, v in {**OFFLINE_ENV, **QUIET_ENV}.items():
         os.environ.setdefault(k, v)
 
 

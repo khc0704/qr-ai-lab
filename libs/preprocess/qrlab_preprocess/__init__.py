@@ -11,7 +11,6 @@ training data by the trainer and replayed unchanged at inference.
 from __future__ import annotations
 
 import json
-
 from typing import Any
 
 from qrlab_preprocess import image, sequence, tabular, text  # noqa: F401  (registers the ops)

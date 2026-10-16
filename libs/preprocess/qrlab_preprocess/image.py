@@ -221,15 +221,38 @@ class Align(Op):
     params = (
         Param("reference", "參考影像索引", "int", default=0, min=0),
         Param("max_shift", "最大平移（像素，0 = 不限）", "int", default=0, min=0),
+        Param(
+            "work_size",
+            "運算尺寸（最長邊像素）",
+            "int",
+            default=1024,
+            min=64,
+            max=8192,
+            help="相位相關在這個尺寸上計算，參考影像也以此尺寸存入模型；較大的影像先等比例縮小",
+        ),
     )
+
+    def _work_size(self, size: tuple[int, int]) -> tuple[int, int]:
+        w, h = size
+        limit = int(self.p["work_size"])
+        if max(w, h) <= limit:
+            return (w, h)
+        scale = limit / max(w, h)
+        return (max(1, round(w * scale)), max(1, round(h * scale)))
 
     def fit(self, images: list[Image.Image], ctx: Context) -> None:
         if not images:
             raise ValueError("沒有影像可當參考")
         ref = images[min(self.p["reference"], len(images) - 1)]
-        self.state = {"reference": ref.convert("L"), "size": list(ref.size)}
+        size = self._work_size(ref.size)
+        gray = ref.convert("L")
+        if gray.size != size:
+            gray = gray.resize(size, Image.BILINEAR)
+        self.state = {"reference": gray, "size": list(size)}
 
     def apply(self, images: list[Image.Image], ctx: Context) -> list[Image.Image]:
+        if "reference" not in self.state:
+            raise ValueError("image.align 缺少已擬合的參考影像（模型的 preprocess.json 不完整）")
         ref_im = unjson_image(self.state["reference"])
         size = tuple(self.state["size"])
         ref = _gray_array(ref_im, size)

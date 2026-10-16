@@ -14,14 +14,22 @@ from trainer.models.iqa import LABELS, METRICS, image_metrics
 
 MAX_IMAGES = 2000
 MAX_POINTS = 600
+MIN_GROUP_IMAGES = 3  # below this a group's median / IQR say nothing: excluded from the drift ratio
 
 
 def _groups(root: Path, paths: list[Path]) -> list[str]:
-    out = []
-    for p in paths:
-        rel = p.relative_to(root)
-        out.append(rel.parts[0] if len(rel.parts) > 1 else "all")
-    return out
+    """Group = the folder an image sits in, after collapsing the directories every image shares (a zip made
+    from one folder gives ``images/toolA/x.jpg`` / ``images/toolB/y.jpg`` → ``toolA`` / ``toolB``). Images at
+    the collapsed root form the group ``all``."""
+    parents = [list(p.relative_to(root).parts[:-1]) for p in paths]
+    common: list[str] = []
+    if parents:
+        for depth, part in enumerate(parents[0]):
+            if all(len(pp) > depth and pp[depth] == part for pp in parents):
+                common.append(part)
+            else:
+                break
+    return ["/".join(pp[len(common) :]) or "all" for pp in parents]
 
 
 def _zscore(M: np.ndarray) -> np.ndarray:
@@ -81,22 +89,37 @@ def quality_report(
         q1, med, q3 = np.percentile(M[sel], [25, 50, 75], axis=0)
         per_group[lab] = {
             "images": int(sel.sum()),
+            "insufficient": bool(sel.sum() < MIN_GROUP_IMAGES),
             "median": {n: float(v) for n, v in zip(METRICS, med, strict=True)},
             "iqr": {n: float(v) for n, v in zip(METRICS, q3 - q1, strict=True)},
         }
+    valid = [lab for lab in labels if not per_group[lab]["insufficient"]]
+    small = [lab for lab in labels if per_group[lab]["insufficient"]]
     drift: list[dict[str, Any]] = []
     overall_sd = M.std(axis=0) + 1e-9
     for j, name in enumerate(METRICS):
-        meds = np.array([per_group[lab]["median"][name] for lab in labels])
-        iqrs = np.array([per_group[lab]["iqr"][name] for lab in labels])
-        spread = float(meds.max() - meds.min()) if len(labels) > 1 else 0.0
-        within = float(np.median(iqrs)) + 1e-9
+        meds = np.array([per_group[lab]["median"][name] for lab in valid])
+        iqrs = np.array([per_group[lab]["iqr"][name] for lab in valid])
+        spread = float(meds.max() - meds.min()) if len(valid) > 1 else 0.0
+        within = float(np.median(iqrs)) if len(valid) else 0.0
+        note: str | None = None
+        ratio: float | None
+        if len(labels) < 2:
+            ratio = 0.0
+        elif len(valid) < 2:
+            ratio, note = None, f"樣本不足（每個群組至少 {MIN_GROUP_IMAGES} 張才計算飄移比）"
+        elif not np.isfinite(within) or within <= 1e-9:
+            ratio, note = None, "群內無變化（指標在群組內是常數，無法比較）"
+        else:
+            ratio = round(spread / within, 3)
+            if small:
+                note = f"未計入樣本不足的群組：{', '.join(small)}"
         pval = None
-        if len(labels) > 1 and all((g == lab).sum() >= 3 for lab in labels):
+        if len(valid) > 1:
             try:
                 from scipy.stats import kruskal
 
-                pval = float(kruskal(*[M[g == lab, j] for lab in labels]).pvalue)
+                pval = float(kruskal(*[M[g == lab, j] for lab in valid]).pvalue)
             except Exception:
                 pval = None
         drift.append(
@@ -105,12 +128,14 @@ def quality_report(
                 "label": LABELS.get(name, name),
                 "spread": spread,
                 "spread_sd": round(spread / float(overall_sd[j]), 3),
-                "drift_ratio": round(spread / within, 3),
+                "drift_ratio": ratio,
+                "insufficient": ratio is None,
+                "note": note,
                 "p_value": pval,
                 "group_medians": {lab: per_group[lab]["median"][name] for lab in labels},
             }
         )
-    drift.sort(key=lambda d: -d["drift_ratio"])
+    drift.sort(key=lambda d: (d["drift_ratio"] is None, -(d["drift_ratio"] or 0.0)))
     for i, d in enumerate(drift, 1):
         d["rank"] = i
     tick(0.7)
@@ -177,7 +202,16 @@ def quality_report(
 
     # --- recommendations ------------------------------------------------------------------------------
     recs: list[dict[str, str]] = []
-    top = [d for d in drift[:3] if d["drift_ratio"] > 1.0]
+    top = [d for d in drift[:3] if d["drift_ratio"] is not None and d["drift_ratio"] > 1.0]
+    if small:
+        recs.append(
+            {
+                "level": "warn",
+                "text": f"樣本不足的群組（少於 {MIN_GROUP_IMAGES} 張，不計入飄移比）："
+                + "、".join(f"{lab}（{per_group[lab]['images']} 張）" for lab in small)
+                + "；每個機台 / 條件至少放 3 張，建議 ≥ 30 張。",
+            }
+        )
     if len(labels) == 1:
         recs.append(
             {
@@ -190,6 +224,8 @@ def quality_report(
         recs.append(
             {"level": "warn", "text": f"群組之間最會飄的指標：{names}；建議列為機台比對（compare 模式）的監控重點。"}
         )
+    elif len(valid) < 2:
+        recs.append({"level": "info", "text": "有足夠影像的群組不到兩個，無法比較群組之間的飄移。"})
     else:
         recs.append(
             {"level": "info", "text": "各群組的 IQA 指標中位數差異都在群內變異範圍內，影像品質面向沒有明顯飄移。"}
