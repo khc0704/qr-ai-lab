@@ -9,10 +9,10 @@
 | Git | 任意 | `git --version` | |
 | Node.js | ≥ 20.9，建議 22 LTS | `node --version` | Next.js 16 要求；用 [nvm](https://github.com/nvm-sh/nvm) 或 [fnm](https://github.com/Schniz/fnm) 管理 |
 | npm | ≥ 10 | `npm --version` | 隨 Node 安裝；本專案用 npm，不用 pnpm / yarn |
-| Python | ≥ 3.12 | `python3 --version` | backend、trainer（uv 會自行管理版本）、`scripts/*.py` |
-| uv | 最新 | `uv --version` | backend 套件管理：`curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Docker Engine + Compose v2 | 最新 | `docker compose version` | MariaDB、Redis；伺服器上也跑 backend / scheduler |
-| NVIDIA driver + NVIDIA Container Toolkit | 配合 GPU | `nvidia-smi`、`docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` | 只有 GPU 伺服器需要（跑訓練容器） |
+| Python | 3.12（≥ 3.12） | `python3.12 --version` | backend、trainer、`scripts/*.py`；伺服器要有 `python3.12-venv` |
+| uv | 最新（只有開發機） | `uv --version` | 開發機的套件管理與 lock：`curl -LsSf https://astral.sh/uv/install.sh \| sh`。伺服器不需要 uv（用 pip + `requirements.txt`，見 §4.6） |
+| Docker Engine + Compose v2 | 最新 | `docker compose version` | 只跑 MariaDB、Redis（本地開發可不用，見 §4.1） |
+| NVIDIA driver | 配合 GPU | `nvidia-smi` | 只有 GPU 伺服器需要；只要 driver，CUDA 函式庫隨 torch wheel 來，沒有容器、不需要 NVIDIA Container Toolkit |
 | Playwright Chromium | 隨 `playwright` 套件 | `cd frontend && npx playwright install chromium` | 只有要跑截圖 / 設計檢查時需要 |
 
 ## 1. 取得程式碼
@@ -72,6 +72,8 @@ uv sync                               # 建立 .venv 並安裝依賴（Python �
 uv run uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
+開發機沒有網路、只能走公司 Nexus 時不用 uv（uv 不讀 `pip.conf`）：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`，之後把 `uv run` 換成 `.venv/bin/`（例如 `.venv/bin/uvicorn app.main:app --reload`）。
+
 - `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立三個帳號：`superadmin / superadmin1234`（什麼都能改：資源池、配額、刪專案、模型庫、使用者角色、GPU 重置）、`admin / admin1234`（日常營運：審核、中斷 / 重啟 / 重排任務、討論區）、`user / user1234`（沒有管理操作）。密碼由 `SEED_*_PASSWORD` 改；角色可在 **管理 → 使用者** 調整或 `uv run python -m app.cli set-role --username alice --role admin`。
 - `.env.example` 預設 `SCHEDULER_EMBEDDED=true`：排程器迴圈跑在這個程序裡，不用 Redis、不用第二個終端，任務頁的即時 log 照常。要測兩個程序的正式拓樸再照 §4.2 分開跑。
 - 登入拿 token，之後所有 API 帶 `Authorization: Bearer <token>`：
@@ -100,7 +102,7 @@ REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
 - systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
 - CPU 限制對原生函式庫也有效：runner 把 `OMP / MKL / OPENBLAS / NUMEXPR / TBB / NUMBA / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS…` 全設成申請的核數，trainer 啟動時再用 threadpoolctl + torch 夾一次並把實際 affinity / 執行緒數印進任務 log（搜 `limits:`）。所以 sklearn 的 TSNE / HistGradientBoosting、numpy BLAS、torch 都只會用到分到的核心，不會把 88 核全吃掉。
 - GPU：`CUDA_VISIBLE_DEVICES` 指定。任務可填「每張 GPU 需要的顯存」→ 多個任務依 pynvml 的剩餘顯存共用一張（資源池的「依顯存共用 GPU」開關；子程序以 `set_per_process_memory_fraction` 自限）；沒填就要整張空卡（`GPU_BUSY_THRESHOLD`）。Dashboard 的 GPU 卡片顯示顯存 / 保留量 / 任務，superadmin 可「重置」（中斷本系統任務 → kill 所有程序 → `GPU_RESET_COMMAND`）。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
-- 深度學習家族：`cd trainer && uv sync --extra dl`（CUDA 版 torch，走公司 PyPI 鏡像：`UV_INDEX_URL=https://mirror.example.com/pypi/simple`）；開發機只想裝 CPU torch 見 §7。
+- 深度學習家族：`cd trainer && uv sync --extra dl`（PyPI 的 Linux torch wheel 自帶 CUDA）；伺服器上由 `install.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
 
 ### 4.3 模型庫（預訓練權重；伺服器不連外）
 
@@ -117,7 +119,7 @@ REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
 ```bash
 # backend/.env：DATABASE_URL=mariadb+asyncmy://qr:<密碼>@localhost:3306/qr_ai_lab、REDIS_URL=redis://localhost:6379/0、APP_ENV=prod
 uv run alembic upgrade head           # 建表（需要第 3 節的 MariaDB）
-uv run python -m app.cli seed         # 建立 admin / user（密碼取自 SEED_*）
+uv run python -m app.cli seed         # local 模式建立 superadmin / admin / user（密碼取自 SEED_*；keycloak 模式不建）
 uv run python -m app.cli create-user --username alice --password '…' --email alice@example.com --role user
 ```
 
@@ -133,20 +135,23 @@ QR_TEST_ZOO=/path/to/zoo uv run pytest tests/test_yolo_cpu.py                   
 uv run python -m trainer check                                                              # 這個環境能跑哪些家族
 ```
 
-### 4.6 正式安裝（Ubuntu GPU 伺服器，不連外、有 PyPI / npm / image 鏡像）
+### 4.6 正式安裝（Ubuntu GPU 伺服器，不連外、有 PyPI / npm / image proxy）
+
+前提：`/etc/pip.conf` 指向公司的 PyPI proxy（Nexus）、`/etc/npmrc` 指向 npm proxy、node 是系統層級安裝（`/usr/local/bin/node`，qrlab 使用者執行得到；不要用某個使用者的 nvm）。伺服器**不需要 uv**。
 
 ```bash
-sudo mkdir -p /opt && sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
+sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
 cp infra/.env.example infra/.env && docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # mariadb、redis
-PIP_INDEX_URL=https://mirror.example.com/pypi/simple NPM_REGISTRY=https://mirror.example.com/npm ./infra/install.sh
-sudo nano /etc/qr-ai-lab/qrlab.env     # DATABASE_URL、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、MODEL_ZOO_*、PUBLIC_URL
-./infra/install.sh                     # 第二次：migration、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
-sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -s reload
+./infra/install.sh                     # 第一次：建 qrlab 使用者、資料夾，複製兩個 env 範本後停下（會自己 sudo）
+sudo nano /etc/qr-ai-lab/qrlab.env     # DATABASE_URL、REDIS_URL、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、KEYCLOAK_*、MODEL_ZOO_*（註解只能獨立成行）
+sudo nano /etc/qr-ai-lab/frontend.env  # AUTH_MODE、AUTH_SECRET、AUTH_URL、AUTH_KEYCLOAK_*
+./infra/install.sh                     # 第二次：venv（pip + requirements.txt）、next build、alembic upgrade head、seed、三個 systemd 服務、健康檢查
+sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/ && sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -t && sudo nginx -s reload
 ```
 
-- `install.sh` 做的事：建 `qrlab` 使用者並 `enable-linger`、建 `/srv/qr-ai-lab/{data,transfer}`、backend / trainer 的 venv（`uv sync --frozen`，走鏡像）、`next build`、`alembic upgrade head` + `app.cli seed`、安裝三個 systemd service。`--update` 在 `git pull` 後重跑全部並重啟服務；執行中的任務不受影響（systemd scope 不是排程器的子程序）。
+- `install.sh` 做的事：建 `qrlab` 使用者並 `enable-linger`、建 `/srv/qr-ai-lab/{data,transfer}`、把 checkout 交給 qrlab、檢查 env 檔沒有行尾註解與預設 secret、backend / trainer 的 venv（`python3.12 -m venv` + `pip install -r requirements.txt`，pip 走 `/etc/pip.conf` 的 proxy）、`next build`、`alembic upgrade head`（第一次再 `app.cli seed`；keycloak 模式不建本地帳號）、安裝三個 systemd service（`SCHEDULER_EMBEDDED=true` 時不啟用 scheduler）、等 `/healthz` 與前端回 200。`--update` 在 `git pull` 後先停服務再重跑全部；執行中的任務不受影響（systemd scope 不是排程器的子程序）。`PIP_INDEX_URL` / `NPM_REGISTRY` 可在執行時臨時覆蓋 proxy。
 - 沒有 TLS 憑證前要在 `qrlab-frontend.service` 加 `Environment=COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
-- 上線後第一件事：Dashboard 看「任務執行方式」是不是 systemd 且記憶體 / CPU 都是 cgroup；`app.cli set-password` 改掉兩個預設密碼；在資源池勾選可用的 GPU。
+- 上線後第一件事：Dashboard 看「任務執行方式」是不是 systemd 且記憶體 / CPU 都是 cgroup；local 模式的話 seed 密碼已由 `SEED_*_PASSWORD` 指定（prod 拒絕預設）；在資源池勾選可用的 GPU。
 
 ### 4.7 使用率歷史與資料前處理服務
 
@@ -236,14 +241,14 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
 cp infra/.env.example infra/.env                      # DOCKER_REGISTRY=公司 image 鏡像、DB 密碼
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d      # 只有 mariadb、redis
-PIP_INDEX_URL=https://<pypi 鏡像>/simple NPM_REGISTRY=https://<npm 鏡像> ./infra/install.sh   # 第一次：建 qrlab 使用者、venv、build、複製兩個 env 範本後停下
+./infra/install.sh                      # 第一次：建 qrlab 使用者、資料夾，複製兩個 env 範本後停下（pip / npm 走 /etc/pip.conf、/etc/npmrc 的 proxy，不需要 uv）
 sudo nano /etc/qr-ai-lab/qrlab.env      # DATABASE_URL、REDIS_URL、AUTH_MODE=keycloak、KEYCLOAK_*、SUPERADMIN_USERNAMES、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、MODEL_ZOO_*、GPU_RESET_COMMAND
 sudo nano /etc/qr-ai-lab/frontend.env   # AUTH_MODE=keycloak、AUTH_SECRET、AUTH_URL、AUTH_KEYCLOAK_ID / SECRET / ISSUER
-./infra/install.sh                      # 第二次：alembic upgrade head、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
-sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -s reload
+./infra/install.sh                      # 第二次：venv（pip）、build、alembic upgrade head、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
+sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/ && sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -t && sudo nginx -s reload
 ```
 
-- 之後更新：`git pull && ./infra/install.sh --update`（重 sync venv、重建前端、migration、重啟三個服務；執行中的任務不受影響）。
+- 之後更新：`git pull && ./infra/install.sh --update`（停服務、重裝 venv、重建前端、migration、再啟動；執行中的任務不受影響）。改了依賴（`uv add` / `uv lock`）要先在開發機跑 `scripts/export_requirements.sh` 並提交 `requirements.txt`。
 - 上線檢查：Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；GPU 卡片列出所有卡；資源池勾選要開放的 GPU；用 `SUPERADMIN_USERNAMES` 的帳號登入一次，再到 **使用者** 頁把其他人設成 admin。
 - dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）。任務本身、權限判斷、資料不留存政策在兩邊完全相同。
 

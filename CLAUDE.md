@@ -52,8 +52,7 @@ frontend（已接 backend：`src/lib/api` 為 server-only fetch 層、`src/lib/a
 ```bash
 # frontend（npm，提交 package-lock.json）
 cd frontend && npm install && npm run dev        # http://localhost:3000
-npm run lint && npm run typecheck && npm test     # 提交前
-npm run gen:api                                   # 由 backend OpenAPI 產生 src/types/api.ts（backend 建立後）
+npm run lint && npm run typecheck && npm run format:check && npm test     # 提交前（npm test = vitest）
 npm run build && npm run start                    # 正式建置（BACKEND_URL 預設 http://localhost:8000）
 npm run screenshots && npm run screenshots:report  # 端到端串接測試 + 截圖 + PDF 報告（需要 backend、排程器、前端、Redis 都在跑）
 # backend（dev：SQLite 自動建表並建立 superadmin/superadmin1234、admin/admin1234、user/user1234）
@@ -62,6 +61,7 @@ uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器
 uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head   # MariaDB
 uv run python -m app.scheduler                    # 排程器（或 SCHEDULER_EMBEDDED=true 讓 backend 內嵌，開發時不用 Redis）；JOB_RUNNER=auto|systemd|subprocess
 uv run python -m app.cli seed|create-user|set-password|set-role|model-zoo [--verify]
+bash scripts/export_requirements.sh               # uv add / uv lock 之後：重新匯出 backend / trainer 的 requirements.txt（伺服器用 pip 裝，CI 會比對）
 npm run screenshots:keycloak                      # 以 AUTH_MODE=keycloak 啟動的前後端 + 假 Keycloak 跑登入 / 登出截圖
 # trainer
 cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
@@ -71,7 +71,7 @@ node scripts/build_manual.js                      # 使用手冊 DOCX（再用 s
 python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis（只有這兩個跑在 docker）
-./infra/install.sh            # 伺服器：venv（走 PyPI 鏡像）、前端 build、migration、systemd 服務；--update 升級
+./infra/install.sh            # 伺服器：venv（pip + requirements.txt，走 /etc/pip.conf 的 proxy；不用 uv）、前端 build、migration、systemd 服務；--update 升級
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ```
@@ -111,10 +111,13 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
-15. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`。
-16. 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`（節點 / 資源池 / 各專案配置與實測），管理員「使用率歷史」頁讀 `GET /admin/usage?range=`；取樣與清理都在 `app/scheduler/loop.py`，不要在 API 程序另外採樣。
-13. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
-14. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
+13. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`。
+14. 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`（節點 / 資源池 / 各專案配置與實測），管理員「使用率歷史」頁讀 `GET /admin/usage?range=`；取樣與清理都在 `app/scheduler/loop.py`，不要在 API 程序另外採樣。
+15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
+16. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
+
+17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。伺服器不用 uv：改了依賴就跑 `scripts/export_requirements.sh`。
+18. 任何寫入由不可信名稱決定路徑的地方（zip 成員、MinIO 物件、URL 檔名、trainer 回報的路徑）都走 `safe_join` / `job_relpath`；任務子程序的環境只從 `runner.ENV_PASSTHROUGH` 白名單繼承，不要把伺服器 secret 傳進去。
 
 ## 文件地圖
 

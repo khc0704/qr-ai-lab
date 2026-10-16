@@ -41,8 +41,9 @@ system_settings（key / value，資源池等）
 | updated_at | DATETIME(6) NOT NULL | |
 
 固定 key：
-- `resource_pool`：`{"gpu_indices": [0, 1], "cpu_cores": 24, "memory_mb": 98304, "max_running_jobs": 4, "allow_backfill": true}`，所有專案合計可用的總資源；scheduler 以此為容量上限。
+- `resource_pool`：`{"gpu_indices": [0, 1], "cpu_cores": 24, "memory_mb": 98304, "max_running_jobs": 4, "allow_backfill": true, "gpu_share": true}`（`gpu_indices` 必須唯一且 ≥ 0），所有專案合計可用的總資源；scheduler 以此為容量上限。
 - `job_defaults`：`{"timeout_minutes": 240, "upload_max_mb": 2048, "upload_ttl_minutes": 60, "log_max_mb": 50}`。
+- `tool_defaults`：個人工作區的配額與結果保留時間 `{"gpu_limit": 0, "cpu_limit": 2, "memory_limit_mb": 4096, "storage_quota_mb": 2048, "max_concurrent_jobs": 1, "result_ttl_hours": 24}`。
 
 ## issues（討論區）
 
@@ -181,7 +182,7 @@ system_settings（key / value，資源池等）
 | format | VARCHAR(32) NOT NULL | 同 data_sources.format |
 | detected_spec | JSON NULL | 表頭、列數估計、影像數、類別 |
 | status | VARCHAR(32) NOT NULL DEFAULT 'pending' | `pending \| claimed \| purged` |
-| claimed_by_job_id | BIGINT UNSIGNED NULL FK jobs | 建立 Job 時搬到 `jobs/{job_id}/input/` 並標 claimed |
+| claimed_by_job_id | BIGINT UNSIGNED NULL FK jobs ON DELETE SET NULL | 建立 Job 時搬到 `jobs/{job_id}/input/` 並標 claimed；刪除 Job 時歸 NULL（migration 0005） |
 | expires_at | DATETIME(6) NOT NULL | pending 超過即 purge |
 | created_by_id | BIGINT UNSIGNED NOT NULL FK users | |
 | created_at | DATETIME(6) | 無 updated_at |
@@ -286,10 +287,10 @@ system_settings（key / value，資源池等）
 
 ## 遷移注意事項
 
-`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
+`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）；0005 把 `uploads.claimed_by_job_id` 改成 ON DELETE SET NULL（SQLite 跳過，因為 0001 已是最新 schema）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
 
 ## 初始化
 
-- `infra/mariadb/init/01_create.sql`：建庫 `qr_ai_lab`（utf8mb4_unicode_ci）、應用使用者、最小權限。
-- 表由 Alembic 建立；第一個 revision 包含以上全部表，並 seed `system_settings` 的 `resource_pool`（依 `NODE_*` 環境變數偵測到的實體值）與 `job_defaults`。
-- 第一位 admin：Keycloak realm role `admin` 的使用者首次登入即為 admin；不需要 seed。
+- `infra/mariadb/init/01_init.sh`：容器第一次啟動時依 `MARIADB_DATABASE` / `MARIADB_USER` 補字集並建立 `<db>_test`（資料庫與使用者本身由 MariaDB 映像的環境變數建立）。
+- 表由 Alembic 建立；第一個 revision 包含以上全部表；`system_settings` 的 `resource_pool`（依 pynvml / psutil 偵測到的實體值）、`job_defaults`、`tool_defaults` 在第一次讀取時寫入。
+- 第一位 superadmin：`SUPERADMIN_USERNAMES` 列出的帳號、或 token 帶有 `KEYCLOAK_ROLE_MAP` 對應角色的使用者，首次登入即為該角色；keycloak 模式不 seed 本地帳號。SQLite（dev / test）也會開 `PRAGMA foreign_keys=ON`，外鍵行為與 MariaDB 一致。

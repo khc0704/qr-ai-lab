@@ -191,6 +191,7 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 ### 6.5 GPU 配置（依實測剩餘顯存共用）
 - 任務可填 `requested_gpu_memory_mb`（精靈「每張 GPU 需要的顯存」，預設 8192）。排程器每個 tick 以 pynvml 讀每張資源池 GPU **實際已用的顯存**（所有程序），再用驅動程式的程序清單把顯存對應到本系統每個任務的程序樹（`services/gpu.measured_by_job`）。可用量 = `total − 實測已用 − 尚未分配 − GPU_RESERVE_MB`；「尚未分配」只計入啟動不到 `GPU_WARMUP_S`（預設 120 秒）且實測還沒達到申請量的任務（申請量 − 實測），避免兩個連續啟動的任務都看到「還很空」而擠在同一張卡；暖機期過後完全以實測為準。符合的卡用 best-fit（剩最少的先用）讓任務集中；沒填的任務要整張空卡（沒有任何任務、已用顯存 < `GPU_BUSY_THRESHOLD`）。資源池的 `gpu_share=false` 關閉共用，一律獨占。沒有 NVIDIA driver 時退化成按張數（共用任務平均分散）。
 - Dashboard 的 GPU 卡片顯示驅動程式實測、每個任務「實測 / 申請」；使用率歷史每筆取樣記下各專案實測顯存（`gpu_mem_actual_mb`）。
+- 保留規則：在驅動程式看見任務的程序（CUDA context）之前，整個申請量都算「尚未分配」（抓資料、解壓、前處理可能遠超暖機期）；之後 `GPU_WARMUP_S` 內保留「申請 − 實測」，再之後只看實測。沒有 pynvml 時退化為以申請量計數。佇列頭的 GPU 任務等超過 10 分鐘時，不再讓後面的 GPU 任務 backfill 插隊（避免多 GPU 任務永遠排不到）。
 - 子程序拿到 `JOB_GPU_MEMORY_MB`，trainer `limits.py` 以 `torch.cuda.set_per_process_memory_fraction` 自限；Dashboard 的 GPU 卡片顯示驅動程式讀數、保留量、放在上面的任務與程序數。
 - `POST /admin/gpus/{index}/reset`（superadmin）：`jobs` 強制中斷本系統放在那張卡的任務；`all` 再 SIGKILL 驅動程式看到的所有程序；`device` 再執行 `GPU_RESET_COMMAND`（如 `sudo -n nvidia-smi --gpu-reset -i {index}`）。都寫稽核紀錄。
 
@@ -276,9 +277,9 @@ POST   /project-requests/{id}/withdraw
 POST   /project-requests/{id}/review         admin；status → in_review
 POST   /project-requests/{id}/approve        admin；body: slug、quota、members → 建立專案
 POST   /project-requests/{id}/reject         admin；body: review_note
-GET    /projects  GET /projects/{slug}  PATCH /projects/{slug}  POST /projects/{slug}/archive
+GET    /projects  GET /projects/{slug}  PATCH /projects/{slug}  POST /projects/{slug}/archive  POST …/unarchive（owner；個人工作區不能封存）
 PATCH  /projects/{slug}/quota                admin
-GET    /projects/{slug}/members  POST …  PATCH …/{user_id}  DELETE …/{user_id}
+POST   /projects/{slug}/members  PATCH …/{user_id}  DELETE …/{user_id}   （成員列表包含在 GET /projects/{slug}）
 GET    /projects/{slug}/data-sources  POST …  PATCH …/{id}  DELETE …/{id}  POST …/{id}/check
 POST   /projects/{slug}/uploads              multipart → upload_id + spec（一次性）
 GET    /projects/{slug}/jobs  POST …          建立訓練或推論 Job（202）
@@ -286,7 +287,7 @@ GET    /jobs                                  最近任務（我參與的專案�
 GET    /capacity                              總資源池 + 已配置量（任何登入者；給精靈與首頁）
 POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sample、spec）；GET /catalog/preprocess?data_type=
 GET    /jobs/{id}  POST /jobs/{id}/cancel     成員取消
-GET    /jobs/{id}/events(SSE)  GET /jobs/{id}/logs  GET /jobs/{id}/logs/download  GET /jobs/{id}/download
+GET    /jobs/{id}/events(SSE；`Last-Event-ID` 續讀)  GET /jobs/{id}/logs（回 `last_event_id`）  GET /jobs/{id}/logs/download  GET /jobs/{id}/download  GET /jobs/{id}/artifacts
 GET    /projects/{slug}/artifacts  PATCH /artifacts/{id}(is_default)  GET /artifacts/{id}/download  DELETE /artifacts/{id}
 GET    /admin/overview                        待審申請數、佇列長度、執行中數、池使用率
 GET    /admin/node                            每張 GPU 使用率 / 記憶體、CPU、memory、disk（實體）
@@ -310,23 +311,23 @@ GET    /healthz  GET /readyz
 
 ## 13. 部署（公司 Ubuntu GPU 伺服器，不連外網）
 
-- 前置：Ubuntu 22.04 / 24.04、NVIDIA driver（只要 driver；CUDA 函式庫隨 torch wheel 來）、Docker Engine + Compose plugin（只跑 MariaDB / Redis）、Python 3.12 + uv、Node ≥ 20.9、nginx。套件來源：公司的 PyPI 鏡像（`UV_INDEX_URL` / `PIP_INDEX_URL`）、npm 鏡像（`npm config set registry`）、image 鏡像（`infra/.env` 的 `DOCKER_REGISTRY`）。
+- 前置：Ubuntu 22.04 / 24.04、NVIDIA driver（只要 driver；CUDA 函式庫隨 torch wheel 來）、Docker Engine + Compose plugin（只跑 MariaDB / Redis）、Python 3.12 + `python3.12-venv`（**不需要 uv**：伺服器以 pip 從 `requirements.txt` 安裝，pip 走 `/etc/pip.conf` 的公司 PyPI proxy）、系統層級的 Node ≥ 20.9、nginx。套件來源：公司的 PyPI 鏡像（`UV_INDEX_URL` / `PIP_INDEX_URL`）、npm 鏡像（`npm config set registry`）、image 鏡像（`infra/.env` 的 `DOCKER_REGISTRY`）。
 - 程式放 `/opt/qr-ai-lab`（git checkout），資料放 `/srv/qr-ai-lab/data`（`DATA_ROOT`，含 `model_zoo/`），權重傳輸資料夾 `/srv/qr-ai-lab/transfer`（`MODEL_ZOO_IMPORT_ROOT`）。專用使用者 `qrlab`，`loginctl enable-linger qrlab`（任務的 systemd scope 跑在它的 user slice）。
-- `infra/install.sh`：建 venv（backend `--extra gpu`、trainer `--extra dl`）、`next build`、`alembic upgrade head` + `app.cli seed`、安裝 `infra/systemd/qrlab-{backend,scheduler,frontend}.service` 並啟動；`--update` 在 `git pull` 後重跑。環境變數：backend / scheduler 讀 `/etc/qr-ai-lab/qrlab.env`（範本 `infra/systemd/qrlab.env.example`，含 `AUTH_MODE=keycloak`、`KEYCLOAK_*`、`KEYCLOAK_ROLE_MAP`、`SUPERADMIN_USERNAMES`、`GPU_RESET_COMMAND`），frontend 讀 `/etc/qr-ai-lab/frontend.env`（範本 `infra/systemd/frontend.env.example`，含 `AUTH_MODE`、`AUTH_SECRET`、`AUTH_URL`、`AUTH_KEYCLOAK_*`）。公司私有的值只放在這兩個檔案。
-- nginx：`infra/nginx/qr-ai-lab.conf`（TLS 用公司 CA；`/api/v1` 轉 8000、其餘轉 3000；關閉 buffering 讓 SSE 與上傳串流）。沒有 TLS 時前端要設 `COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
+- `infra/install.sh`：第一次只建使用者 / 資料夾 / 兩個 env 範本後停下；第二次檢查 env 檔（systemd 不接受行尾註解、secret 不能是預設）、建 venv（`python3.12 -m venv` + `pip install -r requirements.txt`，`requirements.txt` 由 `scripts/export_requirements.sh` 從 `uv.lock` 匯出）、`next build`、`alembic upgrade head` + `app.cli seed`（local 模式才建帳號）、安裝 `infra/systemd/qrlab-{backend,scheduler,frontend}.service` 並等健康檢查；`--update` 在 `git pull` 後重跑。環境變數：backend / scheduler 讀 `/etc/qr-ai-lab/qrlab.env`（範本 `infra/systemd/qrlab.env.example`，含 `AUTH_MODE=keycloak`、`KEYCLOAK_*`、`KEYCLOAK_ROLE_MAP`、`SUPERADMIN_USERNAMES`、`GPU_RESET_COMMAND`），frontend 讀 `/etc/qr-ai-lab/frontend.env`（範本 `infra/systemd/frontend.env.example`，含 `AUTH_MODE`、`AUTH_SECRET`、`AUTH_URL`、`AUTH_KEYCLOAK_*`）。公司私有的值只放在這兩個檔案。
+- nginx：`infra/nginx/qr-ai-lab.conf` + `snippets/qr-ai-lab-proxy.conf`（TLS 用公司 CA；`/api/v1` 轉 8000、其餘轉 3000；關閉 buffering 讓 SSE 與上傳串流；上傳路徑 20 GB、其餘 64 MB；登入路徑 `limit_req`；`large_client_header_buffers` 容納 Auth.js 的 session cookie；轉送 `X-Forwarded-*`）。沒有 TLS 時前端要設 `COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
 - 任務執行：`JOB_RUNNER=auto`（systemd cgroup；Dashboard 會顯示實際偵測結果）。沒有任何容器，也不需要 NVIDIA Container Toolkit。
 - 模型庫：管理員在 `/admin/model-zoo` 用三種方式之一把權重帶進來：瀏覽器上傳、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）。有網路的機器可先用 `scripts/fetch_model_zoo.py` 抓好再整個資料夾放到傳輸資料夾。
 - 更新流程：`git pull` → `./infra/install.sh --update`（重 sync venv、重建前端、migration、重啟三個服務；執行中的任務不受排程器重啟影響）。
-- 磁碟：`DATA_ROOT` 放在大容量磁碟；admin Dashboard 顯示剩餘空間；低於 10% 時新 Job 不排程並告警。
+- 磁碟：`DATA_ROOT` 放在大容量磁碟；admin Dashboard 顯示剩餘空間（目前只顯示，沒有自動停排）。
 
 ## 14. 安全性注意事項
 
-- 任務是 `qrlab` 使用者的主機子程序（沒有容器、沒有 docker socket）：trainer venv 只裝公司鏡像的套件；子程序只拿到自己的 input / output / 模型庫路徑與該 Job 的 token，看不到 DB 與其他 Job；`GPU_RESET_COMMAND` 若用 `sudo -n nvidia-smi --gpu-reset` 要在 sudoers 只開放這一條指令。
+- 任務是 `qrlab` 使用者的主機子程序（沒有容器、沒有 docker socket）：trainer venv 只裝公司 proxy 的套件；子程序的環境變數是白名單（`runner.ENV_PASSTHROUGH`：PATH / HOME / 語系 / proxy / `CUDA_*` …）加上自己的 token 與資料來源憑證，伺服器的 `DATABASE_URL`、`AUTH_SECRET`、`JOB_TOKEN_SECRET`、`DATASET_SECRET_KEY` 不會出現在 `/proc/<pid>/environ`；`/internal/*` 的路徑只能在該任務的輸出目錄內（`job_relpath`），任務結束（任何終態）後 token 不再能寫入；MinIO 物件名稱與 zip 成員名稱都經 `safe_join` 檢查，不能寫到任務目錄之外；`GPU_RESET_COMMAND` 若用 `sudo -n nvidia-smi --gpu-reset` 要在 sudoers 只開放這一條指令。
 - Keycloak 的 client secret 與 `AUTH_SECRET` 只在 `/etc/qr-ai-lab/*.env`（root:qrlab 640）；session cookie 加密、httpOnly；access token 只在伺服器端轉給 backend。
 - 使用者資料集憑證：加密儲存、不入 log、不回前端；只以環境變數進入該 Job 容器。
 - 上傳：大小上限、副檔名白名單、串流寫檔、路徑由伺服器產生（不用使用者檔名當路徑）。
 - 所有管理員操作與 Job 狀態變更寫 `audit_logs`；UI 二次確認。
-- 速率限制：登入後的 API 以 user 為鍵（slowapi），`/internal/*` 以 job 為鍵。
+- 速率限制：`POST /auth/login` 每個 (client, 帳號) 5 分鐘內最多 10 次失敗（429），nginx 另加每分鐘 10 次；`APP_ENV=prod` 啟動時檢查 secret / Fernet 金鑰 / Keycloak 設定 / Redis（`Settings._check_production`）；Keycloak 模式只接受 `azp`（或 `aud`）是本 client 的 token，接管同名本地帳號時角色重設為 `user`。
 
 ## 15. v1 範圍與未來
 

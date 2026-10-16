@@ -32,7 +32,7 @@ paths:
 - 路由分組：`(auth)` 未登入頁；`(app)` 登入後的 AppShell；admin 頁在 `(app)/admin/**`，其 layout 用 `isAdmin(user)`（admin 或 superadmin）否則 `notFound()`；頁面內更細的按鈕用 `can(user, "<perm>")`（`src/lib/roles.ts`，權限清單來自 `/me`），不要再寫 `role === "admin"`。
 - 認證：`AUTH_MODE=local` 走 `loginAction` + cookie `qr_token`；`AUTH_MODE=keycloak` 走 `src/auth.ts`（Auth.js Keycloak provider）+ 瀏覽器端 `signIn("keycloak")`（`next-auth/react`）/ `logoutAction`（server：signOut + Keycloak end-session）；`getToken()`（`src/lib/backend.ts`）依模式取 token，Route Handler 與 `apiFetch` 都只用它。登入頁上和 `AUTH_MODE` 有關的內容要放在讀 `searchParams` 的動態子樹，不能進 prerender 的殼。
 - 狀態管理：伺服器狀態靠 RSC，client 端互動列表用 TanStack Query；表單 react-hook-form + zod；不引入全域 store。
-- 型別：TypeScript strict；API 型別從 `src/types/api.ts` 取得（`npm run gen:api` 由 backend OpenAPI 產生），不手寫重複型別。
+- 型別：TypeScript strict；API 的前端型別手寫在 `src/types/domain.ts`（camelCase），snake_case → camelCase 的轉換集中在 `src/lib/api/mappers.ts`（枚舉值要原樣傳遞，不要用預設值吞掉未知值；`npm test` 的 mapper 測試會檢查）。
 - 檔名：所有元件與檔案 kebab-case（`status-badge.tsx` 匯出 `StatusBadge`）；hooks `use-xxx.ts`；路由資料夾 kebab-case。
 - 文案繁體中文，集中在元件常數或 `src/i18n/zh-TW.ts`（預留），不要散落硬編碼。
 - Lint 用 ESLint 直接執行（Next.js 16 已移除 `next lint`）；格式用 Prettier + `prettier-plugin-tailwindcss`（class 排序）。`npm run typecheck` 會先 `next typegen` 再 `tsc`。

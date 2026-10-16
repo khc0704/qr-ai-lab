@@ -6,7 +6,7 @@
 ## A. 上線前必做
 
 1. ✅ **前端接 backend**：登入 → httpOnly cookie → `src/lib/api`（fetch）+ Server Actions + Route Handler 代理（上傳 / SSE / 下載）；沙盒以 SQLite + Redis + subprocess runner 走完整流程並截圖（`docs/screenshots/e2e/`、`docs/manuals/QR-AI-Lab-串接測試報告.pdf`）。待補：列表頁自動刷新（目前 RSC 需重新整理）、表單的樂觀更新。
-2. **Keycloak**：目前本地帳號；切換時 `AUTH_MODE=keycloak`，前端 Auth.js 也要接上。本地帳號的密碼政策、鎖定、到期都沒有，不要長期使用。
+2. ✅ **Keycloak**：`AUTH_MODE=keycloak`（後端驗 JWKS + azp，前端 Auth.js；token 更新只在 `proxy.ts` 並寫回 cookie）。本地帳號只剩登入失敗鎖定（5 分鐘 10 次）與 prod 的預設密碼拒絕，沒有密碼政策 / 到期，不要長期使用。
 3. **HTTPS / nginx / 對外介面**：✅ `infra/nginx/qr-ai-lab.conf` 與 systemd 的 frontend service 已就位；憑證用公司 CA。沒有 TLS 時 `COOKIE_SECURE=0`。
 4. **備份與還原演練**：`DATA_ROOT`（產物、模型庫）與 MariaDB 的備份排程寫在文件裡但沒有腳本；至少要有 `mariadb-dump` + rsync 的 cron 與一次還原演練。
 5. **資源池與真實 GPU 的對應**：✅ 排程前用 pynvml 檢查分到的 GPU 顯存是否被別的程序占用（`GPU_BUSY_THRESHOLD`），忙就等。MIG 與顯存不均仍未處理。
@@ -56,6 +56,14 @@
 - 前處理描述用 Python dict 顯示參數（`{'strategy': 'median'}`）：`Pipeline.describe()` 改輸出 JSON。
 - Route Handler 不能用 `export const dynamic`（Cache Components 下 build 會失敗）：移除。
 
+## F. 這一輪（任務不進容器 + 離線部署）新增的能力
+
+- `JOB_RUNNER=auto | systemd | subprocess`：任務是主機子程序；systemd cgroup scope 強制記憶體 / CPU / 核心，subprocess 退路有 affinity + 記憶體 watchdog；兩者都能在排程器重啟後接回；GPU 啟動前預檢。
+- `SCHEDULER_EMBEDDED=true`：排程器跑在 backend 程序內，開發機與小型部署不需要 Redis。
+- 管理員「模型庫」頁：瀏覽器上傳、伺服器路徑匯入、內網 URL 下載，sha256 驗證、manifest、稽核；目錄回傳 `weights_ready`，精靈標示缺權重，建立任務時拒絕。
+- Dashboard 顯示「任務執行方式」（runner、哪些限制由 cgroup 強制、trainer python 路徑）；任務頁顯示分到的 CPU 核心。
+- infra：compose 只剩 MariaDB / Redis；`infra/systemd/*.service`、`infra/nginx/qr-ai-lab.conf`、`infra/install.sh`（走 PyPI / npm 鏡像）。
+
 ## G. 這一輪（Keycloak、三種角色、資源限制、GPU 共用、使用率歷史、前處理服務）新增的能力
 
 - 認證：`AUTH_MODE=keycloak` 時前端用 Auth.js（`src/auth.ts`，Keycloak provider，PKCE，session 內自動 refresh）取得 access token 再轉給 FastAPI；後端驗 realm JWKS、依 `KEYCLOAK_ROLE_MAP` 對應角色、`SUPERADMIN_USERNAMES` 引導第一位 superadmin、同名本地帳號自動接管；登出走 end-session。dev 維持本地帳號。`scripts/e2e-keycloak.mjs` + 假 Keycloak 可離線驗證整條流程。
@@ -67,10 +75,10 @@
 - 第二輪：GPU 改為**實測模式**（驅動程式實際用量 + 暖機期的「尚未分配」量；每個任務的實測顯存顯示在 GPU 卡片與使用率歷史）；前處理改為**任務**（個人工作區、佇列、配額、log、下載一次即刪、逾期清理），預覽維持即時；新增**資料分析**任務（表格探勘、影像品質飄移 / embedding）；`docs/ENVIRONMENT.md` 列出所有環境變數檔。
 - 待辦：Keycloak 群組 → 專案成員的自動對應；使用率歷史匯出 CSV；分析報告 PDF 匯出；從專案內直接對資料來源啟動分析。
 
-## F. 這一輪（任務不進容器 + 離線部署）新增的能力
+## H. 第三輪：自檢（四個面向的程式碼審視）後修掉的問題
 
-- `JOB_RUNNER=auto | systemd | subprocess`：任務是主機子程序；systemd cgroup scope 強制記憶體 / CPU / 核心，subprocess 退路有 affinity + 記憶體 watchdog；兩者都能在排程器重啟後接回；GPU 啟動前預檢。
-- `SCHEDULER_EMBEDDED=true`：排程器跑在 backend 程序內，開發機與小型部署不需要 Redis。
-- 管理員「模型庫」頁：瀏覽器上傳、伺服器路徑匯入、內網 URL 下載，sha256 驗證、manifest、稽核；目錄回傳 `weights_ready`，精靈標示缺權重，建立任務時拒絕。
-- Dashboard 顯示「任務執行方式」（runner、哪些限制由 cgroup 強制、trainer python 路徑）；任務頁顯示分到的 CPU 核心。
-- infra：compose 只剩 MariaDB / Redis；`infra/systemd/*.service`、`infra/nginx/qr-ai-lab.conf`、`infra/install.sh`（走 PyPI / npm 鏡像）。
+安全與部署阻斷：systemd env 範本的行尾註解會變成值（已改成獨立行並加檢查）；`uv sync --frozen` 不走 PyPI proxy（伺服器改用 pip + `requirements.txt`）；MinIO 物件名稱 / zip 成員名稱的路徑穿越（`safe_join`）；任務子程序繼承伺服器 secret（環境白名單）；`/internal/*` 路徑只限 `DATA_ROOT`（改為任務目錄內 + 結束後拒絕寫入）；prod 接受預設 secret（啟動檢查）；Keycloak 同名帳號接管保留角色（重設為 user，keycloak 模式不 seed）；Keycloak 模式更新後的 token 寫不回 cookie（改由 proxy 更新）；登入後 `next=` 開放式重導向；登入沒有限速。
+
+正確性：刪專案刪錯上傳目錄；刪 Job / 刪資料來源在 MariaDB 外鍵下 500（0005 + 解除引用；SQLite 測試也開外鍵）；GPU 暖機期以牆鐘計算造成重複配置（改為驅動看見程序前整個申請量保留）；實測 CPU 永遠 0；排隊超過 48 小時的任務輸入被清掉；AutoML 無標籤異常偵測最佳化 `score_mean`、trial 沒有 deadline；預覽 zip bomb / ReDoS；上傳代理整檔進記憶體；前端沒有 `error.tsx`、SSE 重播重複、斷線無提示、log 無上限；viewer 看得到不能用的按鈕；佇列頭 GPU 任務被 backfill 餓死；log 超過上限直接殺任務（改為就地截斷）；取消與啟動的競爭；重啟後 reconcile 讀到過期狀態；Redis 事件串流不過期；使用率歷史整段載入；`?min_role=` 外洩；欄位長度溢位等。
+
+仍待做：Alembic 0001 仍是 `create_all`（要凍結成真正的 schema 並在 MariaDB 上跑 CI）；`docs/manuals` 與截圖讓 `.git` 超過 100 MB（改用 LFS 或 release 附件並清歷史）；XGBoost `device=cuda` 不受共用顯存上限約束（共用 GPU 時改走 CPU）；磁碟低於門檻時自動停排；資料來源瀏覽、通知、回寫 MES 等 B 節項目。
