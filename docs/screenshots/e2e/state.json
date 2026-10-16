@@ -1,0 +1,19 @@
+{
+  "requestId": 1,
+  "slug": "wat-yield-forecast",
+  "iqaRequest": 2,
+  "spectrumRequest": 3,
+  "trainJob": 1,
+  "inferJob": 2,
+  "iqaTrainJob": 3,
+  "iqaCompareJob": 4,
+  "spectrumJob": 5,
+  "issueId": 1,
+  "longJob": 6,
+  "waitingJob": 7,
+  "restartedJob": 8,
+  "toolJob": 12,
+  "toolDownload": "wat_yield-preprocessed.zip",
+  "analysisTabular": 13,
+  "analysisImage": 14
+}
