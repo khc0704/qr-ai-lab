@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -24,9 +26,15 @@ async def get_by_username(session: AsyncSession, username: str) -> User | None:
 
 
 async def find_by_username_or_email(session: AsyncSession, value: str) -> User | None:
-    return (
-        await session.execute(select(User).where(or_(User.username == value, User.email == value)))
-    ).scalar_one_or_none()
+    """Exact username first; otherwise the e-mail, which is not unique (Keycloak and local accounts may share
+    one), so an ambiguous e-mail is an error instead of a 500."""
+    rows = list((await session.execute(select(User).where(or_(User.username == value, User.email == value)))).scalars())
+    by_name = [u for u in rows if u.username == value]
+    if by_name:
+        return by_name[0]
+    if len(rows) > 1:
+        raise conflict("AMBIGUOUS_USER", f"有 {len(rows)} 個帳號使用 {value}，請改用帳號名稱")
+    return rows[0] if rows else None
 
 
 async def list_users(
@@ -47,7 +55,7 @@ async def authenticate(session: AsyncSession, username: str, password: str) -> U
     user = await get_by_username(session, username)
     if user is None or not user.is_active or user.auth_provider != "local":
         return None
-    if not verify_password(password, user.password_hash):
+    if not await asyncio.to_thread(verify_password, password, user.password_hash):  # argon2 ~50 ms CPU
         return None
     user.last_login_at = utcnow()
     await session.commit()
@@ -143,6 +151,9 @@ async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) ->
             user.keycloak_sub = sub
             user.auth_provider = "keycloak"
             user.password_hash = None
+            # The matching name only proves the name: privileges must come from the token (KEYCLOAK_ROLE_MAP,
+            # SUPERADMIN_USERNAMES) or be granted again in /admin/users after this first login.
+            user.role = "user"
         else:
             user = User(
                 keycloak_sub=sub,
@@ -156,9 +167,18 @@ async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) ->
     if mapped is not None and ROLE_RANK.get(mapped, -1) != ROLE_RANK.get(user.role, -1):
         user.role = mapped
     user.email = claims.get("email") or user.email
-    user.display_name = claims.get("name") or user.display_name
+    user.display_name = (claims.get("name") or user.display_name or "")[:100] or None
     user.last_login_at = utcnow()
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # The first page after login fires parallel requests; another one just inserted this user.
+        await session.rollback()
+        user = (await session.execute(select(User).where(User.keycloak_sub == sub))).scalar_one_or_none()
+        if user is None:
+            raise
+        user.last_login_at = utcnow()
+        await session.commit()
     return user
 
 

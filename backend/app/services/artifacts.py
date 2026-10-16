@@ -78,8 +78,27 @@ async def delete(session: AsyncSession, actor: User, artifact: Artifact) -> None
 
 async def register_from_job(session: AsyncSession, job: Job, body: ArtifactRegister) -> Artifact:
     """Trainer wrote a file under the job output dir; validate, size, quota, version, record."""
+    from app.services.internal import job_relpath  # local import: internal imports this module
+
     storage = get_storage()
-    rel = f"{job.output_path}/{body.path.lstrip('/')}"
+    rel = job_relpath(job, body.path)
+    if body.idempotency_key:
+        existing = (
+            (
+                await session.execute(
+                    select(Artifact).where(
+                        Artifact.job_id == job.id,
+                        Artifact.kind == body.kind,
+                        Artifact.name == body.name,
+                        Artifact.path == rel,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is not None:
+            return existing
     abs_path = storage.abs(rel)
     if not abs_path.exists():
         raise not_found("ARTIFACT_FILE_MISSING", f"檔案不存在：{body.path}")

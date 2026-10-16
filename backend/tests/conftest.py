@@ -27,6 +27,7 @@ os.environ.update(
 
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 import app.models  # noqa: E402, F401
 from app.db.base import Base  # noqa: E402
@@ -42,8 +43,10 @@ from app.storage.local import reset_storage  # noqa: E402
 async def db():
     engine = get_engine()
     async with engine.begin() as conn:
+        await conn.execute(text("PRAGMA foreign_keys=OFF"))  # jobs ↔ artifacts reference each other
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("PRAGMA foreign_keys=ON"))
     settings_svc.invalidate()
     reset_bus()
     shutil.rmtree(_TMP / "data", ignore_errors=True)  # job ids restart from 1: never reuse an old job dir

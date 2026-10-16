@@ -14,10 +14,10 @@ DataFormat = Literal["csv", "parquet", "image_folder", "coco", "yolo", "npy", "j
 class DataSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["minio", "url"]
-    endpoint: str | None = None
+    endpoint: str | None = Field(default=None, max_length=255)
     bucket: str | None = None
     object_path: str | None = None
-    url: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
     access_key: str | None = None
     secret_key: str | None = None
     region: str | None = None
@@ -36,10 +36,10 @@ class DataSourceCreate(BaseModel):
 
 class DataSourceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    endpoint: str | None = None
+    endpoint: str | None = Field(default=None, max_length=255)
     bucket: str | None = None
     object_path: str | None = None
-    url: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
     access_key: str | None = None
     secret_key: str | None = None
     region: str | None = None

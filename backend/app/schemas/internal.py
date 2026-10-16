@@ -56,6 +56,8 @@ class ArtifactRegister(BaseModel):
     metrics: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     set_default: bool = False
+    # same key again (the trainer retried after a lost response) → the existing row, not a new version
+    idempotency_key: str | None = Field(default=None, max_length=255)
 
 
 class ResultBody(BaseModel):

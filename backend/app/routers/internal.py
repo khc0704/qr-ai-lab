@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.core.deps import DbSession, InternalJob
+from app.core.deps import DbSession, InternalJob, LiveInternalJob
 from app.schemas.artifact import ArtifactRead
 from app.schemas.common import Ok
 from app.schemas.internal import ArtifactRegister, JobSpec, MetricsBody, ResultBody, StatusBody
@@ -20,23 +20,23 @@ async def spec(job: InternalJob, session: DbSession) -> JobSpec:
 
 
 @router.post("/{job_id}/status", response_model=Ok)
-async def status(body: StatusBody, job: InternalJob, session: DbSession) -> Ok:
+async def status(body: StatusBody, job: LiveInternalJob, session: DbSession) -> Ok:
     await internal_svc.update_status(session, job, body)
     return Ok()
 
 
 @router.post("/{job_id}/metrics", response_model=Ok)
-async def metrics(body: MetricsBody, job: InternalJob, session: DbSession) -> Ok:
+async def metrics(body: MetricsBody, job: LiveInternalJob, session: DbSession) -> Ok:
     await internal_svc.add_metrics(session, job, body)
     return Ok()
 
 
 @router.post("/{job_id}/artifacts", response_model=ArtifactRead, status_code=201)
-async def register_artifact(body: ArtifactRegister, job: InternalJob, session: DbSession) -> ArtifactRead:
+async def register_artifact(body: ArtifactRegister, job: LiveInternalJob, session: DbSession) -> ArtifactRead:
     return ArtifactRead.model_validate(await artifacts_svc.register_from_job(session, job, body))
 
 
 @router.post("/{job_id}/result", response_model=Ok)
-async def result(body: ResultBody, job: InternalJob, session: DbSession) -> Ok:
+async def result(body: ResultBody, job: LiveInternalJob, session: DbSession) -> Ok:
     await internal_svc.set_result(session, job, body)
     return Ok()

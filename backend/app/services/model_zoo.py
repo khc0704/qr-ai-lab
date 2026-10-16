@@ -298,9 +298,18 @@ def _allowed_path(path: str) -> Path:
     return p
 
 
+class _AllowedRedirects(urllib.request.HTTPRedirectHandler):
+    """Every hop must satisfy MODEL_ZOO_ALLOWED_HOSTS, not only the URL the admin typed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _allowed_host(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download(url: str, dest: Path, task: ZooTask, limit: int) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "qr-ai-lab-model-zoo"})
-    with urllib.request.urlopen(req, timeout=60) as r, dest.open("wb") as f:
+    opener = urllib.request.build_opener(_AllowedRedirects())
+    with opener.open(req, timeout=60) as r, dest.open("wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         task.total_mb = round(total / 2**20, 1) if total else None
         done = 0

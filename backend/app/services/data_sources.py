@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 from sqlalchemy import func, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import conflict, not_found
@@ -94,6 +95,8 @@ async def delete(session: AsyncSession, actor: User, project: Project, ds: DataS
     ).scalar_one()
     if active:
         raise conflict("DATA_SOURCE_IN_USE", "有未結束的任務正在使用")
+    # finished jobs keep the source's name in input.data_source_name; the FK is RESTRICT so unlink them first
+    await session.execute(sql_update(Job).where(Job.data_source_id == ds.id).values(data_source_id=None))
     await session.delete(ds)
     await audit.record(
         session, actor.id, "data_source.delete", "project", project.id, {"data_source_id": ds.id, "name": ds.name}

@@ -15,6 +15,7 @@ Placement rules (``plan``):
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import signal
@@ -85,7 +86,11 @@ def slots_from(
             s.reserved_mb += j.requested_gpu_memory_mb
             s.measured_mb += m
             started = j.started_at or now
-            if (now - started).total_seconds() < warmup_s:
+            warming = (now - started).total_seconds() < warmup_s
+            # Until the driver attributes memory to the job (no CUDA context yet: fetching, extracting,
+            # preprocessing can take far longer than the warm-up) its whole request stays reserved; afterwards
+            # only the warm-up window keeps the gap between request and measurement reserved.
+            if m <= 0 or warming:
                 s.pending_mb += max(0, j.requested_gpu_memory_mb - m)
     return slots
 
@@ -195,7 +200,7 @@ async def reset(session: AsyncSession, admin: User, index: int, mode: str, reaso
     stopped: list[int] = []
     for j in ours:
         try:
-            await jobs_svc.cancel(session, admin, j, f"GPU {index} reset: {reason}", forced=True)
+            await jobs_svc.cancel(session, admin, j, f"GPU {index} reset: {reason}"[:255], forced=True)
             stopped.append(j.id)
         except Exception as e:  # already finishing
             log.warning("gpu reset: cancel failed", job_id=j.id, error=repr(e))
@@ -217,7 +222,9 @@ async def reset(session: AsyncSession, admin: User, index: int, mode: str, reaso
             )
         command = s.gpu_reset_command.format(index=index)
         try:
-            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
+            r = await asyncio.to_thread(  # may take a while; never stall the API loop
+                subprocess.run, command, shell=True, capture_output=True, text=True, timeout=120
+            )
             command_ok = r.returncode == 0
             output = (r.stdout + r.stderr).strip()[-2000:]
         except Exception as e:

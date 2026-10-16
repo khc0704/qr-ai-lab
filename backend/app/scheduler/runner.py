@@ -32,6 +32,8 @@ log = get_logger("runner")
 
 # Set for every job: weights come from the model zoo only, nothing phones home, threads follow the CPU grant.
 OFFLINE_ENV = {
+    "YOLO_VERBOSE": "false",  # no per-batch progress bars in the job log (the trainer logs one line per epoch)
+    "TQDM_DISABLE": "1",
     "HF_HUB_OFFLINE": "1",
     "TRANSFORMERS_OFFLINE": "1",
     "HF_DATASETS_OFFLINE": "1",
@@ -123,9 +125,64 @@ def thread_env(cpu: float) -> dict[str, str]:
     }
 
 
+# What a job process inherits from the scheduler's environment. Everything else (DATABASE_URL, AUTH_SECRET,
+# JOB_TOKEN_SECRET, DATASET_SECRET_KEY, REDIS_URL, Keycloak settings …) stays in the service: a job only gets its
+# own token and its own data-source credentials through ``spec.env``.
+ENV_PASSTHROUGH = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "TMPDIR",
+        "XDG_RUNTIME_DIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "VIRTUAL_ENV",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "MAX_DATALOADER_WORKERS",
+    }
+)
+ENV_PASSTHROUGH_PREFIXES = (
+    "CUDA_",
+    "NVIDIA_",
+    "NCCL_",
+    "TORCH_",
+    "HF_",
+    "TRANSFORMERS_",
+    "YOLO_",
+    "ULTRALYTICS_",
+    "QR_TRAINER_",
+    "TRAINER_RETRY_",  # TRAINER_RETRY_SHORT_S / _LONG_S: backend-call retry budgets (trainer/api_client.py)
+)
+
+
+def passthrough_env(source: dict[str, str] | None = None) -> dict[str, str]:
+    src = os.environ if source is None else source
+    return {k: v for k, v in src.items() if k in ENV_PASSTHROUGH or k.startswith(ENV_PASSTHROUGH_PREFIXES)}
+
+
 def job_env(spec: LaunchSpec, base: dict[str, str] | None = None) -> dict[str, str]:
     return {
-        **(base if base is not None else os.environ),
+        **(base if base is not None else passthrough_env()),
         **OFFLINE_ENV,
         **thread_env(spec.cpu),
         "JOB_CPU_CORES": ",".join(str(c) for c in spec.cpus),

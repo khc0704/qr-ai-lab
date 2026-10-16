@@ -5,6 +5,7 @@ import re
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy import update as sql_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import bad_request, conflict, not_found
@@ -52,11 +53,18 @@ async def personal(session: AsyncSession, user: User) -> Project:
         approved_at=utcnow(),
     )
     session.add(p)
-    await session.flush()
-    session.add(ProjectMember(project_id=p.id, user_id=user.id, role="owner", added_by_id=user.id))
-    get_storage().ensure(get_storage().project_dir(p.slug))
-    await audit.record(session, user.id, "project.personal.create", "project", p.id, {"slug": p.slug})
-    await session.commit()
+    try:
+        await session.flush()
+        session.add(ProjectMember(project_id=p.id, user_id=user.id, role="owner", added_by_id=user.id))
+        get_storage().ensure(get_storage().project_dir(p.slug))
+        await audit.record(session, user.id, "project.personal.create", "project", p.id, {"slug": p.slug})
+        await session.commit()
+    except IntegrityError:
+        # two parallel first uses of the tools raced on the unique slug: the other request created it
+        await session.rollback()
+        p = (
+            await session.execute(select(Project).where(Project.owner_id == user.id, Project.kind == "personal"))
+        ).scalar_one()
     # commit expired the instance: reload it with its eager relationships (members, owner) for the serializer
     return (
         await session.execute(select(Project).where(Project.id == p.id).execution_options(populate_existing=True))
@@ -132,9 +140,21 @@ async def archive(session: AsyncSession, actor: User, project: Project) -> Proje
     ).scalar_one()
     if active:
         raise conflict("PROJECT_HAS_ACTIVE_JOBS", f"還有 {active} 個任務未結束，請先取消")
+    if project.kind == "personal":
+        raise conflict("PERSONAL_WORKSPACE", "個人工作區不能封存（前處理 / 分析工具需要它）")
     project.status = "archived"
     project.archived_at = utcnow()
     await audit.record(session, actor.id, "project.archive", "project", project.id)
+    await session.commit()
+    return project
+
+
+async def unarchive(session: AsyncSession, actor: User, project: Project) -> Project:
+    if project.status != "archived":
+        raise conflict("PROJECT_NOT_ARCHIVED", "專案沒有被封存")
+    project.status = "active"
+    project.archived_at = None
+    await audit.record(session, actor.id, "project.unarchive", "project", project.id)
     await session.commit()
     return project
 
@@ -163,6 +183,7 @@ async def delete(session: AsyncSession, actor: User, project: Project) -> None:
     # FK order: jobs → artifacts (inference jobs) and artifacts → jobs (RESTRICT both ways), so break the link first.
     await session.execute(sql_update(Job).where(Job.project_id == project.id).values(artifact_id=None))
     await session.execute(sql_delete(Artifact).where(Artifact.project_id == project.id))
+    upload_ids = list((await session.execute(select(Upload.id).where(Upload.project_id == project.id))).scalars())
     await session.execute(sql_delete(Upload).where(Upload.project_id == project.id))
     await session.execute(sql_delete(Job).where(Job.project_id == project.id))
     await session.execute(sql_delete(DataSource).where(DataSource.project_id == project.id))
@@ -182,7 +203,8 @@ async def delete(session: AsyncSession, actor: User, project: Project) -> None:
     await session.flush()
     storage = get_storage()
     storage.remove_tree(f"projects/{project.slug}")
-    storage.remove_tree(f"uploads/{project.id}")
+    for upload_id in upload_ids:  # one-time uploads live at uploads/<upload id>, not per project
+        storage.remove_tree(f"uploads/{upload_id}")
     await session.commit()
 
 

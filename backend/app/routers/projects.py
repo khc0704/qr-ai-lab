@@ -64,6 +64,11 @@ async def archive_project(access: Owner, session: DbSession) -> ProjectRead:
     return await ser.project(session, await projects_svc.archive(session, access.user, access.project))
 
 
+@router.post("/{slug}/unarchive", response_model=ProjectRead, summary="解除封存（owner）")
+async def unarchive_project(access: Owner, session: DbSession) -> ProjectRead:
+    return await ser.project(session, await projects_svc.unarchive(session, access.user, access.project))
+
+
 @router.delete("/{slug}", response_model=Ok, summary="刪除專案與所有產物（superadmin）")
 async def delete_project(slug: str, session: DbSession, admin: ProjectDeleter) -> Ok:
     """不可復原：刪除任務、產物、資料來源設定、成員與專案資料夾。還有未結束的任務時拒絕。"""

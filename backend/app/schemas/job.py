@@ -18,6 +18,9 @@ class JobInputBody(BaseModel):
     rows: list[dict[str, Any]] | None = None  # inline (inference only)
 
 
+MAX_TIMEOUT_MINUTES = 14 * 24 * 60  # two weeks; the per-job token lives as long
+
+
 class JobCreate(BaseModel):
     kind: Literal["train", "inference"]
     name: str = Field(min_length=1, max_length=120)
@@ -28,12 +31,12 @@ class JobCreate(BaseModel):
     config: dict[str, Any] | None = None
     artifact_id: int | None = None
     requested_gpu: int = Field(default=0, ge=0, le=64)
-    requested_cpu: float = Field(default=1, ge=0.5)
+    requested_cpu: float = Field(default=1, ge=0.5, le=999)  # jobs.requested_cpu is NUMERIC(5,2)
     requested_memory_mb: int = Field(default=2048, ge=256)
     # VRAM this job needs per GPU. Set → the scheduler may place it on a GPU another job is using as long as
     # that much memory is free (and the trainer caps itself with set_per_process_memory_fraction). None → exclusive.
     requested_gpu_memory_mb: int | None = Field(default=None, ge=256, le=1024 * 1024)
-    timeout_minutes: int | None = Field(default=None, ge=1)
+    timeout_minutes: int | None = Field(default=None, ge=1, le=MAX_TIMEOUT_MINUTES)
 
 
 class JobRead(ORMModel):
@@ -79,6 +82,7 @@ class LogLinesRead(BaseModel):
     lines: list[str]
     offset: int
     total: int
+    last_event_id: str | None = None  # send as Last-Event-ID to /events so the replay does not repeat these lines
 
 
 class StopBody(BaseModel):

@@ -74,7 +74,7 @@ def decode_keycloak_token(token: str, settings: Settings | None = None) -> dict[
         raise unauthorized("AUTH_MISCONFIGURED", "KEYCLOAK_ISSUER 未設定")
     try:
         key = _jwks_client(s.keycloak_issuer).get_signing_key_from_jwt(token).key
-        return jwt.decode(
+        claims = jwt.decode(
             token,
             key,
             algorithms=["RS256"],
@@ -84,6 +84,17 @@ def decode_keycloak_token(token: str, settings: Settings | None = None) -> dict[
         )
     except jwt.PyJWTError as e:
         raise unauthorized("INVALID_TOKEN", f"token 無效：{e}") from e
+    if not s.keycloak_audience and s.keycloak_client_id and not _issued_for_client(claims, s.keycloak_client_id):
+        # Without an audience mapper Keycloak puts the requesting client in `azp`; a token minted for another
+        # client of the same realm must not be accepted here.
+        raise unauthorized("INVALID_TOKEN", "token 不是發給本服務的 client")
+    return claims
+
+
+def _issued_for_client(claims: dict[str, Any], client_id: str) -> bool:
+    aud = claims.get("aud")
+    auds = aud if isinstance(aud, list) else [aud] if aud else []
+    return claims.get("azp") == client_id or client_id in auds
 
 
 # --- per-job tokens for /internal/* -----------------------------------------------------------

@@ -175,4 +175,5 @@ async def test_keycloak_role_mapping(db, monkeypatch):
         assert b.role == "superadmin"
         # an existing local account with the same username is adopted (not duplicated)
         a = await users_svc.upsert_keycloak_user(session, {"sub": "admin-sub", "preferred_username": "admin"})
-        assert a.username == "admin" and a.auth_provider == "keycloak" and a.role == "admin" and a.password_hash is None
+        # … but the local row's privileges do not carry over: the name alone proves nothing
+        assert a.username == "admin" and a.auth_provider == "keycloak" and a.role == "user" and a.password_hash is None

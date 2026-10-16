@@ -13,9 +13,17 @@ import psutil
 import pytest
 
 from app.core.config import get_settings
+from app.scheduler import runner as runner_mod
 from app.scheduler.loop import Scheduler
 from app.scheduler.runner import LaunchSpec, SubprocessRunner, SystemdRunner, job_env
 from tests.conftest import make_data_source, make_project
+
+
+@pytest.fixture(autouse=True)
+def _passthrough_fake_env(monkeypatch):
+    """Job processes only inherit an allow-list; the fakes in this module are steered with FAKE_* variables."""
+    monkeypatch.setattr(runner_mod, "ENV_PASSTHROUGH_PREFIXES", (*runner_mod.ENV_PASSTHROUGH_PREFIXES, "FAKE_"))
+
 
 FAKE_TRAINER = """
 import os, sys, time

@@ -6,15 +6,28 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+_DEFAULT_SECRETS = {
+    "dev-secret-change-me",
+    "dev-job-secret-change-me",
+    "change-me",
+    "change-me-too",
+    "superadmin1234",
+    "admin1234",
+    "user1234",
+}
+
+
+def _weak_secret(value: str | None, min_len: int = 32) -> bool:
+    return not value or value in _DEFAULT_SECRETS or value.startswith("change-me") or len(value) < min_len
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: Literal["dev", "test", "prod"] = "dev"
-    public_url: str = "http://localhost:3000"
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]  # comma separated in env
     log_level: str = "INFO"
 
@@ -65,7 +78,6 @@ class Settings(BaseSettings):
     scheduler_interval_s: float = 3.0
     upload_max_mb: int = 2048
     preview_timeout_s: float = 30.0  # preprocessing preview runs in a worker thread of the API process
-    tool_process_timeout_s: float = 600.0  # standalone preprocessing tool: whole-file run, same worker thread
     upload_ttl_minutes: int = 60
     log_max_mb: int = 50
     default_job_timeout_minutes: int = 240
@@ -78,6 +90,43 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @model_validator(mode="after")
+    def _check_production(self) -> Settings:
+        """Refuse to start a production deployment on development defaults (see docs/ENVIRONMENT.md)."""
+        if self.app_env != "prod":
+            return self
+        problems: list[str] = []
+        for name, value in (("AUTH_SECRET", self.auth_secret), ("JOB_TOKEN_SECRET", self.job_token_secret)):
+            if _weak_secret(value):
+                problems.append(f"{name} 仍是預設值或少於 32 字元（openssl rand -hex 32）")
+        if not self.dataset_secret_key:
+            problems.append("DATASET_SECRET_KEY 未設定（python -c 'from cryptography.fernet import Fernet; ...'）")
+        else:
+            try:
+                from cryptography.fernet import Fernet
+
+                Fernet(self.dataset_secret_key.encode())
+            except Exception:  # any failure means the key is unusable
+                problems.append("DATASET_SECRET_KEY 不是合法的 Fernet 金鑰")
+        if self.auth_mode == "keycloak":
+            if not self.keycloak_issuer:
+                problems.append("AUTH_MODE=keycloak 需要 KEYCLOAK_ISSUER")
+            if not self.keycloak_client_id and not self.keycloak_audience:
+                problems.append(
+                    "AUTH_MODE=keycloak 需要 KEYCLOAK_CLIENT_ID 或 KEYCLOAK_AUDIENCE（確認 token 是發給本服務）"
+                )
+        elif _weak_secret(self.seed_superadmin_password, 12) or _weak_secret(self.seed_admin_password, 12):
+            problems.append(
+                "AUTH_MODE=local 的正式環境必須設定 SEED_SUPERADMIN_PASSWORD / SEED_ADMIN_PASSWORD（12 字元以上）"
+            )
+        if not self.scheduler_embedded and not self.redis_url:
+            problems.append("排程器獨立執行時需要 REDIS_URL（否則事件 / SSE 不會送達）")
+        if self.is_sqlite:
+            problems.append("正式環境請使用 MariaDB（DATABASE_URL=mariadb+asyncmy://...）")
+        if problems:
+            raise ValueError("APP_ENV=prod 設定檢查失敗：\n- " + "\n- ".join(problems))
+        return self
 
     @property
     def role_map(self) -> dict[str, str]:

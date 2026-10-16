@@ -22,7 +22,7 @@ class Upload(IdMixin, Base):
     format: Mapped[str] = mapped_column(String(32), nullable=False)
     detected_spec: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)  # pending | claimed | purged
-    claimed_by_job_id: Mapped[int | None] = mapped_column(BigInt, ForeignKey("jobs.id"))
+    claimed_by_job_id: Mapped[int | None] = mapped_column(BigInt, ForeignKey("jobs.id", ondelete="SET NULL"))
     expires_at: Mapped[datetime] = mapped_column(DateTime6, nullable=False)
     created_by_id: Mapped[int] = mapped_column(BigInt, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime6, default=utcnow, nullable=False)

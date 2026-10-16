@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import bad_request, not_found
+from app.core.executors import in_preview_pool
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.models import Job, User
@@ -121,7 +122,7 @@ async def create(user: User, file: UploadFile, data_type: str, fmt: str | None) 
         "file": target.name,
         "size_bytes": size,
         "format": fmt,
-        "detected_spec": detect_spec(target, fmt) if fmt != "image" else {"image_count": 1},
+        "detected_spec": (await asyncio.to_thread(detect_spec, target, fmt)) if fmt != "image" else {"image_count": 1},
         "created_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=s.upload_ttl_minutes)).isoformat(),
     }
@@ -142,7 +143,7 @@ async def preview(
     timeout = get_settings().preview_timeout_s
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(
+            in_preview_pool(
                 run_preview,
                 meta["data_type"],
                 path,

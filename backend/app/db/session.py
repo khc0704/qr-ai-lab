@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
@@ -14,7 +15,17 @@ def get_engine() -> AsyncEngine:
     kwargs: dict = {"pool_pre_ping": True}
     if s.is_sqlite:
         kwargs = {"connect_args": {"check_same_thread": False}}
-    return create_async_engine(s.database_url, **kwargs)
+    engine = create_async_engine(s.database_url, **kwargs)
+    if s.is_sqlite:
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, _record) -> None:
+            # SQLite ignores FKs unless asked; dev / tests must behave like MariaDB (RESTRICT, SET NULL …).
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
 
 
 @lru_cache

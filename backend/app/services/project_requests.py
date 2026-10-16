@@ -132,7 +132,7 @@ async def approve(session: AsyncSession, admin: User, r: ProjectRequest, body: A
         raise conflict("SLUG_TAKEN", f"slug {body.slug} 已被使用")
     project = Project(
         slug=body.slug,
-        name=body.name or r.title,
+        name=(body.name or r.title)[:120],  # projects.name is VARCHAR(120); titles may be 200
         description=r.purpose,
         data_type=r.data_type,
         task_type=r.task_type,

@@ -39,9 +39,11 @@ async def init_dev_schema() -> None:
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with get_sessionmaker()() as session:
-        created = await users_svc.seed_users(
-            session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
-        )
+        created: list[str] = []
+        if s.auth_mode == "local":  # Keycloak deployments must not carry adoptable "admin" / "superadmin" rows
+            created = await users_svc.seed_users(
+                session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
+            )
         await settings_svc.get_resource_pool(session)
         await settings_svc.get_job_defaults(session)
     if created:

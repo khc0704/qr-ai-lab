@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ResourcePool(BaseModel):
@@ -11,6 +11,15 @@ class ResourcePool(BaseModel):
     allow_backfill: bool = True
     # Several jobs on one GPU when they declare requested_gpu_memory_mb and the VRAM is free (pynvml).
     gpu_share: bool = True
+
+    @field_validator("gpu_indices")
+    @classmethod
+    def _unique_gpu_indices(cls, v: list[int]) -> list[int]:
+        if any(i < 0 for i in v):
+            raise ValueError("GPU index 不能是負數")
+        if len(set(v)) != len(v):
+            raise ValueError("GPU index 重複")
+        return sorted(v)
 
 
 class ToolDefaults(BaseModel):

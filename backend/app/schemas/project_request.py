@@ -28,7 +28,7 @@ class ProjectRequestCreate(BaseModel):
     data_scale: DataScale
     data_description: str | None = None
     requested_gpu: int = Field(default=0, ge=0, le=64)
-    requested_cpu: float = Field(default=2, ge=0.5, le=1024)
+    requested_cpu: float = Field(default=2, ge=0.5, le=999)
     requested_memory_mb: int = Field(default=4096, ge=512)
     requested_storage_mb: int = Field(default=10240, ge=1024)
     proposed_slug: str | None = Field(default=None, pattern=SLUG)
@@ -43,7 +43,7 @@ class ProjectRequestUpdate(BaseModel):
     data_scale: DataScale | None = None
     data_description: str | None = None
     requested_gpu: int | None = Field(default=None, ge=0, le=64)
-    requested_cpu: float | None = Field(default=None, ge=0.5)
+    requested_cpu: float | None = Field(default=None, ge=0.5, le=999)
     requested_memory_mb: int | None = Field(default=None, ge=512)
     requested_storage_mb: int | None = Field(default=None, ge=1024)
     proposed_slug: str | None = Field(default=None, pattern=SLUG)

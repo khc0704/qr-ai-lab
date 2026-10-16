@@ -34,9 +34,13 @@ async def _seed() -> None:
 
     s = get_settings()
     async with get_sessionmaker()() as session:
-        created = await users_svc.seed_users(
-            session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
-        )
+        created: list[str] = []
+        if s.auth_mode == "local":
+            created = await users_svc.seed_users(
+                session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
+            )
+        else:
+            print("AUTH_MODE=keycloak: no local accounts seeded (use SUPERADMIN_USERNAMES / KEYCLOAK_ROLE_MAP)")
         pool = await settings_svc.get_resource_pool(session)
         await settings_svc.get_job_defaults(session)
     print(f"created users: {created or 'none (already present)'}; resource pool: {pool.model_dump()}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import shutil
 from datetime import timedelta
@@ -10,13 +11,14 @@ from typing import Any
 
 import qrlab_preprocess
 from sqlalchemy import func, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import loader
 from app.core.errors import bad_request, conflict, not_found
 from app.db.base import utcnow
 from app.events.bus import get_bus
-from app.models import Artifact, DataSource, Job, Project, User
+from app.models import Artifact, DataSource, Job, Project, Upload, User
 from app.schemas.job import JobCreate, JobInputBody
 from app.schemas.settings import ResourcePool
 from app.services import audit
@@ -427,8 +429,15 @@ async def cancel(
     action = "job.stop" if forced else "job.cancel"
     await audit.record(session, actor.id, action, "job", job.id, {"reason": reason, "status": job.status})
     if job.status == "queued":
-        await finish(session, job, "cancelled", cancel_reason=reason, actor=actor)
-        return job
+        # Claim the row atomically: the scheduler may be launching this very job (see mark_scheduled).
+        res = await session.execute(
+            sql_update(Job).where(Job.id == job.id, Job.status == "queued").values(status="cancelled")
+        )
+        if res.rowcount == 1:
+            job.status = "cancelled"
+            await finish(session, job, "cancelled", cancel_reason=reason, actor=actor)
+            return job
+        await session.refresh(job)  # it got scheduled meanwhile: fall through to a stop request
     job.cancel_requested_at = utcnow()
     job.cancel_requested_by_id = actor.id
     job.cancel_requested_by = actor
@@ -530,6 +539,7 @@ async def delete(session: AsyncSession, admin: User, job: Job) -> None:
     storage.remove_tree(f"jobs/{job.id}")
     await audit.record(session, admin.id, "job.delete", "job", job.id, {"project_id": job.project_id})
     project = job.project
+    await session.execute(sql_update(Upload).where(Upload.claimed_by_job_id == job.id).values(claimed_by_job_id=None))
     await session.delete(job)
     await projects_svc.recompute_storage(session, project)
     await session.commit()
@@ -538,7 +548,20 @@ async def delete(session: AsyncSession, admin: User, job: Job) -> None:
 # --- state transitions (scheduler) ----------------------------------------------------------
 
 
+class JobStateChanged(Exception):
+    """The job left the expected state while the scheduler was deciding (e.g. cancelled from the API)."""
+
+
 async def mark_scheduled(session: AsyncSession, job: Job, gpus: list[int], cpus: list[int] | None = None) -> None:
+    res = await session.execute(
+        sql_update(Job)
+        .where(Job.id == job.id, Job.status == "queued")
+        .values(status="scheduled", assigned_gpus=gpus, assigned_cpus=cpus or None)
+    )
+    if res.rowcount != 1:
+        await session.rollback()
+        await session.refresh(job)
+        raise JobStateChanged(f"job {job.id} is {job.status}, not queued")
     job.status = "scheduled"
     job.assigned_gpus = gpus
     job.assigned_cpus = cpus or None
@@ -607,16 +630,44 @@ def log_file(job: Job) -> Path:
     return get_storage().abs(job.log_path or f"projects/{job.project.slug}/jobs/{job.id}/logs/job.log")
 
 
+def _count_lines(path: Path) -> int:
+    n = 0
+    last = b""
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            n += chunk.count(b"\n")
+            last = chunk[-1:] if chunk else last
+    return n + (1 if last and last != b"\n" else 0)
+
+
+def _tail_lines(path: Path, limit: int) -> list[str]:
+    """Last ``limit`` lines read backwards in blocks (a 50 MB log is never loaded whole for a tail)."""
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        buf = b""
+        while pos > 0 and buf.count(b"\n") <= limit:
+            step = min(1 << 16, pos)
+            pos -= step
+            f.seek(pos)
+            buf = f.read(step) + buf
+    lines = buf.decode("utf-8", errors="replace").splitlines()
+    return lines[-limit:]
+
+
 def read_log(job: Job, offset: int | None, limit: int = 500) -> tuple[list[str], int, int]:
-    """Returns (lines, offset, total). offset=None → tail."""
+    """Returns (lines, offset, total). offset=None → tail. Reads in blocks; call via ``asyncio.to_thread``."""
     path = log_file(job)
     if not path.exists():
         return [], 0, 0
+    total = _count_lines(path)
+    if offset is None:
+        lines = _tail_lines(path, limit)
+        return lines, max(0, total - len(lines)), total
+    start = max(0, min(offset, total))
     with path.open("r", encoding="utf-8", errors="replace") as f:
-        lines = f.read().splitlines()
-    total = len(lines)
-    start = max(0, total - limit) if offset is None else max(0, min(offset, total))
-    return lines[start : start + limit], start, total
+        lines = [line.rstrip("\r\n") for line in itertools.islice(f, start, start + limit)]
+    return lines, start, total
 
 
 def append_log(job: Job, level: str, text: str, max_mb: int = 50) -> str:

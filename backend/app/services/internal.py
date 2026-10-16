@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import loader
+from app.core.errors import bad_request
 from app.events.bus import get_bus
 from app.models import Artifact, Job
 from app.schemas.internal import ArtifactRef, JobSpec, MetricsBody, ResultBody, StatusBody
 from app.services import jobs as jobs_svc
+from app.storage.local import get_storage
 
 CONTAINER_INPUT = "/job/input"
 CONTAINER_OUTPUT = "/job/output"
@@ -112,6 +114,21 @@ async def add_metrics(session: AsyncSession, job: Job, body: MetricsBody) -> Job
     return job
 
 
+def job_relpath(job: Job, rel: str) -> str:
+    """``rel`` (trainer-supplied, relative to the job output dir) as a DATA_ROOT-relative path. The per-job token
+    must not reach any other job's files, so ``..``, absolute paths and symlink escapes are rejected."""
+    if not job.output_path:
+        raise bad_request("JOB_NOT_LAUNCHED", "任務尚未分配輸出目錄")
+    clean = rel.strip().lstrip("/")
+    parts = PurePosixPath(clean).parts
+    if not clean or PurePosixPath(clean).is_absolute() or any(part in ("..", ".") for part in parts):
+        raise bad_request("INVALID_PATH", f"路徑不合法：{rel}")
+    base = get_storage().abs(job.output_path).resolve()
+    if not (base / clean).resolve().is_relative_to(base):
+        raise bad_request("INVALID_PATH", f"路徑不在任務目錄內：{rel}")
+    return f"{job.output_path}/{clean}"
+
+
 async def set_result(session: AsyncSession, job: Job, body: ResultBody) -> Job:
     if body.result is not None:
         job.result = body.result
@@ -119,6 +136,6 @@ async def set_result(session: AsyncSession, job: Job, body: ResultBody) -> Job:
         if isinstance(winner, str) and winner and job.kind == "train":
             job.model_family = winner
     if body.output_path:
-        job.result = {**(job.result or {}), "output_path": f"{job.output_path}/{body.output_path.lstrip('/')}"}
+        job.result = {**(job.result or {}), "output_path": job_relpath(job, body.output_path)}
     await session.commit()
     return job

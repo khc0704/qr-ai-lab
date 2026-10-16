@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import bad_request, conflict, not_found
+from app.core.executors import in_preview_pool
 from app.db.base import utcnow
 from app.models import Job, Project, Upload, User
 from app.services import settings as settings_svc
@@ -125,7 +126,7 @@ async def create_from_upload(
             await out.write(chunk)
     up.path = storage.rel(target)
     up.size_bytes = size
-    up.detected_spec = {**detect_spec(target, fmt), "sha256": digest.hexdigest()}
+    up.detected_spec = {**(await asyncio.to_thread(detect_spec, target, fmt)), "sha256": digest.hexdigest()}
     await session.commit()
     return up
 
@@ -195,7 +196,7 @@ async def preview(
     timeout = get_settings().preview_timeout_s
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(
+            in_preview_pool(
                 run_preview,
                 project.data_type,
                 path,

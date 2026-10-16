@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -187,7 +188,7 @@ async def audit(
 @router.get("/model-zoo", response_model=list[ModelZooEntry], summary="目錄需要的預訓練權重是否已在模型庫")
 async def model_zoo(_: AdminUser, verify: bool = False) -> list[ModelZooEntry]:
     """`verify=true` 會重新計算每個檔案的 sha256（大檔案要幾秒）。"""
-    return zoo_svc.status(verify=verify)
+    return await asyncio.to_thread(zoo_svc.status, verify=verify)
 
 
 @router.get("/model-zoo/tasks", response_model=list[ZooTask], summary="背景匯入的進度")

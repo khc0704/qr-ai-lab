@@ -48,6 +48,7 @@ from app.storage.local import get_storage
 log = get_logger("scheduler")
 LINE_RE = re.compile(r"^(?:(\S+Z)\s+)?\[(INFO|WARN|WARNING|ERROR|DEBUG|SYSTEM)\]\s?(.*)$")
 MB = 1024 * 1024
+BACKFILL_HOLD_S = 600  # after this long at the head of the queue a GPU job stops being backfilled around
 
 
 @dataclass
@@ -161,6 +162,10 @@ class Scheduler:
             try:
                 if path.exists():
                     with path.open("rb") as f:
+                        f.seek(0, os.SEEK_END)
+                        if f.tell() < offset:  # rotated in place (see _rotate_log): skip the rewritten tail
+                            offset = f.tell()
+                            pending = b""
                         f.seek(offset)
                         chunk = f.read()
                     if chunk:
@@ -230,12 +235,27 @@ class Scheduler:
                 active.memory_strikes = 0
         max_log = self.settings.log_max_mb * MB
         if active.log_path.exists() and active.log_path.stat().st_size > max_log:
-            active.stop_reason = f"log exceeded {self.settings.log_max_mb} MB"
-            await self._system(job.id, active.log_path, active.stop_reason + ", stopping")
-            active.stopping = True
-            await self.runner.stop(active.handle, grace=10)
-            return True
+            self._rotate_log(active.log_path, keep=max_log // 4)
+            await self._system(
+                job.id,
+                active.log_path,
+                f"log exceeded {self.settings.log_max_mb} MB: older lines dropped, last {max_log // 4 // MB} MB kept",
+            )
         return False
+
+    @staticmethod
+    def _rotate_log(path: Path, keep: int) -> None:
+        """Truncate the log in place, keeping its tail. The job writes with O_APPEND, so it keeps appending."""
+        with path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - keep))
+            tail = f.read()
+        nl = tail.find(b"\n")
+        tail = tail[nl + 1 :] if nl >= 0 else tail
+        os.truncate(path, 0)
+        with path.open("ab") as f:
+            f.write(b"[log rotated: earlier lines were dropped to stay under the size limit]\n" + tail)
 
     # --- reconcile ---------------------------------------------------------------------------
 
@@ -268,8 +288,9 @@ class Scheduler:
                 else:
                     await self._watch(session, job, active)
                 continue
-            # exited
+            # exited: re-read the row, the trainer's final status / error may have landed after our select
             await self._stop_tail(active)
+            await session.refresh(job)
             trainer_status = (job.metrics or {}).get("_trainer_status")
             if job.cancel_requested_at:
                 status, error = "cancelled", None
@@ -319,9 +340,12 @@ class Scheduler:
         usage = await projects_svc.usage_map(session, list({j.project_id for j in queued}))
         per_project = {pid: u.model_dump() for pid, u in usage.items()}
         launched_projects: set[int] = set()
-        for job in queued:
+        hold_gpus_for_head = False  # a long-waiting multi-GPU head must not be starved by 1-GPU backfill forever
+        for i, job in enumerate(queued):
             if slots <= 0:
                 break
+            if hold_gpus_for_head and job.requested_gpu > 0:
+                continue
             p = job.project
             pu = per_project[p.id]
             fits_project = (
@@ -347,6 +371,8 @@ class Scheduler:
             if not (fits_project and fits_pool) or p.id in launched_projects:
                 if fits_project and job.requested_gpu > 0 and not gpus and p.id not in launched_projects:
                     await self._note_gpu_wait(job, gpu_slots)
+                    if i == 0 and utcnow() - job.created_at > timedelta(seconds=BACKFILL_HOLD_S):
+                        hold_gpus_for_head = True
                 if not pool.allow_backfill:
                     break
                 continue
@@ -354,6 +380,9 @@ class Scheduler:
             cpus = free_cores[:need_cores] if len(free_cores) >= need_cores else []
             try:
                 await self.launch(session, job, gpus, cpus)
+            except jobs_svc.JobStateChanged as e:
+                log.info("launch skipped", job_id=job.id, reason=str(e))
+                continue
             except Exception as e:
                 log.error("launch failed", job_id=job.id, error=repr(e))
                 await self._system(job.id, jobs_svc.log_file(job), f"launch failed: {e!r}")
@@ -478,12 +507,15 @@ class Scheduler:
         if jobs_root.exists():
             stmt = select(Job.id).where(Job.status.in_(("succeeded", "failed", "cancelled")))
             terminal = set((await session.execute(stmt)).scalars().all())
+            stmt = select(Job.id).where(Job.status.in_(("queued", "scheduled", "running")))
+            live = set((await session.execute(stmt)).scalars().all())
             stale_before = (utcnow() - timedelta(days=2)).timestamp()
             for d in jobs_root.iterdir():
                 if not (d.is_dir() and d.name.isdigit()):
                     continue
                 job_id = int(d.name)
-                stale = d.stat().st_mtime < stale_before and job_id not in self.active
+                # a queued job may wait for days (backlog, paused pool): its input must survive until it runs
+                stale = d.stat().st_mtime < stale_before and job_id not in self.active and job_id not in live
                 if job_id in terminal or stale:
                     storage.remove_tree(f"jobs/{d.name}")
                     removed += 1

@@ -15,6 +15,7 @@ from app.schemas.admin import UsageHistory, UsagePoint, UsageProject
 from app.services import node as node_svc
 from app.services import settings as settings_svc
 
+MAX_HISTORY_ROWS = 4000
 RANGES: dict[str, tuple[timedelta, int]] = {  # range → (window, bucket seconds)
     "1h": (timedelta(hours=1), 60),
     "6h": (timedelta(hours=6), 300),
@@ -24,13 +25,33 @@ RANGES: dict[str, tuple[timedelta, int]] = {  # range → (window, bucket second
 }
 
 
+# psutil computes cpu_percent() as the delta since the previous call on the SAME Process object (a fresh object
+# always answers 0.0), so the objects are kept between samples.
+_procs: dict[int, psutil.Process] = {}
+
+
+def _process(pid: int) -> psutil.Process:
+    p = _procs.get(pid)
+    if p is None or not p.is_running():
+        p = psutil.Process(pid)
+        p.cpu_percent(interval=None)  # prime: the next call returns the usage since now
+        _procs[pid] = p
+    return p
+
+
+def _prune_processes(live: set[int]) -> None:
+    for pid in list(_procs):
+        if pid not in live:
+            _procs.pop(pid, None)
+
+
 def _proc_usage(pids: list[int]) -> tuple[float, int]:
     """(cpu cores in use, PSS/RSS MB) summed over the job's process tree."""
     cpu = 0.0
     mem = 0
     for pid in pids:
         try:
-            p = psutil.Process(pid)
+            p = _process(pid)
             cpu += p.cpu_percent(interval=None) / 100.0
             try:
                 mem += p.memory_full_info().pss
@@ -66,6 +87,7 @@ async def sample(session: AsyncSession, job_pids: dict[int, list[int]] | None = 
     running = (await session.execute(select(Job).where(Job.status.in_(("scheduled", "running"))))).scalars().all()
     projects: dict[str, dict[str, float]] = {}
     vram: dict[int, int] = {}
+    _prune_processes({pid for pids in (job_pids or {}).values() for pid in pids})
     if job_pids and gpus:
         from app.services.gpu import measured_by_job
 
@@ -128,15 +150,22 @@ async def history(session: AsyncSession, range_: str, sample_interval_s: int) ->
         range_ = "24h"
     window, bucket_s = RANGES[range_]
     since = utcnow() - window
-    rows = (
+    # A 30-day window at a 30 s interval is ~86 k rows of JSON: keep every k-th sample so a request stays bounded
+    # (each bucket still averages dozens of samples).
+    ids = list(
         (
             await session.execute(
-                select(ResourceSample).where(ResourceSample.sampled_at >= since).order_by(ResourceSample.sampled_at)
+                select(ResourceSample.id).where(ResourceSample.sampled_at >= since).order_by(ResourceSample.sampled_at)
             )
-        )
-        .scalars()
-        .all()
+        ).scalars()
     )
+    stride = max(1, -(-len(ids) // MAX_HISTORY_ROWS))
+    keep = ids[::stride]
+    rows: list[ResourceSample] = []
+    for i in range(0, len(keep), 500):
+        chunk = keep[i : i + 500]
+        rows.extend((await session.execute(select(ResourceSample).where(ResourceSample.id.in_(chunk)))).scalars().all())
+    rows.sort(key=lambda r: r.sampled_at)
     # bucket → accumulators
     buckets: dict[datetime, dict[str, Any]] = {}
     for r in rows:

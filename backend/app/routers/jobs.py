@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Annotated
@@ -23,15 +24,19 @@ from app.storage.local import get_storage
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-async def _job_access(
-    job_id: int, session: DbSession, user: CurrentUser, min_role: str = "viewer"
-) -> tuple[Job, ProjectAccess]:
-    job = await jobs_svc.get(session, job_id)
-    access = await project_access(min_role)(session, user, job.project.slug)
-    return job, access
+def _job_access(min_role: str = "viewer"):
+    """Dependency factory (a default argument would become a ``?min_role=`` query parameter)."""
+
+    async def dep(job_id: int, session: DbSession, user: CurrentUser) -> tuple[Job, ProjectAccess]:
+        job = await jobs_svc.get(session, job_id)
+        access = await project_access(min_role)(session, user, job.project.slug)
+        return job, access
+
+    dep.__name__ = f"job_access_{min_role}"
+    return dep
 
 
-JobView = Annotated[tuple[Job, ProjectAccess], Depends(_job_access)]
+JobView = Annotated[tuple[Job, ProjectAccess], Depends(_job_access("viewer"))]
 
 
 @router.get("", response_model=list[JobRead], summary="我有權限的專案的最近任務（首頁 / 專案列表用）")
@@ -57,7 +62,7 @@ async def get_job(jv: JobView, session: DbSession) -> JobRead:
 
 @router.post("/{job_id}/cancel", response_model=JobRead, summary="成員取消（queued 立即取消；執行中由 scheduler 停止）")
 async def cancel_job(job_id: int, session: DbSession, user: CurrentUser) -> JobRead:
-    job, access = await _job_access(job_id, session, user, "member")
+    job, access = await _job_access("member")(job_id, session, user)
     if access.role == "member" and job.created_by_id != user.id:
         raise forbidden("JOB_NOT_OWNER", "成員只能取消自己的任務")
     return await ser.job(session, await jobs_svc.cancel(session, user, job))
@@ -72,8 +77,9 @@ async def job_artifacts(jv: JobView, session: DbSession) -> list[ArtifactRead]:
 async def job_logs(
     jv: JobView, offset: int | None = Query(None, ge=0), limit: int = Query(500, ge=1, le=5000)
 ) -> LogLinesRead:
-    lines, start, total = jobs_svc.read_log(jv[0], offset, limit)
-    return LogLinesRead(lines=lines, offset=start, total=total)
+    lines, start, total = await asyncio.to_thread(jobs_svc.read_log, jv[0], offset, limit)
+    last_id = await get_bus().last_id(jv[0].id) if offset is None else None
+    return LogLinesRead(lines=lines, offset=start, total=total, last_event_id=last_id)
 
 
 @router.get("/{job_id}/logs/download")

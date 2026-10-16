@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.errors import forbidden, not_found, unauthorized
+from app.core.errors import conflict, forbidden, not_found, unauthorized
 from app.core.permissions import PERMISSIONS
 from app.core.security import decode_access_token, decode_job_token, decode_keycloak_token
 from app.db.session import get_session
@@ -31,7 +32,7 @@ async def get_current_user(session: DbSession, creds: Creds) -> User:
     if s.auth_mode == "keycloak":
         from app.services import users as users_svc
 
-        claims = decode_keycloak_token(creds.credentials, s)
+        claims = await asyncio.to_thread(decode_keycloak_token, creds.credentials, s)  # JWKS fetch is blocking
         user = await users_svc.upsert_keycloak_user(session, claims)
     else:
         claims = decode_access_token(creds.credentials, s)
@@ -107,3 +108,14 @@ async def get_internal_job(session: DbSession, creds: Creds, job_id: Annotated[i
 
 
 InternalJob = Annotated[Job, Depends(get_internal_job)]
+
+
+async def get_live_internal_job(job: InternalJob) -> Job:
+    """Writes (status / metrics / artifacts / result) are accepted only while the job is scheduled or running:
+    the token outlives the process by design (timeout + grace), a finished or cancelled job must stay as it is."""
+    if job.status not in ("scheduled", "running"):
+        raise conflict("JOB_FINISHED", f"任務已結束（{job.status}），不再接受回報")
+    return job
+
+
+LiveInternalJob = Annotated[Job, Depends(get_live_internal_job)]
