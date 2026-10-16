@@ -10,7 +10,7 @@
 | Node.js | ≥ 20.9，建議 22 LTS | `node --version` | Next.js 16 要求；用 [nvm](https://github.com/nvm-sh/nvm) 或 [fnm](https://github.com/Schniz/fnm) 管理 |
 | npm | ≥ 10 | `npm --version` | 隨 Node 安裝；本專案用 npm，不用 pnpm / yarn |
 | Python | 3.12（≥ 3.12） | `python3.12 --version` | backend、trainer、`scripts/*.py`；伺服器要有 `python3.12-venv` |
-| uv | 最新（只有開發機） | `uv --version` | 開發機的套件管理與 lock：`curl -LsSf https://astral.sh/uv/install.sh \| sh`。伺服器不需要 uv（用 pip + `requirements.txt`，見 §4.6） |
+| pip | 隨 Python | `python3.12 -m pip --version` | 全專案只用 venv + pip（`requirements*.txt`），沒有 uv / poetry；公司 proxy 設在 `/etc/pip.conf` |
 | Docker Engine + Compose v2 | 最新 | `docker compose version` | 只跑 MariaDB、Redis（本地開發可不用，見 §4.1） |
 | NVIDIA driver | 配合 GPU | `nvidia-smi` | 只有 GPU 伺服器需要；只要 driver，CUDA 函式庫隨 torch wheel 來，沒有容器、不需要 NVIDIA Container Toolkit |
 | Playwright Chromium | 隨 `playwright` 套件 | `cd frontend && npx playwright install chromium` | 只有要跑截圖 / 設計檢查時需要 |
@@ -68,13 +68,13 @@ docker compose -f infra/docker-compose.yml exec redis redis-cli ping
 ```bash
 cd backend
 cp .env.example .env                  # AUTH_SECRET / JOB_TOKEN_SECRET 改掉即可；其餘預設可用
-uv sync                               # 建立 .venv 並安裝依賴（Python ≥ 3.12）
-uv run uvicorn app.main:app --reload  # http://localhost:8000/docs
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # 建立 .venv 並安裝依賴（含 pytest / ruff）
+.venv/bin/uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
-開發機沒有網路、只能走公司 Nexus 時不用 uv（uv 不讀 `pip.conf`）：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`，之後把 `uv run` 換成 `.venv/bin/`（例如 `.venv/bin/uvicorn app.main:app --reload`）。
+pip 會讀 `/etc/pip.conf`（或 `~/.config/pip/pip.conf`）的公司 PyPI proxy；有網路的機器直接連 PyPI。
 
-- `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立三個帳號：`superadmin / superadmin1234`（什麼都能改：資源池、配額、刪專案、模型庫、使用者角色、GPU 重置）、`admin / admin1234`（日常營運：審核、中斷 / 重啟 / 重排任務、討論區）、`user / user1234`（沒有管理操作）。密碼由 `SEED_*_PASSWORD` 改；角色可在 **管理 → 使用者** 調整或 `uv run python -m app.cli set-role --username alice --role admin`。
+- `APP_ENV=dev` 時啟動會自動建表（SQLite `backend/dev.db`）並建立三個帳號：`superadmin / superadmin1234`（什麼都能改：資源池、配額、刪專案、模型庫、使用者角色、GPU 重置）、`admin / admin1234`（日常營運：審核、中斷 / 重啟 / 重排任務、討論區）、`user / user1234`（沒有管理操作）。密碼由 `SEED_*_PASSWORD` 改；角色可在 **管理 → 使用者** 調整或 `.venv/bin/python -m app.cli set-role --username alice --role admin`。
 - `.env.example` 預設 `SCHEDULER_EMBEDDED=true`：排程器迴圈跑在這個程序裡，不用 Redis、不用第二個終端，任務頁的即時 log 照常。要測兩個程序的正式拓樸再照 §4.2 分開跑。
 - 登入拿 token，之後所有 API 帶 `Authorization: Bearer <token>`：
 
@@ -91,10 +91,10 @@ curl -s localhost:8000/api/v1/admin/model-zoo -H "Authorization: Bearer $TOKEN"
 ### 4.2 排程器與任務執行方式（沒有容器）
 
 ```bash
-cd trainer && uv sync && cd ../backend        # 第一次：建立 trainer 的 venv（CPU 家族：sklearn / XGBoost / Optuna）
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && cd ../backend   # 第一次：建立 trainer 的 venv（CPU 家族：sklearn / XGBoost / Optuna）
 # 分開跑（正式拓樸）：backend 與排程器各一個程序，兩邊都設 REDIS_URL 讓即時事件互通
-REDIS_URL=redis://localhost:6379/0 SCHEDULER_EMBEDDED=false uv run uvicorn app.main:app --reload
-REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
+REDIS_URL=redis://localhost:6379/0 SCHEDULER_EMBEDDED=false .venv/bin/uvicorn app.main:app --reload
+REDIS_URL=redis://localhost:6379/0 .venv/bin/python -m app.scheduler
 ```
 
 - 每個任務 = `trainer/.venv/bin/python -m trainer run` 的主機子程序，環境變數帶 `JOB_*`、`CUDA_VISIBLE_DEVICES` 與離線旗標（`HF_HUB_OFFLINE=1`、`YOLO_OFFLINE=1`…）。
@@ -102,7 +102,7 @@ REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
 - systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
 - CPU 限制對原生函式庫也有效：runner 把 `OMP / MKL / OPENBLAS / NUMEXPR / TBB / NUMBA / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS…` 全設成申請的核數，trainer 啟動時再用 threadpoolctl + torch 夾一次並把實際 affinity / 執行緒數印進任務 log（搜 `limits:`）。所以 sklearn 的 TSNE / HistGradientBoosting、numpy BLAS、torch 都只會用到分到的核心，不會把 88 核全吃掉。
 - GPU：`CUDA_VISIBLE_DEVICES` 指定。任務可填「每張 GPU 需要的顯存」→ 多個任務依 pynvml 的剩餘顯存共用一張（資源池的「依顯存共用 GPU」開關；子程序以 `set_per_process_memory_fraction` 自限）；沒填就要整張空卡（`GPU_BUSY_THRESHOLD`）。Dashboard 的 GPU 卡片顯示顯存 / 保留量 / 任務，superadmin 可「重置」（中斷本系統任務 → kill 所有程序 → `GPU_RESET_COMMAND`）。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
-- 深度學習家族：`cd trainer && uv sync --extra dl`（PyPI 的 Linux torch wheel 自帶 CUDA）；伺服器上由 `install.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
+- 深度學習家族：`trainer/requirements*.txt` 已含 torch / ultralytics / transformers（PyPI 的 Linux torch wheel 自帶 CUDA）；伺服器上由 `install.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
 
 ### 4.3 模型庫（預訓練權重；伺服器不連外）
 
@@ -112,15 +112,15 @@ REDIS_URL=redis://localhost:6379/0 uv run python -m app.scheduler
   3. 內網 URL：公司鏡像 / 檔案伺服器，主機要在 `MODEL_ZOO_ALLOWED_HOSTS`。
 - 有網路的機器可以先用 `python3 scripts/fetch_model_zoo.py --dest ./model_zoo` 把全部抓好、整個資料夾放到傳輸資料夾再逐一匯入，或直接複製到 `MODEL_ZOO_ROOT`（manifest 相容）。
 - 權重缺少時：精靈的模型卡片會標「缺權重」，建立任務會被拒絕（`WEIGHTS_MISSING`）；AutoML 會自動跳過缺權重的候選。sklearn / XGBoost / 影像品質 / 光譜 MAE 家族不需要權重。
-- 命令列檢查：`cd backend && uv run python -m app.cli model-zoo --verify`。
+- 命令列檢查：`cd backend && .venv/bin/python -m app.cli model-zoo --verify`。
 
 ### 4.4 MariaDB（正式環境）
 
 ```bash
 # backend/.env：DATABASE_URL=mariadb+asyncmy://qr:<密碼>@localhost:3306/qr_ai_lab、REDIS_URL=redis://localhost:6379/0、APP_ENV=prod
-uv run alembic upgrade head           # 建表（需要第 3 節的 MariaDB）
-uv run python -m app.cli seed         # local 模式建立 superadmin / admin / user（密碼取自 SEED_*；keycloak 模式不建）
-uv run python -m app.cli create-user --username alice --password '…' --email alice@example.com --role user
+.venv/bin/alembic upgrade head           # 建表（需要第 3 節的 MariaDB）
+.venv/bin/python -m app.cli seed         # local 模式建立 superadmin / admin / user（密碼取自 SEED_*；keycloak 模式不建）
+.venv/bin/python -m app.cli create-user --username alice --password '…' --email alice@example.com --role user
 ```
 
 `APP_ENV=prod` 不會自動建表；Redis 讓 SSE 事件在多個 backend 程序間共享（未設定時用單程序記憶體 bus）。
@@ -128,16 +128,16 @@ uv run python -m app.cli create-user --username alice --password '…' --email a
 ### 4.5 測試與檢查
 
 ```bash
-cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest          # 含排程器（假 runner）與端到端（真的 trainer 子程序）
-cd trainer && uv run ruff check . && uv run pytest                                          # 模型家族、registry 與 yaml 對照、runtime
+cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/pytest          # 含排程器（假 runner）與端到端（真的 trainer 子程序）
+cd trainer && .venv/bin/ruff check . && .venv/bin/pytest                                          # 模型家族、registry 與 yaml 對照、runtime
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest                            # 共用前處理套件（backend 與 trainer 都以 path dependency 安裝）
-QR_TEST_ZOO=/path/to/zoo uv run pytest tests/test_yolo_cpu.py                              # trainer：YOLO 從 yolo11n.pt 微調（CPU）
-uv run python -m trainer check                                                              # 這個環境能跑哪些家族
+QR_TEST_ZOO=/path/to/zoo .venv/bin/pytest tests/test_yolo_cpu.py                              # trainer：YOLO 從 yolo11n.pt 微調（CPU）
+.venv/bin/python -m trainer check                                                              # 這個環境能跑哪些家族
 ```
 
 ### 4.6 正式安裝（Ubuntu GPU 伺服器，不連外、有 PyPI / npm / image proxy）
 
-前提：`/etc/pip.conf` 指向公司的 PyPI proxy（Nexus）、`/etc/npmrc` 指向 npm proxy、node 是系統層級安裝（`/usr/local/bin/node`，qrlab 使用者執行得到；不要用某個使用者的 nvm）。伺服器**不需要 uv**。
+前提：`/etc/pip.conf` 指向公司的 PyPI proxy（Nexus）、`/etc/npmrc` 指向 npm proxy、node 是系統層級安裝（`/usr/local/bin/node`，qrlab 使用者執行得到；不要用某個使用者的 nvm）。
 
 ```bash
 sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
@@ -203,14 +203,14 @@ dev 用本地帳號（`AUTH_MODE=local`）；正式環境把前後端都切到 `
 ```bash
 git pull
 cd frontend && npm ci && npm run dev          # 終端 1：前端（BACKEND_URL 預設 http://localhost:8000）
-cd backend && uv sync && uv run uvicorn app.main:app --reload   # 終端 2：後端（SQLite + 內嵌排程器，任務直接用 trainer/.venv 跑）
-# 要測正式拓樸（分開的排程器 + Redis）才需要終端 3：REDIS_URL=… uv run python -m app.scheduler
+cd backend && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/uvicorn app.main:app --reload   # 終端 2：後端（SQLite + 內嵌排程器，任務直接用 trainer/.venv 跑）
+# 要測正式拓樸（分開的排程器 + Redis）才需要終端 3：REDIS_URL=… .venv/bin/python -m app.scheduler
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d   # 需要 MariaDB / Redis 時（開發機通常不用）
 # 改完 UI
 cd frontend && npm run lint && npm run typecheck && python3 ../scripts/design_lint.py src
 # 改完後端 / trainer
-cd backend && uv run ruff check . && uv run pytest
-cd trainer && uv run ruff check . && uv run pytest
+cd backend && .venv/bin/ruff check . && .venv/bin/pytest
+cd trainer && .venv/bin/ruff check . && .venv/bin/pytest
 ```
 
 環境變數檔案的完整清單與每個變數的意義見 `docs/ENVIRONMENT.md`。
@@ -221,18 +221,18 @@ cd trainer && uv run ruff check . && uv run pytest
 
 ```bash
 # 一次性
-sudo apt install -y python3.12 python3.12-venv nodejs npm git     # Node ≥ 20.9（建議 nvm install 22）；uv：curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo apt install -y python3.12 python3.12-venv nodejs npm git     # Node ≥ 20.9（建議 nvm install 22）
 git clone <repo> && cd qr-ai-lab
-cd trainer && uv sync && cd ..                      # trainer venv（CPU 家族）；要 GPU / 深度學習：uv sync --extra dl
-cd backend && cp .env.example .env && uv sync && cd ..   # .env 預設 AUTH_MODE=local、SQLite、SCHEDULER_EMBEDDED=true
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && cd ..   # trainer venv（含 torch 等深度學習套件）
+cd backend && cp .env.example .env && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && cd ..   # .env 預設 AUTH_MODE=local、SQLite、SCHEDULER_EMBEDDED=true
 cd frontend && cp .env.local.example .env.local && npm ci && cd ..   # AUTH_MODE=local、BACKEND_URL=http://localhost:8000
 # 每天
-cd backend && uv run uvicorn app.main:app --reload   # 終端 1：API + 內嵌排程器 + 使用率取樣（http://localhost:8000/docs）
+cd backend && .venv/bin/uvicorn app.main:app --reload   # 終端 1：API + 內嵌排程器 + 使用率取樣（http://localhost:8000/docs）
 cd frontend && npm run dev                           # 終端 2：http://localhost:3000，superadmin / admin / user
 ```
 
 - WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 `--extra dl` 的 CUDA torch。
-- 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6379/0`、`SCHEDULER_EMBEDDED=false`，`uv run alembic upgrade head && uv run python -m app.cli seed`，再開第三個終端 `uv run python -m app.scheduler`。
+- 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6379/0`、`SCHEDULER_EMBEDDED=false`，`.venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed`，再開第三個終端 `.venv/bin/python -m app.scheduler`。
 - 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm。
 
 ### 7.2 正式（Ubuntu GPU 伺服器；Keycloak、MariaDB + Redis in Docker、三個 systemd 服務、nginx）
@@ -241,14 +241,14 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 sudo git clone <內部 git> /opt/qr-ai-lab && cd /opt/qr-ai-lab
 cp infra/.env.example infra/.env                      # DOCKER_REGISTRY=公司 image 鏡像、DB 密碼
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d      # 只有 mariadb、redis
-./infra/install.sh                      # 第一次：建 qrlab 使用者、資料夾，複製兩個 env 範本後停下（pip / npm 走 /etc/pip.conf、/etc/npmrc 的 proxy，不需要 uv）
+./infra/install.sh                      # 第一次：建 qrlab 使用者、資料夾，複製兩個 env 範本後停下（pip / npm 走 /etc/pip.conf、/etc/npmrc 的 proxy）
 sudo nano /etc/qr-ai-lab/qrlab.env      # DATABASE_URL、REDIS_URL、AUTH_MODE=keycloak、KEYCLOAK_*、SUPERADMIN_USERNAMES、AUTH_SECRET、JOB_TOKEN_SECRET、DATASET_SECRET_KEY、MODEL_ZOO_*、GPU_RESET_COMMAND
 sudo nano /etc/qr-ai-lab/frontend.env   # AUTH_MODE=keycloak、AUTH_SECRET、AUTH_URL、AUTH_KEYCLOAK_ID / SECRET / ISSUER
 ./infra/install.sh                      # 第二次：venv（pip）、build、alembic upgrade head、seed、啟動 qrlab-backend / qrlab-scheduler / qrlab-frontend
 sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/ && sudo cp infra/nginx/qr-ai-lab.conf /etc/nginx/sites-available/qr-ai-lab && sudo ln -s ../sites-available/qr-ai-lab /etc/nginx/sites-enabled/ && sudo nginx -t && sudo nginx -s reload
 ```
 
-- 之後更新：`git pull && ./infra/install.sh --update`（停服務、重裝 venv、重建前端、migration、再啟動；執行中的任務不受影響）。改了依賴（`uv add` / `uv lock`）要先在開發機跑 `scripts/export_requirements.sh` 並提交 `requirements.txt`。
+- 之後更新：`git pull && ./infra/install.sh --update`（停服務、重裝 venv、重建前端、migration、再啟動；執行中的任務不受影響）。改了 pyproject 的依賴要先在開發機跑 `scripts/pin_requirements.sh` 並提交 `requirements*.txt`。
 - 上線檢查：Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；GPU 卡片列出所有卡；資源池勾選要開放的 GPU；用 `SUPERADMIN_USERNAMES` 的帳號登入一次，再到 **使用者** 頁把其他人設成 admin。
 - dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）。任務本身、權限判斷、資料不留存政策在兩邊完全相同。
 
@@ -263,7 +263,7 @@ sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/ && sudo cp infra/n
 - **任務頁看不到即時 log，重新整理才有**：backend 與排程器分開跑時沒有 `REDIS_URL`，事件只在各自記憶體裡；設 `REDIS_URL=redis://localhost:6379/0` 給兩邊，或用 `SCHEDULER_EMBEDDED=true` 讓排程器跑在 backend 內。
 - **Dashboard 顯示 runner 是 subprocess 而不是 systemd**：`systemd-run --user --scope -p MemoryMax=64M -- /bin/true` 手動跑看錯誤；常見原因是沒有 `loginctl enable-linger`、`XDG_RUNTIME_DIR` 沒指到該使用者、或 WSL 沒開 systemd。subprocess 模式仍會釘核心並由 watchdog 管記憶體。
 - **任務因「memory limit exceeded」失敗**：申請的記憶體不夠；在精靈的資源步驟調高，或請管理員調整專案配額。
-- **開發機只想裝 CPU torch**：`cd trainer && uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu && uv pip install --python .venv/bin/python transformers pillow ultralytics`。
+- **開發機只想裝 CPU torch**：`cd trainer && .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install transformers pillow ultralytics`。
 - **上傳預覽逾時（`PREVIEW_TIMEOUT`）**：預覽在 API 程序內以執行緒計算，預設 30 秒（`PREVIEW_TIMEOUT_S`）；縮小取樣數或先用較小的檔案試步驟。
 - **MariaDB 一直不 healthy**：第一次初始化要 20–40 秒；看 `docker compose -f infra/docker-compose.yml logs mariadb`。
 - **Windows**：建議在 WSL2 內操作（Docker Desktop + WSL 整合），避免路徑與換行問題。

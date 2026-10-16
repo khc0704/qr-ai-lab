@@ -143,7 +143,7 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
 - `families.*.weights` 列出需要的檔案（`id`、`file`、`source`、`license`、`sha256`、`kind: file | hf_repo`）。
 - 伺服器不連外、trainer 不下載：管理員在 **管理 → 模型庫**（`/admin/model-zoo`）把權重帶進 `MODEL_ZOO_ROOT`，三種方式：瀏覽器上傳（單檔或 HF snapshot 的 zip）、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）；匯入時比對 `sha256`、寫 `manifest.json` 與稽核紀錄。有網路的機器也可先用 `scripts/fetch_model_zoo.py --dest <資料夾>` 整批抓好再放到傳輸資料夾。
   Job 子程序以 `MODEL_ZOO_ROOT` 直接讀取，runner 設定 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`。
-- `GET /api/v1/admin/model-zoo`、`uv run python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在；`GET /api/v1/catalog` 的 `weights_ready` 讓精靈標示缺權重的家族，建立任務時缺權重會被拒絕（`WEIGHTS_MISSING`）。
+- `GET /api/v1/admin/model-zoo`、`.venv/bin/python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在；`GET /api/v1/catalog` 的 `weights_ready` 讓精靈標示缺權重的家族，建立任務時缺權重會被拒絕（`WEIGHTS_MISSING`）。
 - 新增需要權重的家族：先在 yaml 的 `weights` 登記，再實作 trainer（透過 `ctx.weight(id)` 取路徑，絕不自行下載）。
 
 ## 10. `model_catalog.yaml` 結構（version 2）

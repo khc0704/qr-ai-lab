@@ -1,4 +1,4 @@
-"""Operational commands: uv run python -m app.cli <command>
+"""Operational commands: .venv/bin/python -m app.cli <command>
 
 init-db                 create all tables (dev/SQLite; production uses `alembic upgrade head`)
 seed                    seed `superadmin` / `admin` / `user` accounts and default settings (idempotent)

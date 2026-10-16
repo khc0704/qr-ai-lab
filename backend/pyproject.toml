@@ -24,20 +24,15 @@ dependencies = [
   "aiofiles>=23",
   "minio>=7.2",
   "sse-starlette>=2.1",
-  "qrlab-preprocess",
 ]
+# qrlab-preprocess (libs/preprocess) is installed editable through requirements*.txt (`-e ../libs/preprocess`);
+# pip cannot resolve a path dependency from here.
 
 [project.optional-dependencies]
 gpu = ["nvidia-ml-py>=12"]
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "anyio>=4"]
-
-[tool.uv]
-package = false
-
-[tool.uv.sources]
-qrlab-preprocess = { path = "../libs/preprocess", editable = true }
 
 [tool.ruff]
 line-length = 120

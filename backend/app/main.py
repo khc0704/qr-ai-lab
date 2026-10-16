@@ -1,4 +1,4 @@
-"""FastAPI app factory. Run: uv run uvicorn app.main:app --reload"""
+"""FastAPI app factory. Run: .venv/bin/uvicorn app.main:app --reload"""
 
 from __future__ import annotations
 

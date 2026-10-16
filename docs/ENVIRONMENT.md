@@ -9,7 +9,7 @@
 
 | 檔案 | 誰讀 | 範本 | 用途 |
 |---|---|---|---|
-| `backend/.env` | 開發機的 backend 與排程器（`uv run uvicorn …`、`python -m app.scheduler`）；由 `app/core/config.py`（pydantic-settings）載入 | `backend/.env.example` | 開發：SQLite、本地帳號、內嵌排程器 |
+| `backend/.env` | 開發機的 backend 與排程器（`.venv/bin/uvicorn …`、`python -m app.scheduler`）；由 `app/core/config.py`（pydantic-settings）載入 | `backend/.env.example` | 開發：SQLite、本地帳號、內嵌排程器 |
 | `frontend/.env.local` | 開發機的 Next.js（`npm run dev` / `npm run start`）；只在伺服器端讀，不會進瀏覽器 | `frontend/.env.local.example` | `BACKEND_URL`、`AUTH_MODE`、Keycloak client（prod 才需要） |
 | `infra/.env` | `docker compose -f infra/docker-compose.yml --env-file infra/.env`（只跑 MariaDB / Redis） | `infra/.env.example` | image 鏡像、DB 名稱 / 帳號 / 密碼、port |
 | `/etc/qr-ai-lab/qrlab.env` | 正式機的 `qrlab-backend.service` 與 `qrlab-scheduler.service`（systemd `EnvironmentFile`）；`install.sh` 的 migration / seed 也會 source 它 | `infra/systemd/qrlab.env.example` | 正式：MariaDB、Redis、Keycloak、secrets、模型庫、GPU、使用率取樣 |
@@ -93,7 +93,7 @@
 
 ## 套件來源（伺服器不連外）
 
-伺服器**不用 uv**：`infra/install.sh` 以 `python3.12 -m venv` + `pip install -r requirements.txt` 安裝 backend 與 trainer（`requirements.txt` 由 `scripts/export_requirements.sh` 從 `uv.lock` 匯出，CI 會比對）。pip 從 `/etc/pip.conf` 讀公司的 PyPI proxy（Nexus）：
+全專案只用 pip（沒有 uv / poetry）：`infra/install.sh` 以 `python3.12 -m venv` + `pip install -r requirements.txt` 安裝 backend 與 trainer；開發機用 `requirements-dev.txt`（多 pytest / ruff）。四個 `requirements*.txt` 由 `scripts/pin_requirements.sh` 依 `pyproject.toml` 的範圍釘出，CI 會比對。pip 從 `/etc/pip.conf` 讀公司的 PyPI proxy（Nexus）：
 
 ```ini
 [global]
@@ -103,6 +103,6 @@ trusted-host = nexus.example.com
 
 npm 從 `/etc/npmrc`（`registry=https://nexus.example.com/repository/npm-proxy/`）讀。只想在這一次安裝覆蓋時，可在執行 `install.sh` 的 shell 設 `PIP_INDEX_URL` / `NPM_REGISTRY`，不會寫進任何檔案。
 
-開發機有網路時用 uv（`uv sync`）；開發機也只能走 Nexus 時，一樣用 `python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`（uv 不讀 `pip.conf`，而且 `uv sync --frozen` 會照 lock 檔裡的 pypi.org 網址下載）。
+開發機同樣是 venv + pip：`python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`，之後用 `.venv/bin/uvicorn`、`.venv/bin/pytest`、`.venv/bin/ruff`。
 
 trainer 另外會讀 `MAX_DATALOADER_WORKERS`（DataLoader worker 上限，預設依 CPU 配額）與 `TRAINER_RETRY_SHORT_S` / `TRAINER_RETRY_LONG_S`（回呼 backend 的重試預算：進度 / 心跳預設 30 秒，最後的指標 / 產物登記 / 結果預設 600 秒，backend 短暫重啟時訓練不會因此失敗；可寫在 qrlab.env，排程器會傳給任務）；排程器另外替任務設 `YOLO_VERBOSE=false`、`TQDM_DISABLE=1`（log 一個 epoch 一行）；排程器只把 `PATH`、`HOME`、語系、proxy、`CUDA_*` / `NVIDIA_*` / `TORCH_*` / `HF_*` 等白名單變數傳給任務子程序，伺服器的 secret 不會出現在任務的環境裡。

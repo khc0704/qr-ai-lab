@@ -113,7 +113,7 @@
 - 伺服器上的 Job 容器**離線**（`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`），不會從任何套件自動下載模型。
 - 需要的權重清單在 `backend/app/catalog/model_catalog.yaml` 每個家族的 `weights`；管理員在**有網路的機器**執行
   `python3 scripts/fetch_model_zoo.py --dest ./model_zoo`，把整個資料夾放到伺服器的 `MODEL_ZOO_ROOT`（預設 `DATA_ROOT/model_zoo`），
-  再用 `uv run python -m app.cli model-zoo --verify` 或管理員頁「模型庫」確認。
+  再用 `.venv/bin/python -m app.cli model-zoo --verify` 或管理員頁「模型庫」確認。
 - sklearn / XGBoost 家族沒有預訓練權重，直接訓練；`vision.yolo` 的 `pretrained=false` 也不需要權重。
 - 缺權重時 Job 會在 log 清楚說明缺哪個檔、該放哪裡，並以 failed 結束。
 

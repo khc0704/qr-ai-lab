@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Install / update QR AI Lab on an Ubuntu server WITHOUT internet access but WITH a PyPI / npm proxy (e.g. Nexus).
 #
-# Python packages are installed with pip from backend/requirements.txt and trainer/requirements.txt (exported from
-# the uv lockfiles by scripts/export_requirements.sh); pip reads the proxy from /etc/pip.conf
+# Python packages are installed with pip from backend/requirements.txt and trainer/requirements.txt (pinned by
+# scripts/pin_requirements.sh); pip reads the proxy from /etc/pip.conf
 # ([global] index-url = https://nexus.example.com/repository/pypi-proxy/simple), npm from /etc/npmrc
-# (registry=https://nexus.example.com/repository/npm-proxy/). uv is NOT needed on the server.
+# (registry=https://nexus.example.com/repository/npm-proxy/).
 # PIP_INDEX_URL / NPM_REGISTRY in the environment override those files for this run only.
 #
 # Usage (from the repo checkout, e.g. /opt/qr-ai-lab; the script re-runs itself with sudo):

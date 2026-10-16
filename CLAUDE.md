@@ -19,7 +19,7 @@
 | 層 | 選型 |
 |---|---|
 | Frontend | Next.js 16（App Router、Turbopack、`proxy.ts`）+ React 19 + TypeScript strict + Tailwind CSS v4 + shadcn/ui + next-themes + Auth.js（next-auth v5，Keycloak provider）+ npm |
-| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + uv + Ruff + pytest；`AUTH_MODE=local`（dev：argon2 + HS256 本地帳號）或 `keycloak`（prod：驗 realm JWKS、`KEYCLOAK_ROLE_MAP` 對應角色）；權限矩陣在 `app/core/permissions.py`（`require_perm`） |
+| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + pip（`requirements*.txt`，不用 uv / poetry）+ Ruff + pytest；`AUTH_MODE=local`（dev：argon2 + HS256 本地帳號）或 `keycloak`（prod：驗 realm JWKS、`KEYCLOAK_ROLE_MAP` 對應角色）；權限矩陣在 `app/core/permissions.py`（`require_perm`） |
 | Scheduler | 與 backend 同一套件（`app/scheduler`）：Job 是主機子程序（trainer venv），`JOB_RUNNER=auto` 優先用 `systemd-run --scope`（cgroup 限 Memory / CPU / 核心），否則 subprocess + affinity + 記憶體 watchdog；GPU 以 `CUDA_VISIBLE_DEVICES` 分配並用 pynvml 預檢；事件走 Redis（兩個程序）或記憶體（`SCHEDULER_EMBEDDED=true` 單程序）；容量上限 = 管理員設定的總資源池 |
 | Trainer | 獨立套件 `trainer/`，裝在主機的 `trainer/.venv`（torch CUDA wheel、ultralytics、transformers、Optuna、scikit-learn、XGBoost）：自行從使用者的 MinIO / URL 抓資料；**離線執行（runner 設 HF_HUB_OFFLINE 等），預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入**，由管理員經「模型庫」頁上傳 / 路徑匯入 / 內網 URL 帶進來 |
 | DB | MariaDB 11（Docker）、utf8mb4、InnoDB |
@@ -56,22 +56,22 @@ npm run lint && npm run typecheck && npm run format:check && npm test     # 提�
 npm run build && npm run start                    # 正式建置（BACKEND_URL 預設 http://localhost:8000）
 npm run screenshots && npm run screenshots:report  # 端到端串接測試 + 截圖 + PDF 報告（需要 backend、排程器、前端、Redis 都在跑）
 # backend（dev：SQLite 自動建表並建立 superadmin/superadmin1234、admin/admin1234、user/user1234）
-cd backend && uv sync && uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
-uv run ruff check . && uv run ruff format . && uv run pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
-uv run alembic revision --autogenerate -m "add_x" && uv run alembic upgrade head   # MariaDB
-uv run python -m app.scheduler                    # 排程器（或 SCHEDULER_EMBEDDED=true 讓 backend 內嵌，開發時不用 Redis）；JOB_RUNNER=auto|systemd|subprocess
-uv run python -m app.cli seed|create-user|set-password|set-role|model-zoo [--verify]
-bash scripts/export_requirements.sh               # uv add / uv lock 之後：重新匯出 backend / trainer 的 requirements.txt（伺服器用 pip 裝，CI 會比對）
+cd backend && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/uvicorn app.main:app --reload   # http://localhost:8000/docs
+.venv/bin/ruff check . && .venv/bin/ruff format . && .venv/bin/pytest      # 含排程器測試與 e2e（真的 trainer 子程序）
+.venv/bin/alembic revision --autogenerate -m "add_x" && .venv/bin/alembic upgrade head   # MariaDB
+.venv/bin/python -m app.scheduler                    # 排程器（或 SCHEDULER_EMBEDDED=true 讓 backend 內嵌，開發時不用 Redis）；JOB_RUNNER=auto|systemd|subprocess
+.venv/bin/python -m app.cli seed|create-user|set-password|set-role|model-zoo [--verify]
+bash scripts/pin_requirements.sh                 # 改了 pyproject.toml 的依賴之後：重新釘 backend / trainer 的 requirements*.txt（全專案只用 pip；CI 會比對）
 npm run screenshots:keycloak                      # 以 AUTH_MODE=keycloak 啟動的前後端 + 假 Keycloak 跑登入 / 登出截圖
 # trainer
-cd trainer && uv sync && uv run pytest && uv run python -m trainer check   # check：這個環境能跑哪些家族
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest && .venv/bin/python -m trainer check   # check：這個環境能跑哪些家族
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest             # 共用前處理套件
 node scripts/build_manual.js                      # 使用手冊 DOCX（再用 soffice 轉 PDF）
 # model zoo（在有網路的機器）
 python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis（只有這兩個跑在 docker）
-./infra/install.sh            # 伺服器：venv（pip + requirements.txt，走 /etc/pip.conf 的 proxy；不用 uv）、前端 build、migration、systemd 服務；--update 升級
+./infra/install.sh            # 伺服器：venv（pip + requirements.txt，走 /etc/pip.conf 的 proxy）、前端 build、migration、systemd 服務；--update 升級
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ```
@@ -106,7 +106,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 5. 秘密只從環境變數讀（Keycloak client secret、DB、`DATASET_SECRET_KEY`、`JOB_TOKEN_SECRET`）；log 不得含 token / 密碼。
 6. 長任務（訓練、推論）一律非同步：API 只建立 `jobs` row 並回 202，由 scheduler 依 `queue_rank` 與總資源池執行；每個 Job 都要有 log 檔與即時事件，缺一不可。
 7. 管理員能力不能繞過：總資源池、佇列重排、強制中斷 / 重啟、GPU 重置、刪專案 / 討論串都只走對應 API、以 `require_perm` 判斷並寫 `audit_logs`；superadmin 與 admin 的差別見 `app/core/permissions.py`，前端只能隱藏按鈕。
-8. 提交前必跑：前端 `npm run lint && npm run typecheck`；後端 `uv run ruff check . && uv run pytest`；有 UI 變更再跑 `python3 scripts/design_lint.py frontend/src`。
+8. 提交前必跑：前端 `npm run lint && npm run typecheck`；後端 `.venv/bin/ruff check . && .venv/bin/pytest`；有 UI 變更再跑 `python3 scripts/design_lint.py frontend/src`。
 9. Next.js 16：用 `src/proxy.ts`（不是 `middleware.ts`）；`params`、`searchParams`、`cookies()`、`headers()` 都要 `await`；不用 Pages Router；Tailwind v4 用 CSS `@theme`，不建 `tailwind.config.js`。
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
@@ -116,7 +116,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 16. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
-17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。伺服器不用 uv：改了依賴就跑 `scripts/export_requirements.sh`。
+17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。全專案只用 pip（沒有 uv / poetry）：改了 pyproject 的依賴就跑 `scripts/pin_requirements.sh` 重新釘 `requirements*.txt`。
 18. 任何寫入由不可信名稱決定路徑的地方（zip 成員、MinIO 物件、URL 檔名、trainer 回報的路徑）都走 `safe_join` / `job_relpath`；任務子程序的環境只從 `runner.ENV_PASSTHROUGH` 白名單繼承，不要把伺服器 secret 傳進去。
 
 ## 文件地圖

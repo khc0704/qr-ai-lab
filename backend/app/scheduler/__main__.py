@@ -1,4 +1,4 @@
-"""uv run python -m app.scheduler"""
+""".venv/bin/python -m app.scheduler"""
 
 from __future__ import annotations
 

@@ -19,4 +19,4 @@ paths:
 - 查詢：避免 N+1（`selectinload`）；列表必分頁（預設 20，上限 100）；scheduler 取 queued job 用 `SELECT ... FOR UPDATE SKIP LOCKED`，排序固定 `queue_rank, created_at`。
 - `comments` 是多型關聯（`target_type` + `target_id`，無 FK）：建立前 service 必須驗證目標存在與權限，刪除目標時連帶刪留言；其他地方不再新增多型表。
 - `system_settings` 只放管理員可調的全域設定（資源池、Job 預設值），讀取集中在 `services/settings.py` 並快取 10 秒；不要把設定散落到環境變數之外的地方。
-- 本地開發：`docker compose -f infra/docker-compose.yml up -d mariadb` → `uv run alembic upgrade head`；初始化 SQL（建庫、使用者、字集）放 `infra/mariadb/init/`。
+- 本地開發：`docker compose -f infra/docker-compose.yml up -d mariadb` → `.venv/bin/alembic upgrade head`；初始化 SQL（建庫、使用者、字集）放 `infra/mariadb/init/`。

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,26 +55,44 @@ def test_frontend_env_reads_are_in_template_and_docs():
     assert reads - documented == set(), f"frontend reads not documented: {sorted(reads - documented)}"
 
 
-def _normalize(text: str) -> list[str]:
-    return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+def _pins(path: Path) -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if "==" in line and not line.startswith(("#", "-")):
+            name, _, version = line.partition("==")
+            pins[re.sub(r"[-_.]+", "-", name.split("[")[0]).lower()] = version.split(";")[0].strip()
+    return pins
 
 
-@pytest.mark.parametrize(("subdir", "extra"), [("backend", "gpu"), ("trainer", "dl")])
-def test_requirements_export_matches_lockfile(subdir: str, extra: str):
-    """The server installs requirements.txt with pip; it must be the lockfile (scripts/export_requirements.sh)."""
-    if shutil.which("uv") is None:
-        pytest.skip("uv not installed")
-    out = subprocess.run(
-        ["uv", "export", "--frozen", "--no-dev", "--no-hashes", "--extra", extra],  # stdout (never "-o -")
-        cwd=ROOT / subdir,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    committed = (ROOT / subdir / "requirements.txt").read_text()
-    assert _normalize(out) == _normalize(committed), f"run scripts/export_requirements.sh ({subdir} drifted)"
+def _declared(pyproject: Path, extras: tuple[str, ...]) -> set[str]:
+    import tomllib
+
+    data = tomllib.loads(pyproject.read_text())["project"]
+    specs = list(data["dependencies"]) + [d for e in extras for d in data.get("optional-dependencies", {}).get(e, [])]
+    return {re.sub(r"[-_.]+", "-", re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0]).lower() for spec in specs}
 
 
-def test_install_script_uses_pip_not_uv():
+@pytest.mark.parametrize(("subdir", "extras"), [("backend", ("gpu",)), ("trainer", ("dl",))])
+def test_requirements_cover_pyproject(subdir: str, extras: tuple[str, ...]):
+    """pip installs requirements*.txt (no uv): every declared dependency must be pinned there, and the dev file must
+    carry the runtime pins unchanged (scripts/pin_requirements.sh regenerates both)."""
+    runtime = _pins(ROOT / subdir / "requirements.txt")
+    dev = _pins(ROOT / subdir / "requirements-dev.txt")
+    declared = _declared(ROOT / subdir / "pyproject.toml", extras)
+    missing = sorted(declared - set(runtime))
+    assert not missing, f"{subdir}: not pinned in requirements.txt: {missing}"
+    drift = {k: (v, dev.get(k)) for k, v in runtime.items() if dev.get(k) != v}
+    assert not drift, f"{subdir}: requirements-dev.txt disagrees with requirements.txt: {drift}"
+    for f in ("requirements.txt", "requirements-dev.txt"):
+        assert "-e ../libs/preprocess" in (ROOT / subdir / f).read_text(), f"{subdir}/{f}: no libs/preprocess line"
+    assert {"pytest", "ruff"} <= set(dev), f"{subdir}: dev tools missing from requirements-dev.txt"
+
+
+def test_nothing_uses_uv():
+    """The project is installed with pip everywhere (dev, CI, server)."""
     script = (ROOT / "infra/install.sh").read_text()
-    assert "uv sync" not in script and "requirements.txt" in script
+    assert "uv " not in script and "requirements.txt" in script
+    assert not (ROOT / "backend/uv.lock").exists() and not (ROOT / "trainer/uv.lock").exists()
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "uv" not in ci.replace("ubuntu", "")
