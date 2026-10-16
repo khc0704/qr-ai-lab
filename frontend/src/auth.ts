@@ -54,6 +54,36 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   }
 }
 
+// Keycloak may rotate refresh tokens ("Revoke Refresh Token": each one is single-use). The proxy refreshes for
+// every proxied request, and one page load can fire several of them with the SAME cookie before the browser has
+// stored the rotated one, so a naive implementation makes the second refresh fail with invalid_grant and logs the
+// user out. Deduplicate per refresh token: one Keycloak call per token, and remember its result for a minute so a
+// request that still carries the old cookie reuses the new tokens instead of presenting a revoked one.
+const inflight = new Map<string, Promise<JWT>>();
+const recent = new Map<string, { result: JWT; at: number }>();
+const RECENT_MS = 60_000;
+
+async function refreshDeduped(token: JWT): Promise<JWT> {
+  const key = token.refreshToken;
+  if (!key) return refreshAccessToken(token);
+  const now = Date.now();
+  for (const [k, v] of recent) if (now - v.at > RECENT_MS) recent.delete(k);
+  const hit = recent.get(key);
+  if (hit) return { ...token, ...hit.result };
+  let pending = inflight.get(key);
+  if (!pending) {
+    pending = refreshAccessToken(token)
+      .then((result) => {
+        recent.set(key, { result, at: Date.now() });
+        return result;
+      })
+      .finally(() => inflight.delete(key));
+    inflight.set(key, pending);
+  }
+  const result = await pending;
+  return { ...token, ...result };
+}
+
 export const authConfig: NextAuthConfig = {
   providers: [Keycloak({ clientId, clientSecret, issuer })],
   session: { strategy: "jwt", maxAge: Number(process.env.AUTH_SESSION_MAX_AGE ?? 12 * 60 * 60) },
@@ -76,7 +106,7 @@ export const authConfig: NextAuthConfig = {
         };
       }
       if (token.expiresAt && Date.now() / 1000 < token.expiresAt - REFRESH_MARGIN_S) return token;
-      return refreshAccessToken(token);
+      return refreshDeduped(token);
     },
     async session({ session, token }) {
       session.accessToken = token.accessToken;

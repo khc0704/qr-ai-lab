@@ -77,7 +77,7 @@
 | `AUTH_SECRET` | （keycloak 必填） | 加密 Auth.js session cookie（`openssl rand -base64 32`） |
 | `AUTH_URL` | （keycloak 必填） | 對外網址；Keycloak 的 redirect URI = `$AUTH_URL/api/auth/callback/keycloak` |
 | `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` / `AUTH_KEYCLOAK_ISSUER` | | confidential client |
-| `AUTH_SESSION_MAX_AGE` | `43200` | session cookie 秒數；access token 只由 `src/proxy.ts` 用 refresh token 更新並寫回 cookie，RSC / Route Handler 只讀不刷新 |
+| `AUTH_SESSION_MAX_AGE` | `43200` | session cookie 秒數；access token 只由 `src/proxy.ts` 用 refresh token 更新並寫回 cookie（同一個 refresh token 的並行刷新會去重，Keycloak 的 refresh token 輪替也安全），RSC / Route Handler 只讀不刷新 |
 | `AUTH_LOCAL_FALLBACK` | `0` | `1` = keycloak 模式的登入頁也顯示本地帳號表單（切換期） |
 | `COOKIE_SECURE` | （未設 = production 時 Secure） | nginx 沒有 TLS 時設 `0` |
 | `PUBLIC_URL` | `AUTH_URL` | 登出後導回的網址（通常不用設） |
