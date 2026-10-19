@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Dropzone } from "@/components/features/dropzone";
-import { PreprocessEditor } from "@/components/features/preprocess-editor";
+import { PreprocessDrawer, PreprocessSummary } from "@/components/features/preprocess-drawer";
+import { PreprocessWorkbench } from "@/components/features/preprocess-workbench";
 import { Stepper } from "@/components/features/stepper";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +18,7 @@ import { deleteToolUploadAction, previewToolAction, processToolAction } from "@/
 import { toToolUpload } from "@/lib/api/mappers";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { DataType, PreprocessOp, PreprocessStep, ToolUpload, Upload } from "@/types/domain";
+import type { DataType, PreprocessOp, PreprocessStep, PreviewPayload, ToolUpload, Upload } from "@/types/domain";
 
 export const TOOL_TYPES: { value: DataType; hint: string; accept: string; files: string }[] = [
   {
@@ -77,6 +78,8 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
   const [spec, setSpec] = useState<Record<string, string>>({});
   const [pending, startTransition] = useTransition();
   const [resetKey, setResetKey] = useState(0);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [lastPreview, setLastPreview] = useState<PreviewPayload | null>(null);
   const type = TOOL_TYPES.find((t) => t.value === dataType)!;
   const typeOps = ops.filter((o) => o.dataTypes.includes(dataType));
   const cleanSpec = Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""));
@@ -84,7 +87,10 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
 
   const onUploaded = (u: Upload | null, raw?: Record<string, unknown>) => {
     // Dropzone parses the project Upload shape (numeric id); the tool's id is a hex string, so use the raw JSON
-    setUpload(u && raw ? toToolUpload(raw) : null);
+    const next = u && raw ? toToolUpload(raw) : null;
+    setUpload(next);
+    setLastPreview(null);
+    if (next) setEditorOpen(true); // the editor is where the work happens: open it as soon as there is data
   };
   const changeType = (t: DataType) => {
     if (upload) return;
@@ -101,6 +107,7 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
         toast.success(`已建立前處理任務 #${r.data.id}，排入佇列`);
         setUpload(null);
         setSteps([]);
+        setLastPreview(null);
         setResetKey((k) => k + 1);
         router.refresh();
       }
@@ -176,19 +183,30 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
             <CardTitle>2. 前處理步驟與預覽</CardTitle>
             <CardDescription>
               {upload
-                ? `對 ${upload.originalFilename}（${formatBytes(upload.sizeBytes)}）加入步驟，按「抽樣預覽」即時看前後差異（只取樣，不會處理整個檔案）。`
-                : "上傳後才能預覽；步驟可以先挑。"}
+                ? `對 ${upload.originalFilename}（${formatBytes(upload.sizeBytes)}）在編輯器裡逐欄挑操作，每次變動都即時抽樣預覽（只取樣，不會處理整個檔案）。`
+                : "上傳後編輯器會自動開啟；步驟也可以先挑。"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <PreprocessEditor
+            <PreprocessSummary
               ops={typeOps}
               steps={steps}
-              onChange={setSteps}
-              uploadId={upload?.id}
-              spec={cleanSpec}
-              onPreview={(s, sp) => previewToolAction(upload?.id ?? "", s, sp, 5)}
+              preview={lastPreview}
+              onOpen={() => setEditorOpen(true)}
+              hint="尚未加入步驟。開啟編輯器，在欄位標頭的 ⋯ 選操作，或對整表刪除重複 / 缺值列。"
             />
+            <PreprocessDrawer open={editorOpen} onOpenChange={setEditorOpen}>
+              <PreprocessWorkbench
+                ops={typeOps}
+                steps={steps}
+                onChange={setSteps}
+                dataType={dataType}
+                spec={cleanSpec}
+                uploadId={upload?.id}
+                onPreview={(s, sp, n) => previewToolAction(upload?.id ?? "", s, sp, n)}
+                onPreviewLoaded={setLastPreview}
+              />
+            </PreprocessDrawer>
           </CardContent>
         </Card>
       </div>
@@ -196,8 +214,8 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
         <CardHeader>
           <CardTitle>3. 建立任務</CardTitle>
           <CardDescription>
-            整個檔案的處理是一個任務：進入全域佇列、受個人工作區的 CPU / 記憶體配額限制、有即時 log。完成後到任務頁下載
-            zip；下載一次就刪除。
+            整個檔案的處理是一個任務：進入全域佇列、受公共工具池的 CPU / 記憶體配額與每人同時上限限制、有即時
+            log。完成後到任務頁下載 zip；下載一次就刪除。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">

@@ -504,7 +504,7 @@ export interface Catalog {
 export interface PreprocessParam {
   name: string;
   label: string;
-  type: "int" | "float" | "str" | "bool" | "choice" | "columns";
+  type: "int" | "float" | "str" | "bool" | "choice" | "columns" | "list";
   default?: unknown;
   min?: number;
   max?: number;
@@ -540,6 +540,36 @@ export interface PreviewPayload {
   steps: string[];
   before: PreviewSide;
   after: PreviewSide;
+  /** One entry per step (parallel to `steps`), with the warnings that step raised on the sample. */
+  step_details?: PreviewStepDetail[];
+  /** Every step warning, prefixed 「步驟 n（label）」. */
+  warnings?: string[];
+  /** TABULAR / TEXT only: rows of the input sample and after the whole pipeline. */
+  rows_in?: number | null;
+  rows_out?: number | null;
+  columns_in?: PreviewColumnStat[] | null;
+  columns_out?: PreviewColumnStat[] | null;
+}
+
+export interface PreviewStepDetail {
+  op: string;
+  label: string;
+  params: Record<string, unknown>;
+  fitted: boolean;
+  warnings: string[];
+}
+
+/** Per-column statistics of a tabular preview (spreadsheet editor headers). */
+export interface PreviewColumnStat {
+  name: string;
+  dtype: "number" | "text" | "bool" | "datetime";
+  missing: number;
+  missing_ratio: number;
+  unique: number;
+  min?: number | string | null;
+  max?: number | string | null;
+  mean?: number | null;
+  top: { value: string; count: number }[];
 }
 export interface PreviewSide {
   row_count?: number;

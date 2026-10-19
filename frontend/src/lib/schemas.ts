@@ -172,7 +172,7 @@ export const dataSourceBodySchema = z.discriminatedUnion("kind", [
 export const previewBodySchema = z.object({
   steps: preprocessStepsSchema,
   spec: jsonRecord,
-  sample: z.number().int().min(1).max(50),
+  sample: z.number().int().min(1).max(500),
 });
 
 export const jobCreateBodySchema = z.object({

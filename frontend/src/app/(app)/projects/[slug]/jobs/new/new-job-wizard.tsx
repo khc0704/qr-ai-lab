@@ -6,7 +6,8 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { SourceKindChip } from "@/components/features/chips";
 import { Dropzone } from "@/components/features/dropzone";
-import { PreprocessEditor } from "@/components/features/preprocess-editor";
+import { PreprocessDrawer, PreprocessSummary } from "@/components/features/preprocess-drawer";
+import { PreprocessWorkbench } from "@/components/features/preprocess-workbench";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Stepper } from "@/components/features/stepper";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { dataTypeLabel, familyLabel, inferenceModeLabel, jobCopy, taskTypeLabel } from "@/i18n/zh-TW";
-import { createJobAction } from "@/lib/actions";
+import { createJobAction, previewPreprocessAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
@@ -31,6 +32,7 @@ import type {
   Job,
   PreprocessOp,
   PreprocessStep,
+  PreviewPayload,
   TaskType,
   Upload,
 } from "@/types/domain";
@@ -164,7 +166,14 @@ export function NewJobWizard({
     cloneFrom?.input.kind === "data_source" ? "data_source" : isTrain ? "upload" : "inline",
   );
   const [sourceId, setSourceId] = useState<number | null>(cloneFrom?.dataSourceId ?? sources[0]?.id ?? null);
-  const [upload, setUpload] = useState<Upload | null>(null);
+  const [upload, setUploadState] = useState<Upload | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [lastPreview, setLastPreview] = useState<PreviewPayload | null>(null);
+  const setUpload = (u: Upload | null) => {
+    setUploadState(u);
+    setLastPreview(null);
+    if (u && isTrain) setEditorOpen(true); // training inputs usually want preprocessing: open the editor right away
+  };
   const [inlineText, setInlineText] = useState(
     cloneFrom?.input.rows ? JSON.stringify(cloneFrom.input.rows, null, 1) : "",
   );
@@ -447,15 +456,30 @@ export function NewJobWizard({
           <CardDescription>加入步驟後按「抽樣預覽」看處理前後的差異；步驟會隨任務送出。</CardDescription>
         </CardHeader>
         <CardContent>
-          <PreprocessEditor
+          <PreprocessSummary
             ops={ops}
             steps={preprocess}
-            onChange={setPreprocess}
-            slug={project.slug}
-            uploadId={inputKind === "upload" ? upload?.id : undefined}
-            spec={Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""))}
-            disabledReason={geometricBlocked ? "偵測 / 分割任務不能用會改變座標的步驟" : undefined}
+            preview={lastPreview}
+            onOpen={() => setEditorOpen(true)}
+            hint={
+              inputKind === "upload"
+                ? "上傳後編輯器會自動開啟；也可以不加任何步驟。"
+                : "資料來源會在任務內處理：步驟可以先挑，但沒有檔案就無法預覽。"
+            }
           />
+          <PreprocessDrawer open={editorOpen} onOpenChange={setEditorOpen}>
+            <PreprocessWorkbench
+              ops={ops}
+              steps={preprocess}
+              onChange={setPreprocess}
+              dataType={project.dataType}
+              spec={Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""))}
+              uploadId={inputKind === "upload" ? upload?.id : undefined}
+              onPreview={(s, sp, n) => previewPreprocessAction(project.slug, Number(upload?.id ?? 0), s, sp, n)}
+              onPreviewLoaded={setLastPreview}
+              disabledReason={geometricBlocked ? "偵測 / 分割任務不能用會改變座標的步驟" : undefined}
+            />
+          </PreprocessDrawer>
         </CardContent>
       </Card>
     </div>

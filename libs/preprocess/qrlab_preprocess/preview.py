@@ -38,7 +38,7 @@ def run_preview(
     task_type: str | None = None,
 ) -> dict[str, Any]:
     spec = spec or {}
-    sample = max(1, min(int(sample), 50))
+    sample = max(1, min(int(sample), 500))
     protected = [
         c for c in (spec.get("target"), spec.get("id_column"), spec.get("label_column"), spec.get("label")) if c
     ]

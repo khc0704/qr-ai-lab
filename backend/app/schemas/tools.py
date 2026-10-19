@@ -30,7 +30,7 @@ class ToolProcessBody(BaseModel):
 
 
 class ToolPreviewBody(ToolProcessBody):
-    sample: int = Field(default=5, ge=1, le=50)
+    sample: int = Field(default=5, ge=1, le=500)
 
 
 class PreviewTopValue(BaseModel):

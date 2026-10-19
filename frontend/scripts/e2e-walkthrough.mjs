@@ -450,8 +450,15 @@ try {
     );
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
-    await settle(page, 800);
-    await shot(page, "wizard-2-preview", "抽樣預覽：從上傳檔取樣，顯示前處理「套用前 / 套用後」的統計與資料列");
+    await page.getByTestId("preprocess-grid").waitFor({ timeout: 60_000 });
+    await settle(page, 1200);
+    await shot(
+      page,
+      "wizard-2-preview",
+      "前處理編輯器（全寬 drawer）：試算表式預覽、欄位標頭的型別 / 缺值 / 操作選單、步驟串、變動的格子標色；每次變動即時重新抽樣",
+    );
+    await page.getByTestId("editor-done").click();
+    await settle(page, 500);
     await page.getByRole("button", { name: "下一步" }).click();
     await settle(page, 300);
     await shot(page, "wizard-3-mode", "③ 模式：自動（AutoML）或手動");
@@ -637,6 +644,9 @@ try {
       await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "SNV");
       await page.getByRole("button", { name: "抽樣預覽" }).click();
       await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
+      await settle(page, 800);
+      await page.getByTestId("editor-done").click();
+      await settle(page, 400);
       await settle(page, 800);
       await shot(page, "spectrum-preview", "光譜前處理預覽：SNV 標準化前後的曲線");
       await page.getByRole("button", { name: "下一步" }).click();
@@ -977,12 +987,16 @@ try {
     await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "標準化（z-score）");
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
-    await settle(page, 800);
+    await page.getByTestId("preprocess-grid").waitFor({ timeout: 60_000 });
+    await settle(page, 1200);
     await shot(
       page,
       "tool-preview",
-      "上傳 WAT CSV、指定目標 / ID 欄位（不處理）、加入補值與標準化，抽樣預覽（即時，只取樣）",
+      "上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色",
     );
+    await page.getByTestId("editor-done").click();
+    await settle(page, 500);
+    await shot(page, "tool-steps", "關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟");
     await page.getByTestId("tool-run").click();
     await page.getByText(/已建立前處理任務 #(\d+)/).waitFor({ timeout: 30_000 });
     await settle(page, 1500);
