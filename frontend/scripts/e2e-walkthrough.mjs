@@ -402,7 +402,13 @@ try {
     await page.getByRole("button", { name: "邀請成員" }).click();
     await page.getByRole("dialog").waitFor();
     // UserPicker: a combobox that searches our own users table (Keycloak only supplies identity).
-    await page.locator("#inv-user").click();
+    // The dialog's opening focus handling can swallow the first click on the popover trigger: retry until open.
+    await settle(page, 500);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await page.locator("#inv-user").click();
+      await page.waitForTimeout(400);
+      if ((await page.locator("#inv-user").getAttribute("aria-expanded")) === "true") break;
+    }
     await page.getByLabel("搜尋使用者").fill("adm");
     await page.getByRole("option", { name: /admin/ }).first().click();
     await pick(page, page.getByRole("dialog").locator("button[role=combobox]").last(), "維護者");
