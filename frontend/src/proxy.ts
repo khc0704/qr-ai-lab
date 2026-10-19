@@ -17,9 +17,15 @@
 //   - A session whose refresh failed (`error: "RefreshTokenError"`) counts as logged out: pages are sent to
 //     /login?reason=expired, /api/* gets 401. /login is only bounced back to "/" for plain visits (no ?reason /
 //     ?error), otherwise the stale cookie that is still in the browser would redirect in a loop.
-//   - The route handlers that forward the token to the backend (/api/upload, /api/stream, /api/download,
-//     /api/tools, /api/admin, /api/users) pass through here as well, so they get a refreshed token too; /api/auth/* (Auth.js
-//     itself) never does. The proxy only decides and sets headers, so streamed responses stay streamed.
+//   - The route handlers that forward the token to the backend (/api/stream, /api/download, /api/tools, /api/admin,
+//     /api/users) pass through here as well, so they get a refreshed token too; /api/auth/* (Auth.js itself) never
+//     does. The proxy only decides and sets headers, so streamed responses stay streamed.
+//   - The multipart UPLOAD routes (/api/upload/{slug}, /api/tools/upload, /api/admin/model-zoo/{id}/upload) are
+//     deliberately NOT matched: Next.js buffers the body of every proxied request so the proxy can read it, capped
+//     at `experimental.proxyClientMaxBodySize` (10 MB) and silently truncated beyond that, which breaks every
+//     weight / dataset upload. Unmatched, the body streams straight into the route handler, whose `getToken()`
+//     falls back to decoding the session cookie (no refresh: the page that hosts the Dropzone was itself proxied
+//     a moment earlier, so the token is current; a stale one answers 401 and the Dropzone says to reload).
 // AUTH_MODE=local keeps its original behaviour: our own httpOnly `qr_token` cookie decides, and Auth.js is never
 // imported (the `@/auth` import is lazy so a local-mode deployment never initialises NextAuth).
 // Authorization itself is decided by the backend on every API call; this only avoids rendering the shell.
@@ -104,12 +110,12 @@ export const config = {
     "/",
     // every page (not Next internals, static files or /api/*) …
     "/((?!api/|_next/|favicon\\.ico|.*\\.[a-zA-Z0-9]+$).*)",
-    // … plus the route handlers that forward the token to the backend (never /api/auth/*)
-    "/api/upload/:path*",
+    // … plus the route handlers that forward the token to the backend (never /api/auth/*, never the multipart
+    // upload routes: a proxied request body is buffered and truncated at 10 MB, see the header comment)
     "/api/stream/:path*",
     "/api/download/:path*",
-    "/api/tools/:path*",
-    "/api/admin/:path*",
+    "/api/tools/((?!upload$).*)",
+    "/api/admin/((?!model-zoo/[^/]+/upload$).*)",
     "/api/users/:path*",
   ],
 };

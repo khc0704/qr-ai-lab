@@ -19,14 +19,15 @@ const CRUMB_HREF: Record<string, string> = {
   "/tools/jobs": "/tools",
 };
 
-function crumbsFor(pathname: string): { href: string; label: string }[] {
+/** `path` is the URL prefix this crumb stands for (unique, used as the key); `href` is where clicking it goes. */
+function crumbsFor(pathname: string): { path: string; href: string; label: string }[] {
   const parts = pathname.split("/").filter(Boolean);
-  const crumbs: { href: string; label: string }[] = [{ href: "/", label: nav.home }];
+  const crumbs: { path: string; href: string; label: string }[] = [{ path: "/", href: "/", label: nav.home }];
   let acc = "";
   for (const part of parts) {
     acc += `/${part}`;
     const label = routeLabel[part] ?? (/^\d+$/.test(part) ? `#${part}` : part);
-    crumbs.push({ href: CRUMB_HREF[acc] ?? acc, label });
+    crumbs.push({ path: acc, href: CRUMB_HREF[acc] ?? acc, label });
   }
   return crumbs;
 }
@@ -42,7 +43,7 @@ export function Breadcrumbs() {
           // On narrow screens keep only the current page and its parent.
           const hidden = i < crumbs.length - 2 ? "hidden md:inline-flex" : undefined;
           return (
-            <Fragment key={c.href}>
+            <Fragment key={c.path}>
               {i > 0 ? <BreadcrumbSeparator className={cn(hidden && "hidden md:block")} /> : null}
               <BreadcrumbItem className={cn("whitespace-nowrap", hidden)}>
                 {last ? (

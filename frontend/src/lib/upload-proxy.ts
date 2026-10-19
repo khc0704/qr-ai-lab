@@ -6,11 +6,24 @@
 import "server-only";
 
 import { NextResponse } from "next/server";
-import { BACKEND_URL, getToken } from "@/lib/backend";
+import { AUTH_MODE, BACKEND_URL, getToken, readSessionJwt } from "@/lib/backend";
 
+// These routes are kept out of the proxy matcher on purpose (src/proxy.ts): a proxied request body is buffered and
+// truncated at 10 MB. So the token comes from the cookie as it is, without a refresh; a Keycloak session whose
+// access token lapsed while the page sat open gets a 401 that tells the user to reload (the proxy refreshes then).
 export async function proxyUpload(request: Request, backendPath: string): Promise<Response> {
   const token = await getToken();
-  if (!token) return NextResponse.json({ detail: { code: "UNAUTHORIZED", message: "請先登入" } }, { status: 401 });
+  if (!token) {
+    const stale = AUTH_MODE === "keycloak" && (await readSessionJwt()) !== null;
+    return NextResponse.json(
+      {
+        detail: stale
+          ? { code: "SESSION_EXPIRED", message: "登入憑證已過期，請重新整理頁面後再上傳" }
+          : { code: "UNAUTHORIZED", message: "請先登入" },
+      },
+      { status: 401 },
+    );
+  }
   const contentType = request.headers.get("content-type");
   if (!contentType?.toLowerCase().startsWith("multipart/form-data")) {
     return NextResponse.json({ detail: { code: "BAD_REQUEST", message: "需要 multipart/form-data" } }, { status: 400 });
