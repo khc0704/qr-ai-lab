@@ -90,8 +90,19 @@ export const authConfig: NextAuthConfig = {
   basePath: withBase("/api/auth"),
   providers: [Keycloak({ clientId, clientSecret, issuer })],
   session: { strategy: "jwt", maxAge: Number(process.env.AUTH_SESSION_MAX_AGE ?? 12 * 60 * 60) },
-  pages: { signIn: "/login", error: "/login" },
+  pages: { signIn: withBase("/login"), error: withBase("/login") }, // Auth.js redirects here with the full site prefix
   trustHost: true, // behind nginx; AUTH_URL is the public origin
+  logger: {
+    // AUTH_URL is the site URL (https://host/ai-lab) while basePath is <site>/api/auth: Auth.js warns about the
+    // difference on every request although the URLs it builds are exactly what we want.
+    warn(code) {
+      if (code !== "env-url-basepath-mismatch") console.warn(`[auth][warn] ${code}`);
+    },
+    error(error) {
+      console.error("[auth][error]", error);
+    },
+    debug() {},
+  },
   secret: process.env.AUTH_SECRET ?? "dev-local-mode-unused",
   callbacks: {
     async jwt({ token, account, profile }) {
