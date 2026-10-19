@@ -73,6 +73,15 @@ async function pick(page, trigger, optionText) {
   await trigger.click();
   await page.getByRole("option", { name: optionText }).first().click();
 }
+async function nextStep(page) {
+  // sonner toasts sit in the bottom-right corner, right over 下一步: let the last one fade before clicking.
+  await page
+    .locator("[data-sonner-toast]")
+    .last()
+    .waitFor({ state: "detached", timeout: 8_000 })
+    .catch(() => {});
+  await page.getByRole("button", { name: "下一步" }).click();
+}
 async function fillNumber(page, selector, value) {
   await page.fill(selector, "");
   await page.fill(selector, String(value));
@@ -455,7 +464,7 @@ try {
     await page.getByText("480 列").waitFor({ timeout: 30_000 });
     await settle(page);
     await shot(page, "wizard-1-uploaded", "CSV 上傳完成：backend 偵測到 480 列與欄位");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page.fill("#spec-target", "yield_pct");
     await page.fill("#spec-categorical", "line");
     await page.fill("#spec-id_column", "lot_id");
@@ -479,20 +488,20 @@ try {
     );
     await page.getByTestId("editor-done").click();
     await settle(page, 500);
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await settle(page, 300);
     await shot(page, "wizard-3-mode", "③ 模式：自動（AutoML）或手動");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await fillNumber(page, "#trials", 6);
     await fillNumber(page, "#minutes", 10);
     await shot(page, "wizard-4-automl", "④ AutoML 候選模型與預算：XGBoost / 隨機森林 / 線性 / SVM，最多 6 個 trial");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await fillNumber(page, "#r-gpu", 0);
     await fillNumber(page, "#r-cpu", 2);
     await fillNumber(page, "#r-mem", 2048);
     await fillNumber(page, "#r-to", 30);
     await shot(page, "wizard-5-resources", "⑤ 資源：GPU 0、CPU 2、2 GB、逾時 30 分鐘（不得超過專案配額）");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page.fill("#job-name", "automl-wat-yield-v1");
     await shot(page, "wizard-6-confirm", "⑥ 確認：送出後 API 回 202 建立 jobs row，由排程器依佇列執行");
     await page.getByRole("button", { name: "建立任務" }).click();
@@ -546,17 +555,17 @@ try {
     const page = await uiLogin(userCtx, "user", "user1234");
     await goto(page, `/projects/${slug}/jobs/new?kind=inference`);
     await shot(page, "infer-1-model", "建立推論任務 ① 模型：預設選專案的預設模型，列出支援的推論模式");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page
       .locator("textarea")
       .first()
       .fill(JSON.stringify(INLINE_ROWS, null, 1));
     await shot(page, "infer-2-input", "② 輸入：直接貼 JSON 列（也可上傳檔案或用資料來源），推論模式 predict");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await fillNumber(page, "#r-gpu", 0);
     await fillNumber(page, "#r-cpu", 1);
     await fillNumber(page, "#r-mem", 2048);
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page.fill("#job-name", "predict-new-lots");
     await page.getByRole("button", { name: "建立任務" }).click();
     await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
@@ -587,22 +596,22 @@ try {
       await page.getByText("40 張影像").waitFor({ timeout: 60_000 });
       await settle(page);
       await shot(page, "iqa-upload", "上傳 golden 機台 40 張 SEM 影像（zip）");
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await settle(page, 300);
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.getByRole("button", { name: "手動" }).click();
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.getByRole("button", { name: "影像品質基準" }).click();
       await shot(
         page,
         "iqa-family",
         "手動選「影像品質基準」：17 個無參考 IQA 指標 → 中位數 / 浮動範圍 / Mahalanobis 門檻",
       );
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await fillNumber(page, "#r-gpu", 0);
       await fillNumber(page, "#r-cpu", 1);
       await fillNumber(page, "#r-mem", 2048);
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.fill("#job-name", "golden-tool-baseline");
       await page.getByRole("button", { name: "建立任務" }).click();
       await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
@@ -621,16 +630,16 @@ try {
       "iqa-infer-model",
       "推論 ① 模型：影像品質基準模型支援 compare / score / embed，選「機台比對報告」",
     );
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page.getByRole("tab", { name: "一次性上傳" }).click();
     await page.setInputFiles("[data-testid=upload-input]", DS.tuned);
     await page.getByText("16 張影像").waitFor({ timeout: 60_000 });
     await shot(page, "iqa-infer-input", "推論 ② 輸入：上傳調機機台 16 張影像（zip）");
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await fillNumber(page, "#r-gpu", 0);
     await fillNumber(page, "#r-cpu", 1);
     await fillNumber(page, "#r-mem", 2048);
-    await page.getByRole("button", { name: "下一步" }).click();
+    await nextStep(page);
     await page.fill("#job-name", "compare-tool-b");
     await page.getByRole("button", { name: "建立任務" }).click();
     await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
@@ -659,7 +668,7 @@ try {
       await goto(page, `/projects/${slug}/jobs/new`);
       await page.setInputFiles("[data-testid=upload-input]", DS.spectra);
       await page.getByText("264 列").waitFor({ timeout: 60_000 });
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.fill("#spec-label", "label");
       await page.getByTestId("open-editor").click();
       await page.getByRole("dialog").waitFor();
@@ -671,17 +680,17 @@ try {
       await settle(page, 400);
       await settle(page, 800);
       await shot(page, "spectrum-preview", "光譜前處理預覽：SNV 標準化前後的曲線");
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.getByRole("button", { name: "手動" }).click();
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.getByRole("button", { name: "光譜 Masked AE" }).click();
       await page.fill("#p-epochs", "40");
       await shot(page, "spectrum-family", "手動選「光譜 Masked AE」，覆寫 epochs=40（CPU 上約 30 秒）");
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await fillNumber(page, "#r-gpu", 0);
       await fillNumber(page, "#r-cpu", 2);
       await fillNumber(page, "#r-mem", 2048);
-      await page.getByRole("button", { name: "下一步" }).click();
+      await nextStep(page);
       await page.fill("#job-name", "ocd-mae-v1");
       await page.getByRole("button", { name: "建立任務" }).click();
       await page.waitForURL(/\/jobs\/\d+$/, { timeout: 30_000 });
