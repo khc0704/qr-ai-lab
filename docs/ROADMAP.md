@@ -82,3 +82,13 @@
 正確性：刪專案刪錯上傳目錄；刪 Job / 刪資料來源在 MariaDB 外鍵下 500（0005 + 解除引用；SQLite 測試也開外鍵）；GPU 暖機期以牆鐘計算造成重複配置（改為驅動看見程序前整個申請量保留）；實測 CPU 永遠 0；排隊超過 48 小時的任務輸入被清掉；AutoML 無標籤異常偵測最佳化 `score_mean`、trial 沒有 deadline；預覽 zip bomb / ReDoS；上傳代理整檔進記憶體；前端沒有 `error.tsx`、SSE 重播重複、斷線無提示、log 無上限；viewer 看得到不能用的按鈕；佇列頭 GPU 任務被 backfill 餓死；log 超過上限直接殺任務（改為就地截斷）；取消與啟動的競爭；重啟後 reconcile 讀到過期狀態；Redis 事件串流不過期；使用率歷史整段載入；`?min_role=` 外洩；欄位長度溢位等。
 
 仍待做：Alembic 0001 仍是 `create_all`（要凍結成真正的 schema 並在 MariaDB 上跑 CI）；`docs/manuals` 與截圖讓 `.git` 超過 100 MB（改用 LFS 或 release 附件並清歷史）；XGBoost `device=cuda` 不受共用顯存上限約束（共用 GPU 時改走 CPU）；磁碟低於門檻時自動停排；資料來源瀏覽、通知、回寫 MES 等 B 節項目。
+
+## I. 第四輪：使用回饋（申請 / 專案合併、工具池、前處理編輯器、討論區 Markdown、單一 superadmin）
+
+- ✅ **申請就是專案**：`POST /projects` 送出申請即建立 `pending` 專案，專案頁的「申請」分頁承載申請內容、審核往返、核准 / 退回；核准前其他分頁不開放。狀態機 `pending → in_review → active | rejected`、`active → completed`（已結束，可重開）、`archived`。獨立的申請列表、`/admin/requests`、`/admin/quotas` 移除；配額在專案「設定」分頁；待審清單 = `/projects?status=pending`。
+- ✅ **工具池**：所有前處理 / 分析任務共用一個系統專案（`kind=shared`，slug `tools`），配額與「每人同時任務數」在 Dashboard 的「工具池」設定；工具任務有自己的 `/tools/jobs/{id}` 頁，只有建立者與管理員看得到。舊的個人工作區封存（0007）。
+- ✅ **前處理編輯器**：全寬 drawer 內的試算表式預覽（欄位標頭：型別 / 缺值 / 種類數 / 操作選單；列層級：重複列、缺值列、篩選；步驟串 chips 可調參數 / 排序；每次變動即時重新抽樣，變動的格子標色；輸入 → 輸出列數、新增 / 移除欄位與警告）；新增 `tabular.encode`（label / one-hot / ordinal，fit 後可 replay），`to_numeric` 改名並在大量值變缺值時警告；預覽多回傳每欄統計與每步警告。
+- ✅ **討論區**：Markdown 編輯 / 預覽與安全渲染、作者或管理員可編輯討論串與留言、兩欄式發表表單；申請表的目的也用同一個編輯器。
+- ✅ **帳號**：superadmin 固定一位（`SUPERADMIN_USERNAME`），介面只能指派 admin / user；Keycloak 只提供身分（`KEYCLOAK_ROLE_MAP` 預設空）；`GET /users/lookup` + 成員自動完成。
+- ✅ **穩定性**：trainer 回報的 NaN / inf 一律變成 null（分析報告在群組太小、MAD 為 0 時不再讓任務失敗）；使用率取樣第一筆不再是 0；WSL2 下的節點數字在頁面上說明。
+- 仍待做：工具池的 GPU 共用策略（目前與專案相同）；申請分頁的留言也支援編輯；前處理編輯器的欄位重新命名與型別轉換（datetime）；專案「已結束」後的產物保留期限。

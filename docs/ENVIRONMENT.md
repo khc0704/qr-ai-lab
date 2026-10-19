@@ -68,7 +68,7 @@
 | `LOG_MAX_MB` | `50` | 任務 log 超過時**就地截斷**只留最後 1/4（任務不會被中止） |
 | `DEFAULT_JOB_TIMEOUT_MINUTES` | `240` | 只在 `system_settings.job_defaults` 第一次建立時使用；之後請在管理員後台調整（上限 14 天） |
 
-管理員在 UI 調的值（資源池、Job 預設、工具預設 = 個人工作區配額與結果保留時間）存在 `system_settings` 表，不是環境變數。
+管理員在 UI 調的值（資源池、Job 預設、工具池 = 前處理 / 分析任務共用的配額、每人同時任務數與結果保留時間）存在 `system_settings` 表，不是環境變數。
 
 ## frontend（`frontend/.env.local` 或 `/etc/qr-ai-lab/frontend.env`）
 
