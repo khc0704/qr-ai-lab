@@ -159,7 +159,13 @@ function IssueEditForm({ issue, onDone }: { issue: Issue; onDone: () => void }) 
                 <FormItem>
                   <FormLabel>{discussionCopy.fieldBody}</FormLabel>
                   <FormControl>
-                    <MarkdownEditor value={field.value} onChange={field.onChange} ref={field.ref} minRows={12} />
+                    <MarkdownEditor
+                      name={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      ref={field.ref}
+                      minRows={12}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

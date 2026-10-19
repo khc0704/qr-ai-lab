@@ -75,6 +75,7 @@ export function NewIssueForm({ projects }: { projects: { slug: string; name: str
                   <FormLabel>{discussionCopy.fieldBody}</FormLabel>
                   <FormControl>
                     <MarkdownEditor
+                      name={field.name}
                       value={field.value}
                       onChange={field.onChange}
                       ref={field.ref}

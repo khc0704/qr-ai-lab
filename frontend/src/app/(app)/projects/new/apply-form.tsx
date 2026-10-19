@@ -139,6 +139,7 @@ export function ApplyForm({
                     <FormLabel>目的與背景</FormLabel>
                     <FormControl>
                       <MarkdownEditor
+                        name={field.name}
                         minRows={12}
                         placeholder="要解決什麼問題、現況指標、期望達到的目標"
                         value={field.value}

@@ -321,6 +321,8 @@ try {
       "admin-quotas",
       "superadmin 在專案「設定」分頁調整該專案的配額（合計超過資源池時提示；排程仍以資源池為準）",
     );
+    // Back on the dashboard: the total resource pool lives there, project quotas live in each project's settings.
+    await goto(sa, "/admin");
     await fillNumber(sa, "input[name=memoryMb]", 14336);
     await fillNumber(sa, "input[name=maxRunningJobs]", 2);
     await sa.getByRole("button", { name: "儲存資源池" }).click();
@@ -399,9 +401,19 @@ try {
     await goto(page, `/projects/${slug}/members`);
     await page.getByRole("button", { name: "邀請成員" }).click();
     await page.getByRole("dialog").waitFor();
-    await page.fill("#inv-email", "admin");
-    await pick(page, page.getByRole("dialog").locator("button[role=combobox]"), "維護者");
-    await shot(page, "members-invite", "邀請成員（帳號或 email + 專案角色）", { fullPage: false });
+    // UserPicker: a combobox that searches our own users table (Keycloak only supplies identity).
+    await page.locator("#inv-user").click();
+    await page.getByLabel("搜尋使用者").fill("adm");
+    await page.getByRole("option", { name: /admin/ }).first().click();
+    await pick(page, page.getByRole("dialog").locator("button[role=combobox]").last(), "維護者");
+    await shot(
+      page,
+      "members-invite",
+      "邀請成員：以自動完成搜尋帳號 / 姓名 / email（只列已登入過的使用者）+ 專案角色",
+      {
+        fullPage: false,
+      },
+    );
     await page.getByRole("dialog").getByRole("button").last().click();
     await settle(page, 1200);
     await shot(page, "members", "成員列表：擁有者 user、維護者 admin");
