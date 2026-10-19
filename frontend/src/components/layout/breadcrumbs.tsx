@@ -14,6 +14,11 @@ import {
 import { nav, routeLabel } from "@/i18n/zh-TW";
 import { cn } from "@/lib/utils";
 
+/** Intermediate segments without a page of their own link to the page that lists them instead. */
+const CRUMB_HREF: Record<string, string> = {
+  "/tools/jobs": "/tools",
+};
+
 function crumbsFor(pathname: string): { href: string; label: string }[] {
   const parts = pathname.split("/").filter(Boolean);
   const crumbs: { href: string; label: string }[] = [{ href: "/", label: nav.home }];
@@ -21,7 +26,7 @@ function crumbsFor(pathname: string): { href: string; label: string }[] {
   for (const part of parts) {
     acc += `/${part}`;
     const label = routeLabel[part] ?? (/^\d+$/.test(part) ? `#${part}` : part);
-    crumbs.push({ href: acc, label });
+    crumbs.push({ href: CRUMB_HREF[acc] ?? acc, label });
   }
   return crumbs;
 }
