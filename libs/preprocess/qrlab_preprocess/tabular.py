@@ -236,11 +236,17 @@ class SymLog(Op):
         return out
 
 
+TO_NUMERIC_WARN_RATIO = 0.2  # warn when more than this share of the non-missing values cannot be parsed
+
+
 @register
 class ToNumeric(Op):
     id = "tabular.to_numeric"
-    label = "轉成數值"
-    description = "把文字欄轉成數字，轉不了的變成缺值（之後可補值）。"
+    label = "文字數字轉成數值"
+    description = (
+        '把「以文字儲存的數字」（例如 "12.5"、"1e-3"、帶空白的數字）轉成數值欄，轉不了的值變成缺值（之後可補值）。'
+        "只適合內容本來就是數字的欄位；類別 / 文字欄（如 A / B、機台名稱）請改用「類別編碼」，否則整欄都會變成缺值。"
+    )
     data_types = TAB
     params = (Param("columns", "欄位", "columns", default=[], help="留空 = 全部非數值欄"),)
 
@@ -249,7 +255,141 @@ class ToNumeric(Op):
         cols = self.p["columns"] or [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
         for c in cols:
             if c in out.columns and c not in ctx.protected:
-                out[c] = pd.to_numeric(out[c], errors="coerce")
+                s = out[c]
+                v = pd.to_numeric(s, errors="coerce")
+                n_before = int(s.notna().sum())
+                lost = n_before - int(v.notna().sum())
+                if n_before and lost / n_before > TO_NUMERIC_WARN_RATIO:
+                    ctx.warn(
+                        f"欄位 {c}：{lost / n_before:.0%} 的值無法轉成數字，會變成缺值；若這是類別欄請改用「類別編碼」"
+                    )
+                out[c] = v
+        return out
+
+
+def _category_key(v: Any) -> str:
+    """Stable string form of a category value: the fitted state is JSON, and replay must match the same category
+    whether the new file parsed it as str, int or float (1 / 1.0 / "1" are the same category)."""
+    if isinstance(v, np.generic):
+        v = v.item()
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def _category_order(k: str) -> tuple[int, float, str]:
+    """Sort numeric-looking categories numerically ("2" before "10"), everything else alphabetically after them."""
+    try:
+        return (0, float(k), "")
+    except ValueError:
+        return (1, 0.0, k)
+
+
+@register
+class Encode(Op):
+    id = "tabular.encode"
+    label = "類別編碼"
+    description = (
+        "把類別 / 文字欄轉成模型能用的數字。label：依排序給每個類別一個整數代碼（0…k−1）；"
+        "onehot：每個類別一個 0/1 欄（<欄位>__<類別>），原欄移除；ordinal：依「順序」給代碼，不在順序中的值視為未知。"
+        "類別清單在訓練時學到，推論時沒看過的類別依「未知類別」處理；缺值維持缺值（onehot 為整列 0）。"
+    )
+    data_types = TAB
+    fitted = True
+    params = (
+        Param("columns", "欄位", "columns", default=[], help="留空 = 全部非數值欄（目標 / id 欄除外）"),
+        Param("method", "方法", "choice", default="label", choices=("label", "onehot", "ordinal")),
+        Param(
+            "order",
+            "順序",
+            "list",
+            default=[],
+            help="method=ordinal 時使用：類別由小到大，逗號分隔，例如 low,mid,high",
+        ),
+        Param(
+            "unknown",
+            "未知類別",
+            "choice",
+            default="missing",
+            choices=("missing", "minus_one"),
+            help="推論時沒看過的類別：missing = 缺值；minus_one = −1（onehot 一律整列 0）",
+        ),
+        Param(
+            "max_categories",
+            "類別數上限",
+            "int",
+            default=200,
+            min=2,
+            max=10000,
+            help="一欄的類別數超過上限就拒絕（id、流水號、自由文字這類高基數欄位請用「移除欄位」）",
+        ),
+    )
+
+    def _columns(self, df: pd.DataFrame, ctx: Context) -> list[str]:
+        cols = self.p["columns"] or [
+            c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c]) and c not in ctx.protected
+        ]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"找不到欄位 {missing}")
+        return [c for c in cols if c not in ctx.protected]
+
+    def fit(self, df: pd.DataFrame, ctx: Context) -> None:
+        categories: dict[str, list[str]] = {}
+        if self.p["method"] == "ordinal":
+            order = [_category_key(v) for v in self.p["order"]]
+            if not order:
+                raise ValueError("ordinal 需要「順序」（類別由小到大，例如 low,mid,high）")
+            if len(set(order)) != len(order):
+                raise ValueError("「順序」裡有重複的類別")
+            for c in self._columns(df, ctx):
+                categories[c] = list(order)
+        else:
+            limit = int(self.p["max_categories"])
+            for c in self._columns(df, ctx):
+                keys = sorted({_category_key(v) for v in df[c].dropna()}, key=_category_order)
+                if len(keys) > limit:
+                    raise ValueError(
+                        f"欄位 {c} 有 {len(keys)} 種類別，超過上限 {limit}；"
+                        "id、流水號、自由文字這類高基數欄位不適合類別編碼，請用「移除欄位」拿掉它"
+                    )
+                categories[c] = keys
+        self.state = {"categories": categories}
+
+    def apply(self, df: pd.DataFrame, ctx: Context) -> pd.DataFrame:
+        categories = {c: v for c, v in self.state.get("categories", {}).items() if c in df.columns}
+        if not categories:
+            return df
+        out = df.copy()
+        method, unknown = self.p["method"], self.p["unknown"]
+        for c, keys in categories.items():
+            s = out[c]
+            index = {k: i for i, k in enumerate(keys)}
+            present = s.notna().to_numpy()
+            seen = [_category_key(v) for v in s.to_numpy(dtype=object)[present]]
+            mapped = np.array([index.get(k, -1) for k in seen], dtype=float)
+            unseen = mapped < 0
+            if unseen.any():
+                examples = sorted(set(k for k, u in zip(seen, unseen, strict=True) if u))[:3]
+                ctx.warn(
+                    f"欄位 {c}：{int(unseen.sum())} 個值不在類別清單中（如 {', '.join(examples)}），依「未知類別」處理"
+                )
+            if method == "onehot":
+                block = np.zeros((len(s), len(keys)), dtype=np.int64)
+                block[np.flatnonzero(present)[~unseen], mapped[~unseen].astype(int)] = 1
+                pos = list(out.columns).index(c)
+                out = out.drop(columns=[c])
+                for j, k in enumerate(keys):
+                    name = f"{c}__{k}"
+                    if name in out.columns:
+                        out[name] = block[:, j]
+                    else:
+                        out.insert(pos + j, name, block[:, j])
+                continue
+            codes = np.full(len(s), np.nan)
+            mapped[unseen] = -1.0 if unknown == "minus_one" else np.nan
+            codes[present] = mapped
+            out[c] = codes.astype(np.int64) if not np.isnan(codes).any() else codes
         return out
 
 

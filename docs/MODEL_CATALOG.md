@@ -89,9 +89,12 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 步驟放在任務的 `input.spec.preprocess = [{op, params}]`。訓練時 fitted 步驟（補值數字、標準化統計、MSC 參考曲線、對位參考影像…）在訓練資料上學習並存進模型（`model/preprocess.json` 與產物 metadata）；推論自動沿用，不得再指定。
 `GET /catalog/preprocess?data_type=` 列出每個步驟的參數規格。偵測 / 分割任務拒絕會改變座標的影像步驟。
 
+- 類別欄用 `tabular.encode`（類別編碼，fitted）：`method = label`（依排序給 0…k−1 的整數代碼）/ `onehot`（每個類別一欄 `<欄位>__<類別>`，原欄移除）/ `ordinal`（`order` 指定由小到大的順序，不在順序中的值視為未知）；`unknown = missing | minus_one` 決定推論時沒看過的類別變成缺值或 −1（onehot 一律整列 0）；缺值維持缺值；一欄超過 `max_categories`（預設 200）就拒絕並建議移除該欄。`tabular.to_numeric`（文字數字轉成數值）只適合「以文字儲存的數字」，套在類別欄會整欄變缺值，預覽會警告。
+- 預覽回傳除了 `steps / before / after`，還有 `step_details[{op, label, params, fitted, warnings[]}]`、`warnings[]`（各步驟警告加上「步驟 n（label）」前綴），TABULAR / TEXT 另附 `rows_in / rows_out` 與 `columns_in / columns_out[{name, dtype: number|text|bool|datetime, missing, missing_ratio, unique, min, max, mean, top[{value, count}]}]`（輸入樣本與整條管線的輸出）。
+
 | data_type | 步驟 |
 |---|---|
-| TABULAR | `tabular.impute`、`drop_missing`、`clip_outliers`、`standardize`、`minmax`、`log`、`to_numeric`、`filter_rows`、`drop_columns`、`keep_columns`、`drop_duplicates` |
+| TABULAR | `tabular.impute`、`drop_missing`、`clip_outliers`、`standardize`、`minmax`、`log`、`to_numeric`、`encode`、`filter_rows`、`drop_columns`、`keep_columns`、`drop_duplicates` |
 | IMAGE | `image.resize`、`grayscale`、`crop`、`center_crop`、`autocontrast`、`equalize`、`gamma`、`stretch`、`denoise`、`sharpen`、`invert`、`flip`、`rotate`、`align` |
 | SEQUENCE / SPECTRUM | `sequence.resample`、`crop`、`fill_nan`、`savgol`、`moving_average`、`derivative`、`baseline_poly`、`baseline_rolling_min`、`detrend`、`snv`、`minmax_sample`、`msc`、`standardize`、`clip` |
 | TEXT | `text.lowercase`、`strip_whitespace`、`remove_punctuation`、`remove_urls`、`remove_numbers`、`truncate`、`replace_regex`、`drop_empty`、`dedupe` |

@@ -73,6 +73,7 @@ def run_full(
         summary["files"].append("images/")
     else:
         raise ValueError(f"未知的 data_type {data_type}")
+    summary["warnings"] = pipe.warnings()
     (out_dir / "pipeline.json").write_text(
         json.dumps({"data_type": data_type, "steps": pipe.to_json()}, ensure_ascii=False, indent=2), encoding="utf-8"
     )

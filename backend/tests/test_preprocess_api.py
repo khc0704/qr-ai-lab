@@ -85,6 +85,95 @@ async def test_catalog_and_preview_tabular(client, admin, user):
     assert [s["op"] for s in r.json()["input"]["spec"]["preprocess"]] == ["tabular.impute", "tabular.standardize"]
 
 
+async def test_preview_column_stats_encode_and_to_numeric_warning(client, admin, user):
+    project = await make_project(client, admin, user)
+    slug = project["slug"]
+    up = await client.post(
+        f"/api/v1/projects/{slug}/uploads",
+        files={"file": ("wat.csv", CSV, "text/csv")},
+        data={"format": "csv"},
+        headers=user,
+    )
+    assert up.status_code == 201, up.text
+    url = f"/api/v1/projects/{slug}/uploads/{up.json()['id']}/preview"
+
+    # no steps: per-column statistics of the sample, output == input
+    r = await client.post(url, json={"steps": [], "spec": {"target": "yield_pct"}}, headers=user)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["rows_in"] == 5 and body["rows_out"] == 5 and body["step_details"] == [] and body["warnings"] == []
+    cin = {c["name"]: c for c in body["columns_in"]}
+    assert list(cin) == ["x1", "x2", "line", "yield_pct"]
+    assert cin["x1"] == {
+        "name": "x1",
+        "dtype": "number",
+        "missing": 1,
+        "missing_ratio": 0.2,
+        "unique": 4,
+        "min": 1.0,
+        "max": 50.0,
+        "mean": 14.0,
+        "top": [],
+    }
+    assert cin["line"]["dtype"] == "text" and cin["line"]["missing"] == 0 and cin["line"]["unique"] == 2
+    assert cin["line"]["top"] == [{"value": "A", "count": 3}, {"value": "B", "count": 2}]
+    assert cin["line"]["min"] is None and cin["yield_pct"]["dtype"] == "number"
+    assert body["columns_out"] == body["columns_in"]
+    assert body["before"]["row_count"] == 5 and body["after"]["stats"]  # the fields the current UI reads
+
+    # categorical encoding previews: one-hot columns replace the text column, nothing to warn about
+    r = await client.post(
+        url,
+        json={
+            "steps": [
+                {"op": "tabular.encode", "params": {"columns": ["line"], "method": "onehot"}},
+                {"op": "tabular.impute"},
+            ],
+            "spec": {"target": "yield_pct"},
+        },
+        headers=user,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [c["name"] for c in body["columns_out"]] == ["x1", "x2", "line__A", "line__B", "yield_pct"]
+    cout = {c["name"]: c for c in body["columns_out"]}
+    assert cout["line__A"]["dtype"] == "number" and cout["line__A"]["mean"] == 0.6 and cout["x1"]["missing"] == 0
+    assert [s["op"] for s in body["step_details"]] == ["tabular.encode", "tabular.impute"]
+    assert body["step_details"][0]["label"] == "類別編碼" and body["step_details"][0]["fitted"] is True
+    assert body["step_details"][0]["params"]["method"] == "onehot" and body["warnings"] == []
+    assert body["after"]["rows"][0]["line__A"] == 1 and "line" not in body["after"]["columns"]
+    cat = (await client.get("/api/v1/catalog/preprocess?data_type=TABULAR", headers=user)).json()
+    assert {o["id"]: o["label"] for o in cat}["tabular.encode"] == "類別編碼"
+
+    # to_numeric on a categorical column: the step runs, but warns that the column became missing
+    r = await client.post(
+        url,
+        json={
+            "steps": [{"op": "tabular.to_numeric", "params": {"columns": ["line"]}}],
+            "spec": {"target": "yield_pct"},
+        },
+        headers=user,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["step_details"][0]["warnings"] == [
+        "欄位 line：100% 的值無法轉成數字，會變成缺值；若這是類別欄請改用「類別編碼」"
+    ]
+    assert body["warnings"] == ["步驟 1（文字數字轉成數值）" + body["step_details"][0]["warnings"][0]]
+    cout = {c["name"]: c for c in body["columns_out"]}
+    assert cout["line"]["dtype"] == "number" and cout["line"]["missing"] == 5 and cout["line"]["missing_ratio"] == 1.0
+
+    # too many categories is a clear error, not a silent giant one-hot
+    r = await client.post(
+        url,
+        json={"steps": [{"op": "tabular.encode", "params": {"columns": ["x1"], "max_categories": 2}}]},
+        headers=user,
+    )
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "PREPROCESS_INVALID"
+    assert "欄位 x1 有 4 種類別，超過上限 2" in r.json()["detail"]["message"]
+    assert "移除欄位" in r.json()["detail"]["message"]
+
+
 async def test_job_rejects_invalid_preprocess(client, admin, user):
     project = await make_project(client, admin, user)
     slug = project["slug"]

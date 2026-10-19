@@ -49,18 +49,55 @@ def run_preview(
         before = _frame_payload(df, sample, text_column if data_type == "TEXT" else None)
         after_df = pipe.fit_transform(df)
         after = _frame_payload(after_df, sample, text_column if data_type == "TEXT" else None)
-        return {"data_type": data_type, "steps": pipe.describe(), "before": before, "after": after}
+        return _result(
+            data_type,
+            pipe,
+            before,
+            after,
+            rows_in=len(df),
+            rows_out=len(after_df),
+            columns_in=column_stats(df),
+            columns_out=column_stats(after_df),
+        )
     if data_type in ("SEQUENCE", "SPECTRUM"):
         X, ids = _read_sequences(path, fmt, spec, data_type, max_rows=MAX_ROWS_FOR_STATS)
         before = _curves_payload(X, ids, sample)
         after = _curves_payload(pipe.fit_transform(X), ids, sample)
-        return {"data_type": data_type, "steps": pipe.describe(), "before": before, "after": after}
+        return _result(data_type, pipe, before, after)
     if data_type == "IMAGE":
         images, ids = _read_images(path, min(sample, MAX_IMAGES))
         before = _images_payload(images, ids)
         after = _images_payload(pipe.fit_transform(images), ids)
-        return {"data_type": data_type, "steps": pipe.describe(), "before": before, "after": after}
+        return _result(data_type, pipe, before, after)
     raise ValueError(f"未知的 data_type {data_type}")
+
+
+def _result(
+    data_type: str,
+    pipe: Pipeline,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    rows_in: int | None = None,
+    rows_out: int | None = None,
+    columns_in: list[dict[str, Any]] | None = None,
+    columns_out: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The preview payload. ``steps`` / ``before`` / ``after`` are the original fields; ``step_details`` carries
+    each step's warnings, and the frame-based types add row counts and per-column statistics for the input
+    sample and for the output of the whole pipeline."""
+    return {
+        "data_type": data_type,
+        "steps": pipe.describe(),
+        "step_details": pipe.report(),
+        "warnings": pipe.warnings(),
+        "before": before,
+        "after": after,
+        "rows_in": rows_in,
+        "rows_out": rows_out,
+        "columns_in": columns_in,
+        "columns_out": columns_out,
+    }
 
 
 # --- readers ---------------------------------------------------------------------------------------
@@ -174,6 +211,63 @@ def _read_images(path: Path, n: int) -> tuple[list[Image.Image], list[str]]:
 
 
 # --- payloads --------------------------------------------------------------------------------------
+
+MAX_TOP_VALUES = 5
+
+
+def column_kind(s: pd.Series) -> str:
+    """The four kinds the UI distinguishes: number | text | bool | datetime."""
+    if pd.api.types.is_bool_dtype(s):
+        return "bool"
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return "datetime"
+    if pd.api.types.is_numeric_dtype(s):
+        return "number"
+    return "text"
+
+
+def _finite(v: float) -> float | None:
+    return float(v) if np.isfinite(v) else None
+
+
+def column_stats(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Per-column statistics for a spreadsheet-like header (pure pandas, JSON-safe). Every entry has the same
+    keys; the ones that do not apply to the column's kind are None / empty."""
+    n = len(df)
+    out: list[dict[str, Any]] = []
+    for c in df.columns:
+        s = df[c]
+        kind = column_kind(s)
+        missing = int(s.isna().sum())
+        entry: dict[str, Any] = {
+            "name": str(c),
+            "dtype": kind,
+            "missing": missing,
+            "missing_ratio": round(missing / n, 4) if n else 0.0,
+            "unique": 0,
+            "min": None,
+            "max": None,
+            "mean": None,
+            "top": [],
+        }
+        if kind == "number":
+            v = s.astype("float64")
+            finite = v[np.isfinite(v)]
+            entry["unique"] = int(finite.nunique())
+            if len(finite):
+                entry.update(min=_finite(finite.min()), max=_finite(finite.max()), mean=_finite(finite.mean()))
+        elif kind == "datetime":
+            present = s.dropna()
+            entry["unique"] = int(present.nunique())
+            if len(present):
+                entry.update(min=present.min().isoformat(), max=present.max().isoformat())
+        else:
+            present = s.dropna().astype(str)  # object columns may hold unhashable values (lists from jsonl)
+            entry["unique"] = int(present.nunique())
+            counts = present.value_counts().head(MAX_TOP_VALUES)
+            entry["top"] = [{"value": str(k), "count": int(v)} for k, v in counts.items()]
+        out.append(entry)
+    return out
 
 
 def _frame_payload(df: pd.DataFrame, sample: int, text_column: str | None) -> dict[str, Any]:

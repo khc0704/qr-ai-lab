@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 
 import numpy as np
@@ -165,3 +166,160 @@ def test_preview_payloads(tmp_path):
             "csv",
             [{"op": "tabular.filter_rows", "params": {"column": "zzz", "operator": "==", "value": "1"}}],
         )
+
+
+CAT = pd.DataFrame(
+    {
+        "line": ["B", "A", None, "C", "A"],
+        "grade": ["lo", "hi", "mid", "hi", None],
+        "n": [1, 2, 3, 4, 5],
+        "y": [0, 1, 0, 1, 0],
+    }
+)
+
+
+def test_encode_label_sorted_codes_missing_stays_missing_and_replays():
+    pipe = Pipeline.from_spec("TABULAR", [{"op": "tabular.encode"}], protected=["y"])
+    out = pipe.fit_transform(CAT)
+    # default columns = every non-numeric column except the protected ones; codes follow the sorted categories
+    assert out["line"].tolist()[:2] == [1.0, 0.0] and np.isnan(out["line"].iloc[2]) and out["line"].iloc[3] == 2.0
+    assert out["grade"].tolist()[:4] == [1.0, 0.0, 2.0, 0.0] and np.isnan(out["grade"].iloc[4])
+    assert out["n"].tolist() == [1, 2, 3, 4, 5] and out["y"].tolist() == CAT["y"].tolist()
+    state = pipe.to_json()
+    assert state[0]["state"] == {"categories": {"line": ["A", "B", "C"], "grade": ["hi", "lo", "mid"]}}
+    assert json.loads(json.dumps(state)) == state  # JSON-serialisable as stored with the model
+    replay = Pipeline.from_json("TABULAR", state, protected=["y"])
+    same = replay.transform(CAT)
+    pd.testing.assert_frame_equal(same, out)
+    new = replay.transform(pd.DataFrame({"line": ["C", "Z", None], "grade": ["mid", "mid", "mid"]}))
+    assert new["line"].iloc[0] == 2.0 and np.isnan(new["line"].iloc[1]) and np.isnan(new["line"].iloc[2])
+    assert new["grade"].tolist() == [2, 2, 2]  # no missing / unknown → integer column
+    assert replay.step_warnings[0] == ["欄位 line：1 個值不在類別清單中（如 Z），依「未知類別」處理"]
+    # unknown=minus_one gives unseen categories −1 while real missing values stay missing
+    minus = Pipeline.from_spec("TABULAR", [{"op": "tabular.encode", "params": {"unknown": "minus_one"}}])
+    minus.fit_transform(CAT.drop(columns=["y"]))
+    new = Pipeline.from_json("TABULAR", minus.to_json()).transform(pd.DataFrame({"line": ["Z", None, "A"]}))
+    assert new["line"].iloc[0] == -1.0 and np.isnan(new["line"].iloc[1]) and new["line"].iloc[2] == 0.0
+    # numeric-looking categories sort numerically and match across str / int / float
+    pipe = Pipeline.from_spec("TABULAR", [{"op": "tabular.encode", "params": {"columns": ["k"]}}])
+    assert pipe.fit_transform(pd.DataFrame({"k": ["10", "2", "x"]}))["k"].tolist() == [1, 0, 2]
+    again = Pipeline.from_json("TABULAR", pipe.to_json()).transform(pd.DataFrame({"k": [2.0, 10]}))
+    assert again["k"].tolist() == [0, 1]
+
+
+def test_encode_onehot_columns_and_replay():
+    steps = [{"op": "tabular.encode", "params": {"columns": ["line"], "method": "onehot"}}]
+    pipe = Pipeline.from_spec("TABULAR", steps, protected=["y"])
+    out = pipe.fit_transform(CAT)
+    assert list(out.columns) == ["line__A", "line__B", "line__C", "grade", "n", "y"]  # in place of the original
+    assert out["line__A"].tolist() == [0, 1, 0, 0, 1] and out["line__C"].tolist() == [0, 0, 0, 1, 0]
+    assert out.loc[2, ["line__A", "line__B", "line__C"]].tolist() == [0, 0, 0]  # missing → all zero
+    replay = Pipeline.from_json("TABULAR", pipe.to_json(), protected=["y"])
+    new = replay.transform(pd.DataFrame({"line": ["C", "Z", None], "n": [1, 2, 3]}))
+    assert list(new.columns) == ["line__A", "line__B", "line__C", "n"]
+    assert new[["line__A", "line__B", "line__C"]].to_numpy().tolist() == [[0, 0, 1], [0, 0, 0], [0, 0, 0]]
+    pd.testing.assert_frame_equal(replay.transform(CAT), out)
+
+
+def test_encode_ordinal_uses_explicit_order():
+    steps = [{"op": "tabular.encode", "params": {"columns": ["grade"], "method": "ordinal", "order": "lo,mid,hi"}}]
+    pipe = Pipeline.from_spec("TABULAR", steps, protected=["y"])
+    out = pipe.fit_transform(CAT)
+    assert out["grade"].tolist()[:4] == [0.0, 2.0, 1.0, 2.0] and np.isnan(out["grade"].iloc[4])
+    assert pipe.to_json()[0]["state"] == {"categories": {"grade": ["lo", "mid", "hi"]}}
+    assert pipe.to_json()[0]["params"]["order"] == ["lo", "mid", "hi"]
+    new = Pipeline.from_json("TABULAR", pipe.to_json()).transform(pd.DataFrame({"grade": ["hi", "huge"]}))
+    assert new["grade"].iloc[0] == 2.0 and np.isnan(new["grade"].iloc[1])  # outside the order → missing
+    with pytest.raises(ValueError, match="順序"):
+        Pipeline.from_spec("TABULAR", [{"op": "tabular.encode", "params": {"method": "ordinal"}}]).fit_transform(CAT)
+    with pytest.raises(ValueError, match="重複"):
+        Pipeline.from_spec(
+            "TABULAR", [{"op": "tabular.encode", "params": {"method": "ordinal", "order": ["a", "a"]}}]
+        ).fit_transform(CAT)
+
+
+def test_encode_rejects_high_cardinality_and_unknown_columns():
+    with pytest.raises(ValueError, match=r"超過上限 2.*移除欄位"):
+        Pipeline.from_spec("TABULAR", [{"op": "tabular.encode", "params": {"max_categories": 2}}]).fit_transform(CAT)
+    with pytest.raises(ValueError, match="找不到欄位"):
+        Pipeline.from_spec("TABULAR", [{"op": "tabular.encode", "params": {"columns": ["nope"]}}]).fit_transform(CAT)
+    desc = next(o for o in catalog("TABULAR") if o["id"] == "tabular.encode")
+    assert (
+        desc["label"] == "類別編碼"
+        and desc["fitted"]
+        and {p["name"] for p in desc["params"]}
+        == {
+            "columns",
+            "method",
+            "order",
+            "unknown",
+            "max_categories",
+        }
+    )
+
+
+def test_to_numeric_warns_when_a_column_is_really_categorical():
+    df = pd.DataFrame({"line": ["A", "B", "A"], "v": [" 1.5", "2", "3e1"], "w": ["1", "x", "2"]})
+    pipe = Pipeline.from_spec("TABULAR", [{"op": "tabular.to_numeric"}, {"op": "tabular.impute"}])
+    out = pipe.fit_transform(df)
+    assert out["v"].tolist() == [1.5, 2.0, 30.0] and out["line"].isna().sum() == 0  # imputed after the warning
+    report = pipe.report()
+    assert [r["op"] for r in report] == ["tabular.to_numeric", "tabular.impute"]
+    assert report[0]["label"] == "文字數字轉成數值" and report[1]["warnings"] == []
+    assert report[0]["warnings"] == [
+        "欄位 line：100% 的值無法轉成數字，會變成缺值；若這是類別欄請改用「類別編碼」",
+        "欄位 w：33% 的值無法轉成數字，會變成缺值；若這是類別欄請改用「類別編碼」",
+    ]
+    assert pipe.warnings() == ["步驟 1（文字數字轉成數值）" + m for m in report[0]["warnings"]]
+    # exactly one of three values fails: 33% > 20% → warning; none fail → no warning
+    pipe = Pipeline.from_spec("TABULAR", [{"op": "tabular.to_numeric", "params": {"columns": ["w"]}}])
+    pipe.fit_transform(df)
+    assert pipe.step_warnings[0] and "欄位 w：33%" in pipe.step_warnings[0][0]
+    pipe = Pipeline.from_spec("TABULAR", [{"op": "tabular.to_numeric", "params": {"columns": ["v"]}}])
+    pipe.fit_transform(df)
+    assert pipe.step_warnings == [[]] and pipe.warnings() == []
+    desc = next(o for o in catalog("TABULAR") if o["id"] == "tabular.to_numeric")
+    assert "類別編碼" in desc["description"] and "以文字儲存的數字" in desc["description"]
+
+
+def test_preview_column_stats_and_step_details(tmp_path):
+    csv = tmp_path / "d.csv"
+    pd.DataFrame(
+        {
+            "a": [1.0, None, 3.0, 50.0],
+            "line": ["x", "y", "x", None],
+            "flag": [True, False, True, True],
+            "y": [0, 1, 0, 1],
+        }
+    ).to_csv(csv, index=False)
+    onehot = [{"op": "tabular.encode", "params": {"method": "onehot"}}]
+    r = run_preview("TABULAR", csv, "csv", onehot, spec={"target": "y"})
+    assert r["rows_in"] == 4 and r["rows_out"] == 4
+    cin = {c["name"]: c for c in r["columns_in"]}
+    assert cin["a"]["dtype"] == "number" and cin["a"]["missing"] == 1 and cin["a"]["missing_ratio"] == 0.25
+    assert cin["a"]["min"] == 1.0 and cin["a"]["max"] == 50.0 and cin["a"]["mean"] == 18.0 and cin["a"]["unique"] == 3
+    assert cin["line"]["dtype"] == "text" and cin["line"]["unique"] == 2 and cin["line"]["min"] is None
+    assert cin["line"]["top"] == [{"value": "x", "count": 2}, {"value": "y", "count": 1}]
+    assert cin["flag"]["dtype"] == "bool" and cin["y"]["dtype"] == "number"
+    assert [c["name"] for c in r["columns_out"]] == ["a", "line__x", "line__y", "flag", "y"]
+    assert r["step_details"] == [
+        {
+            "op": "tabular.encode",
+            "label": "類別編碼",
+            "params": {"columns": [], "method": "onehot", "order": [], "unknown": "missing", "max_categories": 200},
+            "fitted": True,
+            "warnings": [],
+        }
+    ]
+    assert r["warnings"] == [] and r["before"]["row_count"] == 4 and r["steps"]  # original fields still there
+    steps = [{"op": "tabular.to_numeric"}, {"op": "tabular.drop_missing"}]
+    r = run_preview("TABULAR", csv, "csv", steps, spec={"target": "y"})
+    assert r["step_details"][0]["warnings"] == [
+        "欄位 line：100% 的值無法轉成數字，會變成缺值；若這是類別欄請改用「類別編碼」"
+    ]
+    assert r["warnings"] == ["步驟 1（文字數字轉成數值）" + r["step_details"][0]["warnings"][0]]
+    assert r["rows_in"] == 4 and r["rows_out"] == 0 and r["columns_out"][1]["dtype"] == "number"
+    npy = tmp_path / "s.npy"
+    np.save(npy, np.zeros((4, 16), np.float32))
+    r = run_preview("SPECTRUM", npy, "npy", [{"op": "sequence.snv"}])
+    assert r["columns_in"] is None and r["rows_in"] is None and r["step_details"][0]["op"] == "sequence.snv"

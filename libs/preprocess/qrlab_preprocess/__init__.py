@@ -70,6 +70,7 @@ class Pipeline:
         self.data_type = data_type
         self.ops = ops
         self.ctx = ctx or Context(data_type=data_type)
+        self.step_warnings: list[list[str]] = [[] for _ in ops]  # what each op warned about in the last run
 
     @classmethod
     def from_spec(
@@ -103,20 +104,39 @@ class Pipeline:
     def __len__(self) -> int:
         return len(self.ops)
 
-    def fit_transform(self, data: Any) -> Any:
+    def _run(self, data: Any, *, fit: bool) -> Any:
+        self.step_warnings = []
         for op in self.ops:
-            if op.fitted:
+            self.ctx.warnings = []
+            if fit and op.fitted:
                 op.fit(data, self.ctx)
             data = op.apply(data, self.ctx)
+            self.step_warnings.append(list(self.ctx.warnings))
         return data
 
+    def fit_transform(self, data: Any) -> Any:
+        return self._run(data, fit=True)
+
     def transform(self, data: Any) -> Any:
-        for op in self.ops:
-            data = op.apply(data, self.ctx)
-        return data
+        return self._run(data, fit=False)
 
     def to_json(self) -> list[dict[str, Any]]:
         return [jsonable(op.to_json()) for op in self.ops]
 
     def describe(self) -> list[str]:
         return [f"{op.label}" + (f" {json.dumps(op.p, ensure_ascii=False)}" if op.p else "") for op in self.ops]
+
+    def report(self) -> list[dict[str, Any]]:
+        """One entry per step for the UI: op id, label, params and the warnings of the last run."""
+        return [
+            {"op": op.id, "label": op.label, "params": jsonable(op.p), "fitted": op.fitted, "warnings": list(w)}
+            for op, w in zip(self.ops, self.step_warnings, strict=True)
+        ]
+
+    def warnings(self) -> list[str]:
+        """The last run's warnings flattened, each prefixed with its step number and label."""
+        return [
+            f"步驟 {i}（{op.label}）{m}"
+            for i, (op, ws) in enumerate(zip(self.ops, self.step_warnings, strict=True), 1)
+            for m in ws
+        ]

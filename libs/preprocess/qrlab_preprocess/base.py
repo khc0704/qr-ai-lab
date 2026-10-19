@@ -19,7 +19,7 @@ import numpy as np
 class Param:
     name: str
     label: str
-    type: str  # int | float | str | bool | choice | columns
+    type: str  # int | float | str | bool | choice | columns | list (free-form values, comma separated in the UI)
     default: Any = None
     min: float | None = None
     max: float | None = None
@@ -40,7 +40,7 @@ class Param:
             if v not in self.choices:
                 raise ValueError(f"{self.name}: 必須是 {list(self.choices)} 之一")
             return v
-        elif self.type == "columns":
+        elif self.type in ("columns", "list"):
             if isinstance(value, str):
                 v = [c.strip() for c in value.split(",") if c.strip()]
             else:
@@ -74,6 +74,13 @@ class Context:
     task_type: str | None = None
     protected: list[str] = field(default_factory=list)  # columns ops must never transform / drop (target, id)
     text_column: str = "text"
+    # user-facing notes an op adds while it runs (e.g. "87% of column X became missing"); the Pipeline collects
+    # them per step so the preview can show them next to the step. Never raise through this: a warning means the
+    # step ran, but the result may not be what the user meant.
+    warnings: list[str] = field(default_factory=list)
+
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
 
 
 class Op:
