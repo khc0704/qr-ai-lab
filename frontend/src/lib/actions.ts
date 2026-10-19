@@ -318,7 +318,7 @@ export async function deleteProjectAction(slug: string): Promise<ActionResult<un
   });
   if (r.ok) {
     revalidatePath("/projects");
-    revalidatePath("/admin/quotas");
+    revalidatePath("/admin");
   }
   return r;
 }

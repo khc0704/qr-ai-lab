@@ -85,7 +85,7 @@ async function Home() {
             value={overview.pendingRequests}
             tone="warning"
             hint={
-              <Link href="/admin/requests" className="text-brand-ink hover:underline">
+              <Link href="/projects?status=pending" className="text-brand-ink hover:underline">
                 前往審核
               </Link>
             }

@@ -5,7 +5,7 @@
 // Usage (all services already running — see docs/GETTING_STARTED.md):
 //   BASE_URL=http://localhost:3000 API_URL=http://localhost:8000/api/v1 DATA_DIR=/path/to/datasets \
 //   PHASES=all node scripts/e2e-walkthrough.mjs
-// PHASES: comma list of request,approve,zoo,project,train,infer,iqa,spectrum,discussion,admin,visual,logout (or all).
+// PHASES: comma list of request,approve,zoo,project,train,infer,iqa,spectrum,discussion,admin,roles,usage,tool,analyze,visual,logout (or all).
 // Output: ../docs/screenshots/e2e/NN-name.png + captions.json (+ state.json with the ids created).
 import { chromium } from "playwright";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
