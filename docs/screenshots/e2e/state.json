@@ -1,8 +1,7 @@
 {
-  "requestId": 1,
   "slug": "wat-yield-forecast",
-  "iqaRequest": 2,
-  "spectrumRequest": 3,
+  "iqaSlug": "sem-image-quality",
+  "spectrumSlug": "ocd-spectrum",
   "trainJob": 1,
   "inferJob": 2,
   "iqaTrainJob": 3,
@@ -12,8 +11,8 @@
   "longJob": 6,
   "waitingJob": 7,
   "restartedJob": 8,
-  "toolJob": 12,
+  "toolJob": 9,
   "toolDownload": "wat_yield-preprocessed.zip",
-  "analysisTabular": 13,
-  "analysisImage": 14
+  "analysisTabular": 10,
+  "analysisImage": 11
 }
