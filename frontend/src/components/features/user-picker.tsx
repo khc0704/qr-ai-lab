@@ -129,7 +129,7 @@ export function UserPicker({
         ) : null}
       </div>
       <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
-        <Command shouldFilter={false}>
+        <Command shouldFilter={false} label={text.search}>
           <CommandInput value={query} onValueChange={setQuery} placeholder={placeholder} aria-label={text.search} />
           <CommandList>
             <CommandEmpty>{empty}</CommandEmpty>

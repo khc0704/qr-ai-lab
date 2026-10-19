@@ -409,8 +409,8 @@ try {
       await page.waitForTimeout(400);
       if ((await page.locator("#inv-user").getAttribute("aria-expanded")) === "true") break;
     }
-    await page.getByLabel("搜尋使用者").fill("adm");
-    await page.getByRole("option", { name: /admin/ }).first().click();
+    await page.locator("input[cmdk-input]").fill("adm");
+    await page.locator("[cmdk-item]", { hasText: "admin" }).first().click();
     await pick(page, page.getByRole("dialog").locator("button[role=combobox]").last(), "維護者");
     await shot(
       page,
