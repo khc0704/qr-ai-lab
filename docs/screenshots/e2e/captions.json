@@ -162,7 +162,7 @@
   {
     "n": 21,
     "file": "21-zoo-uploaded.png",
-    "caption": "從瀏覽器上傳 yolo11n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」",
+    "caption": "從瀏覽器上傳 yolov8n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」",
     "phase": "zoo",
     "theme": "dark",
     "viewport": "desktop"

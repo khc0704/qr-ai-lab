@@ -102,7 +102,7 @@ REDIS_URL=redis://localhost:6380/0 .venv/bin/python -m app.scheduler
 - systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
 - CPU 限制對原生函式庫也有效：runner 把 `OMP / MKL / OPENBLAS / NUMEXPR / TBB / NUMBA / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS…` 全設成申請的核數，trainer 啟動時再用 threadpoolctl + torch 夾一次並把實際 affinity / 執行緒數印進任務 log（搜 `limits:`）。所以 sklearn 的 TSNE / HistGradientBoosting、numpy BLAS、torch 都只會用到分到的核心，不會把 88 核全吃掉。
 - GPU：`CUDA_VISIBLE_DEVICES` 指定。任務可填「每張 GPU 需要的顯存」→ 多個任務依 pynvml 的剩餘顯存共用一張（資源池的「依顯存共用 GPU」開關；子程序以 `set_per_process_memory_fraction` 自限）；沒填就要整張空卡（`GPU_BUSY_THRESHOLD`）。Dashboard 的 GPU 卡片顯示顯存 / 保留量 / 任務，superadmin 可「重置」（中斷本系統任務 → kill 所有程序 → `GPU_RESET_COMMAND`）。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
-- 深度學習家族：torch / torchvision 在 `trainer/requirements-torch.txt`，**先**用符合驅動的 index 安裝（驅動 CUDA 12.x → `--index-url https://download.pytorch.org/whl/cu126`；13.x → `cu130`；沒 GPU → `cpu`），再裝 `requirements*.txt`（ultralytics / transformers 等）。torch wheel 自帶 CUDA 函式庫（`nvidia-*` 套件是 torch 的依賴，不用也不該寫進 requirements），主機的 CUDA toolkit 不會被用到，只看驅動版本；伺服器上由 `install-02-backend.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
+- 深度學習家族：torch / torchvision 在 `trainer/requirements-torch.txt`，**先**用符合驅動的 index 安裝（驅動 CUDA 12.x → `--index-url https://download.pytorch.org/whl/cu126`；13.x → `cu130`；沒 GPU → `cpu`），再裝 `requirements*.txt`（ultralytics / transformers 等）。主機能用的版本是 torch 2.9.x 與 ultralytics 8.1.x，所以 YOLO 家族是 **YOLOv8**（權重 `yolov8n/s/m[-seg|-cls].pt`；YOLO11 要 ultralytics 8.3 以上，這裡沒有）；trainer 在匯入 ultralytics 前設 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`，因為 8.1 載入 checkpoint 沒帶 `weights_only`，torch ≥ 2.6 預設會拒絕。torch wheel 自帶 CUDA 函式庫（`nvidia-*` 套件是 torch 的依賴，不用也不該寫進 requirements），主機的 CUDA toolkit 不會被用到，只看驅動版本；伺服器上由 `install-02-backend.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
 
 ### 4.3 模型庫（預訓練權重；伺服器不連外）
 
@@ -131,7 +131,7 @@ REDIS_URL=redis://localhost:6380/0 .venv/bin/python -m app.scheduler
 cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/pytest          # 含排程器（假 runner）與端到端（真的 trainer 子程序）
 cd trainer && .venv/bin/ruff check . && .venv/bin/pytest                                          # 模型家族、registry 與 yaml 對照、runtime
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest                            # 共用前處理套件（backend 與 trainer 都以 path dependency 安裝）
-QR_TEST_ZOO=/path/to/zoo .venv/bin/pytest tests/test_yolo_cpu.py                              # trainer：YOLO 從 yolo11n.pt 微調（CPU）
+QR_TEST_ZOO=/path/to/zoo .venv/bin/pytest tests/test_yolo_cpu.py                              # trainer：YOLO 從 yolov8n.pt 微調（CPU）
 .venv/bin/python -m trainer check                                                              # 這個環境能跑哪些家族
 ```
 

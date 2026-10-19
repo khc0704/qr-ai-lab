@@ -107,20 +107,20 @@ families:
     inference_modes: [detect, segment, predict]
     resources: { gpu: required, cpu_min: 4, memory_mb_min: 8192 }
     min_rows: 200
-    defaults: { model: yolo11s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true }
+    defaults: { model: yolov8s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true }
     search_space:
-      model: { type: categorical, choices: [yolo11n, yolo11s, yolo11m] }
+      model: { type: categorical, choices: [yolov8n, yolov8s, yolov8m] }
       imgsz: { type: categorical, choices: [512, 640, 800] }
       lr0: { type: float, low: 0.001, high: 0.02, log: true }
       epochs: { type: int, low: 50, high: 150 }
     weights:
-      - { id: yolo11n,     file: yolo11n.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolo11s,     file: yolo11s.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolo11m,     file: yolo11m.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolo11n-seg, file: yolo11n-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-seg.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolo11s-seg, file: yolo11s-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-seg.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolo11n-cls, file: yolo11n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-cls.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolo11s-cls, file: yolo11s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-cls.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolov8n,     file: yolov8n.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolov8s,     file: yolov8s.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolov8m,     file: yolov8m.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8m.pt",     license: AGPL-3.0, sha256: null }
+      - { id: yolov8n-seg, file: yolov8n-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-seg.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolov8s-seg, file: yolov8s-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-seg.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-cls.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-cls.pt", license: AGPL-3.0, sha256: null }
     sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。
 
   vision.dino_fewshot:

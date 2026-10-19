@@ -43,7 +43,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     # everything missing at first; the catalog tells the wizard which families are not ready
     rows = (await client.get("/api/v1/admin/model-zoo", headers=admin)).json()
     ids = {r["id"] for r in rows}
-    assert {"yolo11n", "dinov2-small", "bert-base-chinese"} <= ids and all(r["status"] == "missing" for r in rows)
+    assert {"yolov8n", "dinov2-small", "bert-base-chinese"} <= ids and all(r["status"] == "missing" for r in rows)
     cat = (await client.get("/api/v1/catalog", headers=user)).json()
     assert cat["families"]["vision.yolo"]["weights_ready"] is False
     assert cat["families"]["tabular.xgboost"]["weights_ready"] is True
@@ -52,16 +52,16 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     # 1) browser upload of a single-file weight
     blob = b"PK-not-really-a-model" * 1000
     r = await client.post(
-        "/api/v1/admin/model-zoo/yolo11n/upload",
-        files={"file": ("yolo11n.pt", blob, "application/octet-stream")},
+        "/api/v1/admin/model-zoo/yolov8n/upload",
+        files={"file": ("yolov8n.pt", blob, "application/octet-stream")},
         headers=superadmin,
     )
     assert r.status_code == 200, r.text
     e = r.json()
-    assert e["status"] == "present" and e["size_bytes"] == len(blob) and e["imported_from"] == "upload:yolo11n.pt"
-    assert (tmp_path / "zoo" / "yolo11n.pt").read_bytes() == blob
+    assert e["status"] == "present" and e["size_bytes"] == len(blob) and e["imported_from"] == "upload:yolov8n.pt"
+    assert (tmp_path / "zoo" / "yolov8n.pt").read_bytes() == blob
     manifest = json.loads((tmp_path / "zoo" / "manifest.json").read_text())
-    assert manifest["weights"]["yolo11n"]["sha256"] == hashlib.sha256(blob).hexdigest()
+    assert manifest["weights"]["yolov8n"]["sha256"] == hashlib.sha256(blob).hexdigest()
 
     # an HF repo must come as an archive containing config.json
     bad = await client.post(
@@ -85,16 +85,16 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     assert cat["families"]["vision.dino_fewshot"]["weights_ready"]
 
     # 2) import from a folder mounted on the server (only under MODEL_ZOO_IMPORT_ROOT)
-    (transfer / "yolo11s.pt").write_bytes(b"s" * 5000)
+    (transfer / "yolov8s.pt").write_bytes(b"s" * 5000)
     r = await client.post(
-        "/api/v1/admin/model-zoo/yolo11s/import", json={"source": "path", "path": "yolo11s.pt"}, headers=superadmin
+        "/api/v1/admin/model-zoo/yolov8s/import", json={"source": "path", "path": "yolov8s.pt"}, headers=superadmin
     )
     assert r.status_code == 202, r.text
-    t = await _wait_task(client, admin, "yolo11s")
+    t = await _wait_task(client, admin, "yolov8s")
     assert t["state"] == "done", t
-    assert (tmp_path / "zoo" / "yolo11s.pt").stat().st_size == 5000
+    assert (tmp_path / "zoo" / "yolov8s.pt").stat().st_size == 5000
     r = await client.post(
-        "/api/v1/admin/model-zoo/yolo11m/import",
+        "/api/v1/admin/model-zoo/yolov8m/import",
         json={"source": "path", "path": "../../etc/passwd"},
         headers=superadmin,
     )
@@ -103,18 +103,18 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     # 3) fetch from an intranet URL (host whitelist)
     srv, port = _serve(transfer)
     try:
-        (transfer / "yolo11n-cls.pt").write_bytes(b"c" * 7000)
+        (transfer / "yolov8n-cls.pt").write_bytes(b"c" * 7000)
         r = await client.post(
-            "/api/v1/admin/model-zoo/yolo11n-cls/import",
-            json={"source": "url", "url": f"http://127.0.0.1:{port}/yolo11n-cls.pt"},
+            "/api/v1/admin/model-zoo/yolov8n-cls/import",
+            json={"source": "url", "url": f"http://127.0.0.1:{port}/yolov8n-cls.pt"},
             headers=superadmin,
         )
         assert r.status_code == 202, r.text
-        t = await _wait_task(client, admin, "yolo11n-cls")
+        t = await _wait_task(client, admin, "yolov8n-cls")
         assert t["state"] == "done" and t["downloaded_mb"] >= 0, t
-        assert (tmp_path / "zoo" / "yolo11n-cls.pt").stat().st_size == 7000
+        assert (tmp_path / "zoo" / "yolov8n-cls.pt").stat().st_size == 7000
         r = await client.post(
-            "/api/v1/admin/model-zoo/yolo11m/import",
+            "/api/v1/admin/model-zoo/yolov8m/import",
             json={"source": "url", "url": f"http://example.com:{port}/x.pt"},
             headers=superadmin,
         )
@@ -123,13 +123,13 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
         srv.shutdown()
 
     # verify recomputes sha256 and flags tampering
-    (tmp_path / "zoo" / "yolo11s.pt").write_bytes(b"tampered")
+    (tmp_path / "zoo" / "yolov8s.pt").write_bytes(b"tampered")
     rows = {r["id"]: r for r in (await client.get("/api/v1/admin/model-zoo?verify=true", headers=admin)).json()}
-    assert rows["yolo11s"]["status"] == "mismatch" and rows["yolo11n"]["status"] == "present"
+    assert rows["yolov8s"]["status"] == "mismatch" and rows["yolov8n"]["status"] == "present"
 
     # delete
-    r = await client.delete("/api/v1/admin/model-zoo/yolo11n", headers=superadmin)
-    assert r.status_code == 200 and not (tmp_path / "zoo" / "yolo11n.pt").exists()
+    r = await client.delete("/api/v1/admin/model-zoo/yolov8n", headers=superadmin)
+    assert r.status_code == 200 and not (tmp_path / "zoo" / "yolov8n.pt").exists()
     audit = {a["action"] for a in (await client.get("/api/v1/admin/audit", headers=admin)).json()["items"]}
     assert {"model_zoo.upload", "model_zoo.import", "model_zoo.delete"} <= audit
 

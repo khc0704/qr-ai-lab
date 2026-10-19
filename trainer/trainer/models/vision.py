@@ -29,6 +29,24 @@ from trainer.models.tabular import _binary_anomaly_labels
 # ---------------------------------------------------------------------------------------------------
 
 YOLO_SUFFIX = {"detection": "", "segmentation": "-seg", "classification": "-cls"}
+YOLO_DEFAULT_MODEL = "yolov8s"  # ultralytics 8.1.x ships YOLOv8 only (YOLO11 needs 8.3+)
+
+
+def _ultralytics_yolo():
+    """Import YOLO after preparing the process for ultralytics 8.1 on a modern torch.
+
+    ultralytics 8.1 calls torch.load() without `weights_only`; torch >= 2.6 defaults that to True and refuses
+    its own checkpoints (they pickle ultralytics model classes). TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD only changes
+    the default for callers that do not pass `weights_only`, so the trainer's explicit weights_only=True loads
+    stay strict. YOLO checkpoints only come from the admin-managed model zoo or this job's own training run.
+    """
+    import warnings
+
+    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    warnings.filterwarnings("ignore", message=".*TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD.*")
+    from ultralytics import YOLO
+
+    return YOLO
 
 
 def _yolo_device(ctx) -> str | int:
@@ -71,9 +89,9 @@ class YoloTrainer(BaseTrainer):
         self.results_csv: Path | None = None
 
     def _weights(self):
-        from ultralytics import YOLO
+        YOLO = _ultralytics_yolo()
 
-        model_id = str(self.params.get("model", "yolo11s"))
+        model_id = str(self.params.get("model", YOLO_DEFAULT_MODEL))
         suffix = YOLO_SUFFIX.get(self.task or "detection", "")
         if self.params.get("pretrained", True):
             path = self.ctx.weight(f"{model_id}{suffix}")
@@ -154,7 +172,7 @@ class YoloTrainer(BaseTrainer):
         info(f"{self.family}: " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
 
     def _cls_f1(self, root: Path) -> dict[str, float]:
-        from ultralytics import YOLO
+        YOLO = _ultralytics_yolo()
 
         val_dir = next((root / s for s in ("val", "valid", "test") if (root / s).is_dir()), None)
         if val_dir is None or self.best_pt is None:
@@ -232,7 +250,7 @@ def _map_yolo_metrics(m: dict[str, float], task: str | None) -> dict[str, float]
 
 class YoloInferencer(BaseInferencer):
     def load(self, model_path: Path, metadata: dict[str, Any]) -> None:
-        from ultralytics import YOLO
+        YOLO = _ultralytics_yolo()
 
         self.model = YOLO(str(model_path / "best.pt"))
         self.meta = metadata or {}

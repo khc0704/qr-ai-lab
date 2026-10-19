@@ -33,7 +33,7 @@ async def test_admin_cannot_touch_resources_or_roles(client, admin, user):
     assert r.status_code == 403
     r = await client.delete(f"/api/v1/projects/{project['slug']}", headers=admin)
     assert r.status_code == 403
-    r = await client.post("/api/v1/admin/model-zoo/yolo11n/import", json={"source": "path", "path": "x"}, headers=admin)
+    r = await client.post("/api/v1/admin/model-zoo/yolov8n/import", json={"source": "path", "path": "x"}, headers=admin)
     assert r.status_code == 403
     # but the day-to-day operations work
     assert (await client.get("/api/v1/users", headers=admin)).status_code == 200

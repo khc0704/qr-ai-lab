@@ -1,5 +1,5 @@
 """YOLO on CPU with a tiny synthetic dataset: from-scratch (architecture yaml, no download) and, when
-QR_TEST_ZOO points at a zoo folder holding yolo11n.pt, fine-tuning from the pretrained checkpoint."""
+QR_TEST_ZOO points at a zoo folder holding yolov8n.pt, fine-tuning from the pretrained checkpoint."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def _cls_dataset(root: Path, per_class: int = 10, size: int = 64) -> tuple[list[
 
 
 def _params(pretrained: bool) -> dict:
-    return {"model": "yolo11n", "epochs": 2, "imgsz": 96, "batch": 8, "lr0": 0.01, "pretrained": pretrained}
+    return {"model": "yolov8n", "epochs": 2, "imgsz": 96, "batch": 8, "lr0": 0.01, "pretrained": pretrained}
 
 
 def test_yolo_detection_from_scratch_cpu(tmp_path, ctx):
@@ -113,10 +113,10 @@ def test_yolo_classification_from_scratch_cpu(tmp_path, ctx):
     assert len(res.rows) == 4 and {r["prediction"] for r in res.rows} <= {"bright", "dark"} and "top5" in res.rows[0]
 
 
-@pytest.mark.skipif(not os.environ.get("QR_TEST_ZOO"), reason="QR_TEST_ZOO not set (needs yolo11n.pt)")
+@pytest.mark.skipif(not os.environ.get("QR_TEST_ZOO"), reason="QR_TEST_ZOO not set (needs yolov8n.pt)")
 def test_yolo_finetune_from_zoo_cpu(tmp_path, ctx):
     zoo = Path(os.environ["QR_TEST_ZOO"])
-    ctx.zoo = resolver(zoo, {"yolo11n": "yolo11n.pt"})
+    ctx.zoo = resolver(zoo, {"yolov8n": "yolov8n.pt"})
     data_yaml = _det_dataset(tmp_path / "det", n_train=16, n_val=8)
     ds = Dataset(
         "IMAGE",
@@ -132,7 +132,7 @@ def test_yolo_finetune_from_zoo_cpu(tmp_path, ctx):
 
 
 def test_missing_zoo_weight_fails_clearly(tmp_path, ctx):
-    ctx.zoo = resolver(tmp_path / "empty-zoo", {"yolo11n": "yolo11n.pt"})
+    ctx.zoo = resolver(tmp_path / "empty-zoo", {"yolov8n": "yolov8n.pt"})
     (tmp_path / "empty-zoo").mkdir()
     t = registry.create_trainer("vision.yolo", "detection", _params(pretrained=True), ctx)
     data_yaml = _det_dataset(tmp_path / "det", n_train=2, n_val=2)

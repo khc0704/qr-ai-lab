@@ -228,7 +228,7 @@ const children = [
   ]),
   h2("5.3 分類：類別固定、資料多 → YOLO 分類"),
   ...ul([
-    "家族 vision.yolo，task classification；config.model = yolo11n / s / m、imgsz、epochs；pretrained = true 從模型庫的 yolo11s-cls.pt 微調，false 從頭訓練。",
+    "家族 vision.yolo，task classification；config.model = yolov8n / s / m、imgsz、epochs；pretrained = true 從模型庫的 yolov8s-cls.pt 微調，false 從頭訓練。",
     "指標 accuracy、f1_macro；推論 predict 回 prediction、confidence、top5。",
   ]),
   h2("5.4 偵測與分割量測"),

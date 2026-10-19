@@ -158,7 +158,7 @@ def status(*, verify: bool = False) -> list[ModelZooEntry]:
 
 def families_ready() -> dict[str, bool]:
     """family id → at least one of the weights it can use is in the zoo. A family lists alternatives (e.g.
-    dinov2-small / dinov2-base, yolo11n / yolo11s …); one of them is enough to train. Families without
+    dinov2-small / dinov2-base, yolov8n / yolov8s …); one of them is enough to train. Families without
     pretrained weights are always ready."""
     cat = loader.load_catalog()["families"]
     out: dict[str, bool] = {}

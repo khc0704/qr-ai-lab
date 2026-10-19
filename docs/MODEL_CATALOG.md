@@ -55,7 +55,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.random_forest` | TABULAR × cls / reg | predict | 穩健、免調參、特徵重要度 | CPU | 無 | `.joblib` + 重要度 |
 | `tabular.xgboost` | TABULAR × cls / reg | predict | 表格預設首選 | CPU（可 GPU） | 無 | `.joblib` + 重要度 |
 | `tabular.isolation_forest` | TABULAR × anomaly | score | 多參數離群 | CPU | 無 | `.joblib`（含門檻） |
-| `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLO11，微調或從頭 | GPU | `yolo11n/s/m[-seg|-cls].pt` | `model/best.pt` + `report/training_curve.csv` |
+| `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLOv8（ultralytics 8.1），微調或從頭 | GPU | `yolov8n/s/m[-seg|-cls].pt` | `model/best.pt` + `report/training_curve.csv` |
 | `vision.dino_fewshot` | IMAGE × classification | predict / embed / retrieve / extend | 凍結 DINOv2 + 原型庫；新類別免重訓 | GPU | `dinov2-small/`、`dinov2-base/` | `model/prototypes.npz` |
 | `vision.dino_patchcore` | IMAGE × anomaly | score（熱圖）/ embed | 正常影像 patch 記憶庫 | GPU | `dinov2-small/` | `model/memory_bank.npz` |
 | `vision.image_quality` | IMAGE × anomaly | compare / score / embed | 17 個無參考影像品質指標的黃金機台基準與浮動範圍；compare 產出機台比對報告 | CPU | 無 | `model/baseline.json` + `report/baseline_ranges.csv` |
@@ -72,7 +72,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.random_forest` | `n_estimators=300, max_depth=None, min_samples_leaf=1` | `n_estimators: 100 … 800`；`max_depth: 4 … 32`；`min_samples_leaf: 1 … 10` |
 | `tabular.xgboost` | `n_estimators=500, learning_rate=0.05, max_depth=6, subsample=0.8, colsample_bytree=0.8` | `learning_rate: log 0.01 … 0.3`；`max_depth: 3 … 10`；`min_child_weight: 1 … 10`；`subsample / colsample_bytree: 0.5 … 1`；`reg_lambda: log 1e-3 … 10` |
 | `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
-| `vision.yolo` | `model=yolo11s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolo11n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
+| `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
 | `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base`；`k: 1 … 20` |
 | `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
 | `vision.image_quality` | `z_threshold=3.0, distance_percentile=99` | （無；compare 的 `effect_warn / effect_fail / alpha` 在推論 config 指定） |

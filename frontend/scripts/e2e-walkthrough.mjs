@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const API = process.env.API_URL ?? "http://localhost:8000/api/v1";
 const DATA = process.env.DATA_DIR ?? path.resolve("datasets");
-const ZOO = process.env.ZOO_DIR ?? path.join(DATA, "zoo"); // yolo11n.pt for the browser-upload demo
+const ZOO = process.env.ZOO_DIR ?? path.join(DATA, "zoo"); // yolov8n.pt for the browser-upload demo
 const OUT =
   process.env.OUT_DIR ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
 const PHASES = (process.env.PHASES ?? "all").split(",");
@@ -341,34 +341,34 @@ try {
       "模型庫（superadmin 才能上傳 / 匯入 / 移除）：目錄需要的預訓練權重與狀態；伺服器不連外，權重由管理員帶進來",
     );
     // 1) browser upload
-    await page.setInputFiles('[data-testid="zoo-upload-yolo11n"]', path.join(ZOO, "yolo11n.pt"));
-    await page.getByText("yolo11n 已匯入模型庫").waitFor({ timeout: 120_000 });
+    await page.setInputFiles('[data-testid="zoo-upload-yolov8n"]', path.join(ZOO, "yolov8n.pt"));
+    await page.getByText("yolov8n 已匯入模型庫").waitFor({ timeout: 120_000 });
     await settle(page, 1500);
     await shot(
       page,
       "zoo-uploaded",
-      "從瀏覽器上傳 yolo11n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」",
+      "從瀏覽器上傳 yolov8n.pt：寫進 MODEL_ZOO_ROOT、sha256 記進 manifest.json，狀態「已就緒」",
     );
     // 2) import from a folder mounted on the server (MODEL_ZOO_IMPORT_ROOT)
-    await page.locator("tr", { hasText: "yolo11s.pt" }).getByRole("button", { name: "匯入" }).click();
+    await page.locator("tr", { hasText: "yolov8s.pt" }).getByRole("button", { name: "匯入" }).click();
     await page.getByRole("dialog").waitFor();
     await page.getByRole("tab", { name: "伺服器路徑" }).click();
-    await page.fill("#zoo-path", "yolo11s.pt");
+    await page.fill("#zoo-path", "yolov8s.pt");
     await shot(page, "zoo-import-path", "從伺服器路徑匯入（NAS / USB 掛載點，限 MODEL_ZOO_IMPORT_ROOT 底下）", {
       fullPage: false,
     });
     await page.getByRole("button", { name: "開始匯入" }).click();
     await settle(page, 800);
     // 3) fetch from an intranet URL (host must be in MODEL_ZOO_ALLOWED_HOSTS)
-    await page.locator("tr", { hasText: "yolo11n-cls.pt" }).getByRole("button", { name: "匯入" }).click();
+    await page.locator("tr", { hasText: "yolov8n-cls.pt" }).getByRole("button", { name: "匯入" }).click();
     await page.getByRole("dialog").waitFor();
     await page.getByRole("tab", { name: "內網 URL" }).click();
-    await page.fill("#zoo-url", "http://127.0.0.1:8099/yolo11n-cls.pt");
+    await page.fill("#zoo-url", "http://127.0.0.1:8099/yolov8n-cls.pt");
     await shot(page, "zoo-import-url", "從內網 URL 下載（公司鏡像 / 檔案伺服器；主機白名單）", { fullPage: false });
     await page.getByRole("button", { name: "開始匯入" }).click();
     for (let i = 0; i < 60; i++) {
       const rows = await api(adminTok, "GET", "/admin/model-zoo");
-      const done = rows.filter((r) => ["yolo11s", "yolo11n-cls"].includes(r.id) && r.status === "present").length;
+      const done = rows.filter((r) => ["yolov8s", "yolov8n-cls"].includes(r.id) && r.status === "present").length;
       if (done === 2) break;
       await sleep(1000);
     }
