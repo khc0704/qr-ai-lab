@@ -16,6 +16,9 @@ async function Shell({ children }: { children: ReactNode }) {
   const [projects, overview] = await Promise.all([listProjects(), admin ? getAdminOverview() : null]);
   return (
     <>
+      {/* Inside the same Suspense boundary as the sidebar: its effect must run after the sidebar's own hydration,
+          otherwise the provider flips to "collapsed" while the streamed sidebar HTML still says "expanded". */}
+      <SidebarStateSync />
       <AppSidebar
         user={user}
         counts={{
@@ -59,7 +62,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   return (
     <TooltipProvider delayDuration={300}>
       <SidebarProvider>
-        <SidebarStateSync />
         <Suspense fallback={<ShellSkeleton />}>
           <Shell>{children}</Shell>
         </Suspense>
