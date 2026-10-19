@@ -230,6 +230,16 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 - 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6380/0`、`SCHEDULER_EMBEDDED=false`，`.venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed`，再開第三個終端 `.venv/bin/python -m app.scheduler`。
 - 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm。
 
+**WSL2 + Windows 的 Docker Desktop（MariaDB / Redis 跑在 Docker Desktop，其餘都在 WSL 內）**
+
+- Docker Desktop → Settings → Resources → **WSL integration** 勾選你的 Ubuntu distro。之後 WSL 裡直接有 `docker` / `docker compose`，**不要**在 WSL 內再 `apt install docker.io`，`install-01-docker.sh` 與 §3 的指令照用。
+- repo 放在 WSL 自己的檔案系統（`~/qr-ai-lab`），不要放 `/mnt/c/...`：compose 會把 `infra/mariadb/init` 綁定掛載進容器，NTFS 上的執行位元與換行會讓 `01_init.sh` 跑不起來，而且 I/O 慢很多。
+- 容器 port 綁在 `127.0.0.1:3307` / `127.0.0.1:6380`；有 WSL integration 的 distro 用 `localhost:3307` 就連得到，backend `.env` 寫 `DATABASE_URL=mariadb+asyncmy://qr:<密碼>@localhost:3307/qr_ai_lab`、`REDIS_URL=redis://localhost:6380/0`。
+- Docker Desktop 必須先在 Windows 端開著（WSL 的 `systemctl` 管不到它）；開機自動啟動在 Docker Desktop 的 General 設定，容器本身是 `restart: unless-stopped`，Desktop 一起來就會回來。
+- 公司 image mirror / proxy：設在 Docker Desktop → Settings → Docker Engine（`registry-mirrors`）或 Resources → Proxies，不是 WSL 的 `/etc/docker/daemon.json`；`infra/.env` 的 `DOCKER_REGISTRY` 仍可用來指定完整的 mirror 前綴。
+- 資料存在 Docker Desktop 的 volume（`qr-ai-lab_mariadb-data`），不在 WSL distro 內；`docker compose … down -v` 才會刪。
+- 開 `systemd=true` 之後 Docker Desktop 的 WSL integration 照常運作，排程器就能用 systemd cgroup；GPU 走 Windows 端的 NVIDIA driver，Docker 完全不碰 GPU。
+
 ### 7.2 正式（Ubuntu GPU 伺服器；Keycloak、MariaDB + Redis in Docker、三個 systemd 服務、nginx 路徑前綴）
 
 **前提（一次性）**
@@ -327,4 +337,4 @@ sudo nginx -t && sudo systemctl reload nginx
 - **開發機只想裝 CPU torch**：`cd trainer && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install -r requirements-dev.txt`。
 - **上傳預覽逾時（`PREVIEW_TIMEOUT`）**：預覽在 API 程序內以執行緒計算，預設 30 秒（`PREVIEW_TIMEOUT_S`）；縮小取樣數或先用較小的檔案試步驟。
 - **MariaDB 一直不 healthy**：第一次初始化要 20–40 秒；看 `docker compose -f infra/docker-compose.yml logs mariadb`。
-- **Windows**：建議在 WSL2 內操作（Docker Desktop + WSL 整合），避免路徑與換行問題。
+- **Windows**：在 WSL2 內操作，MariaDB / Redis 交給 Docker Desktop 的 WSL integration（§7.1）；repo 放 WSL 檔案系統，避免 `/mnt/c` 的路徑、換行與執行位元問題。
