@@ -39,6 +39,17 @@ from app.services import users as users_svc  # noqa: E402
 from app.storage.local import reset_storage  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def no_real_gpus(monkeypatch):
+    """Tests must not depend on the machine they run on: a dev laptop with an NVIDIA GPU would otherwise feed real
+    pynvml readings (busy GPU 0, a single physical GPU) into the scheduler and change placements."""
+    from app.services import gpu as gpu_svc
+    from app.services import node as node_svc
+
+    monkeypatch.setattr(node_svc, "detect_gpus", lambda: [])
+    monkeypatch.setattr(gpu_svc, "gpu_processes", lambda index: [])
+
+
 @pytest.fixture
 async def db():
     engine = get_engine()
