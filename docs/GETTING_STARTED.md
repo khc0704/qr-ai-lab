@@ -226,7 +226,7 @@ cd backend && .venv/bin/uvicorn app.main:app --reload   # 終端 1：API + 內�
 cd frontend && npm run dev                           # 終端 2：http://localhost:3000，superadmin / admin / user
 ```
 
-- WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 `--extra dl` 的 CUDA torch。
+- WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 cu126 的 torch。
 - 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6380/0`、`SCHEDULER_EMBEDDED=false`，`.venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed`，再開第三個終端 `.venv/bin/python -m app.scheduler`。
 - 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm。
 
@@ -239,6 +239,70 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 - 公司 image mirror / proxy：設在 Docker Desktop → Settings → Docker Engine（`registry-mirrors`）或 Resources → Proxies，不是 WSL 的 `/etc/docker/daemon.json`；`infra/.env` 的 `DOCKER_REGISTRY` 仍可用來指定完整的 mirror 前綴。
 - 資料存在 Docker Desktop 的 volume（`qr-ai-lab_mariadb-data`），不在 WSL distro 內；`docker compose … down -v` 才會刪。
 - 開 `systemd=true` 之後 Docker Desktop 的 WSL integration 照常運作，排程器就能用 systemd cgroup；GPU 走 Windows 端的 NVIDIA driver，Docker 完全不碰 GPU。
+
+### 7.1b 開發（原生 Ubuntu 桌機 / 筆電；與 7.1 相同，只有 Docker 與 systemd 的來源不同）
+
+```bash
+# 一次性
+sudo apt install -y python3.12 python3.12-venv git nginx-light            # nginx 只有要模擬正式路徑前綴時才需要
+# Node ≥ 20.9：curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash && nvm install 22
+# Docker Engine + compose plugin（官方 apt repo 或公司鏡像），然後 sudo usermod -aG docker $USER 並重新登入
+# NVIDIA driver（apt 的 nvidia-driver-5xx 或官方安裝檔）；只要 driver，不要裝 CUDA toolkit、不要 NVIDIA Container Toolkit
+loginctl enable-linger $USER     # 排程器以你的帳號跑時，任務 scope 要有常駐的 user manager
+cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control   # 要看到 cpu memory pids cpuset
+```
+
+`subtree_control` 少了 `cpuset`（Ubuntu 22.04 的 systemd 249 預設只委派 `pids memory`）時加一個 drop-in，否則排程器自動退到 subprocess + affinity：
+
+```ini
+# /etc/systemd/system/user@.service.d/delegate.conf
+[Service]
+Delegate=cpu cpuset io memory pids
+```
+
+`sudo systemctl daemon-reload && sudo systemctl restart user@$(id -u).service`（會踢掉目前的登入階段，重新登入即可）。之後的 clone、venv、`.env`、每天啟動與正式拓樸測試都和 7.1 一樣；Docker 的差別只有 compose 直接在本機 Docker Engine 跑，`docker compose … up -d` 之後用 `localhost:3307` / `6380` 連。
+
+### 7.1c 在 WSL2 模擬正式環境（四個 install 腳本、systemd 服務、nginx 前綴、假 Keycloak）
+
+目的：在上伺服器前把 7.2 的整條流程跑一遍。差異只有三點：MariaDB / Redis 由 Docker Desktop 提供、Keycloak 用 `scripts/fake_keycloak.py`、網址是 `http://localhost/ai-lab`（沒有 TLS，所以 `COOKIE_SECURE=0`）。
+
+```bash
+# 前提：7.1 的 Windows 端設定（Docker Desktop WSL integration、/etc/wsl.conf systemd=true、NVIDIA driver）
+sudo apt install -y nginx-light python3.12 python3.12-venv
+sudo ln -sf "$(which node)" /usr/local/bin/node      # 腳本與 qrlab 使用者要找得到系統層級的 node（nvm 的 node 只有你看得到）
+sudo git clone ~/qr-ai-lab /opt/qr-ai-lab && cd /opt/qr-ai-lab   # 另外 clone 一份：install-00 會把整個 checkout chown 給 qrlab
+sudo git -C /opt/qr-ai-lab checkout <分支>
+
+# 步驟 0
+sudo ./infra/install-00-base.sh
+sudo nano /etc/qr-ai-lab/qrlab.env
+#   APP_ENV=prod   DATABASE_URL=mariadb+asyncmy://qr:<密碼>@127.0.0.1:3307/qr_ai_lab   REDIS_URL=redis://127.0.0.1:6380/0
+#   ROOT_PATH=/ai-lab-api   CORS_ORIGINS=http://localhost
+#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAMES=superadmin
+#   AUTH_SECRET / JOB_TOKEN_SECRET = openssl rand -hex 32   DATASET_SECRET_KEY = python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
+sudo nano /etc/qr-ai-lab/frontend.env
+#   NEXT_PUBLIC_BASE_PATH=/ai-lab   AUTH_URL=http://localhost/ai-lab   AUTH_MODE=keycloak   COOKIE_SECURE=0
+#   AUTH_SECRET = openssl rand -base64 32   AUTH_KEYCLOAK_ID=qr-ai-lab   AUTH_KEYCLOAK_SECRET=dev-secret   AUTH_KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr
+
+# 步驟 1：Docker Desktop（以你自己的帳號跑，不用 sudo）
+./infra/install-01-docker.sh && nano infra/.env && ./infra/install-01-docker.sh
+
+# 假 Keycloak（另一個終端一直開著；用 /opt 那份的 venv 要等步驟 2 建好，先用 ~/qr-ai-lab 的）
+~/qr-ai-lab/backend/.venv/bin/python ~/qr-ai-lab/scripts/fake_keycloak.py --port 8089 --realm qr --client qr-ai-lab --secret dev-secret
+
+# 步驟 2、3
+sudo ./infra/install-02-backend.sh          # 有網路就用預設的 download.pytorch.org cu126；內網再設 TORCH_INDEX_URL
+curl -s http://127.0.0.1:8000/healthz
+sudo ./infra/install-03-frontend.sh
+
+# 步驟 4：nginx（WSL 內的 nginx，listen 80）
+sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/
+#   limit_req_zone 那行 → /etc/nginx/conf.d/qrlab-zone.conf
+#   location 區塊（含 large_client_header_buffers）→ /etc/nginx/sites-available/default 的 server { listen 80; } 裡
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+從 Windows 瀏覽器開 `http://localhost/ai-lab/login`（WSL 的 80 / 8089 會自動轉到 Windows 的 localhost）→ 假 Keycloak 登入頁（帳號 `superadmin`，任意密碼）→ 回首頁；`http://localhost/ai-lab-api/docs` 打得開；`systemctl status qrlab-backend qrlab-scheduler qrlab-frontend`；Dashboard「任務執行方式」應顯示 systemd。之後每次改完 code：`sudo git -C /opt/qr-ai-lab pull && sudo ./infra/install-02-backend.sh --update && sudo ./infra/install-03-frontend.sh --update`。關掉：`sudo systemctl stop qrlab-frontend qrlab-backend qrlab-scheduler`、`docker compose -f infra/docker-compose.yml --env-file infra/.env down`。
 
 ### 7.2 正式（Ubuntu GPU 伺服器；Keycloak、MariaDB + Redis in Docker、三個 systemd 服務、nginx 路徑前綴）
 
