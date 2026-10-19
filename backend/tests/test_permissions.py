@@ -64,6 +64,24 @@ async def test_admin_moderates_discussions(client, admin, user):
     assert audit[0]["action"] == "issue.delete" and audit[0]["payload"]["title"] == "crash"
 
 
+async def test_closed_discussion_only_takes_admin_replies(client, admin, user):
+    r = await client.post("/api/v1/issues", json={"type": "question", "title": "how", "body": "?"}, headers=user)
+    issue_id = r.json()["id"]
+    assert (
+        await client.post(f"/api/v1/issues/{issue_id}/comments", json={"body": "bump"}, headers=user)
+    ).status_code == 201
+    await client.post(f"/api/v1/issues/{issue_id}/close", json={"resolution_note": "answered"}, headers=admin)
+    r = await client.post(f"/api/v1/issues/{issue_id}/comments", json={"body": "one more"}, headers=user)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "ISSUE_CLOSED"
+    assert (
+        await client.post(f"/api/v1/issues/{issue_id}/comments", json={"body": "follow-up"}, headers=admin)
+    ).status_code == 201
+    await client.post(f"/api/v1/issues/{issue_id}/reopen", headers=admin)
+    assert (
+        await client.post(f"/api/v1/issues/{issue_id}/comments", json={"body": "thanks"}, headers=user)
+    ).status_code == 201
+
+
 async def test_superadmin_role_changes_and_guards(client, superadmin, admin, user):
     users = {u["username"]: u for u in (await client.get("/api/v1/users", headers=superadmin)).json()["items"]}
     r = await client.patch(f"/api/v1/users/{users['user']['id']}", json={"role": "admin"}, headers=superadmin)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import zipfile
@@ -77,6 +78,26 @@ def test_text_ops():
     ]
     out = Pipeline.from_spec("TEXT", steps, text_column="text").fit_transform(df)
     assert out["text"].tolist() == ["hello world", "機台 警報!"] and out["label"].tolist() == ["a", "c"]
+
+
+def test_text_ops_pick_columns_and_keep_missing_values():
+    # TABULAR frames may carry free-text columns: the ops take `columns`, skip protected ones and keep NaN as NaN
+    df = pd.DataFrame(
+        {"note": ["  Tool A  ", None, "TOOL b"], "owner": ["Amy", "BOB", None], "y": ["KEEP", "Me", "AS-IS"]}
+    )
+    steps = [{"op": "text.lowercase", "params": {"columns": ["note", "y"]}}, {"op": "text.strip_whitespace"}]
+    out = Pipeline.from_spec("TABULAR", steps, protected=["y"]).fit_transform(df)
+    assert out["note"].tolist()[0] == "tool a" and out["note"].tolist()[2] == "tool b"
+    assert pd.isna(out["note"].iloc[1]) and pd.isna(out["owner"].iloc[2])
+    assert out["owner"].tolist()[:2] == ["Amy", "BOB"]  # strip_whitespace with no columns → every text column
+    assert out["y"].tolist() == ["KEEP", "Me", "AS-IS"]  # protected: never transformed
+    assert {"text.lowercase", "text.replace_regex"} <= {o["id"] for o in catalog("TABULAR")}
+    with pytest.raises(ValueError, match="找不到文字欄位"):
+        Pipeline.from_spec("TABULAR", [{"op": "text.lowercase", "params": {"columns": ["nope"]}}]).fit_transform(df)
+    # TEXT: drop_empty removes empty and missing texts, the label column stays aligned
+    tdf = pd.DataFrame({"text": ["a", "", None, "a"], "label": [1, 2, 3, 4]})
+    out = Pipeline.from_spec("TEXT", [{"op": "text.drop_empty"}, {"op": "text.dedupe"}]).fit_transform(tdf)
+    assert out["text"].tolist() == ["a"] and out["label"].tolist() == [1]
 
 
 def test_sequence_ops_and_msc_state():
@@ -323,3 +344,27 @@ def test_preview_column_stats_and_step_details(tmp_path):
     np.save(npy, np.zeros((4, 16), np.float32))
     r = run_preview("SPECTRUM", npy, "npy", [{"op": "sequence.snv"}])
     assert r["columns_in"] is None and r["rows_in"] is None and r["step_details"][0]["op"] == "sequence.snv"
+
+
+def test_image_preview_thumbnail_size_and_selection(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for folder in ("a", "b"):
+            for k in range(3):
+                b = io.BytesIO()
+                Image.new("L", (400, 300), color=40 * k + 20).save(b, format="PNG")
+                z.writestr(f"{folder}/img{k}.png", b.getvalue())
+    path = tmp_path / "imgs.zip"
+    path.write_bytes(buf.getvalue())
+    out = run_preview("IMAGE", path, "zip", [], sample=16, thumb=64)
+    images = out["before"]["images"]
+    assert 1 < len(images) <= 16 and images[0]["width"] == 400  # original size is reported …
+    thumb = Image.open(io.BytesIO(base64.b64decode(images[0]["png_base64"])))
+    assert max(thumb.size) == 64  # … while the thumbnail honours `thumb`
+    # the lightbox asks for one entry at full thumbnail size; big thumbnails cap the count
+    out = run_preview("IMAGE", path, "zip", [{"op": "image.grayscale"}], thumb=1024, image_ids=["b/img2.png"])
+    assert [im["id"] for im in out["before"]["images"]] == ["b/img2.png"]
+    assert max(Image.open(io.BytesIO(base64.b64decode(out["after"]["images"][0]["png_base64"]))).size) == 400
+    assert len(run_preview("IMAGE", path, "zip", [], sample=16, thumb=1024)["before"]["images"]) == 2
+    with pytest.raises(ValueError, match="找不到指定的影像"):
+        run_preview("IMAGE", path, "zip", [], image_ids=["nope.png"])

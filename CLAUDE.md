@@ -85,7 +85,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
 - 專案申請 = 建立 `pending` 的 project（`POST /projects`）；申請內容在 `project_requests`（`projects.request_id`），專案頁的「申請」分頁顯示與審核；沒有獨立的申請列表 / 審核頁 / 配額頁
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
-- Project `status`：`pending | in_review | active | rejected | completed | archived`（核准前只有「申請」分頁；`active` 才能建資料來源 / 任務 / 管成員；`completed` = 已結束可重開）；`kind`：`standard | shared`（shared = 唯一的工具池 `tools`，放所有前處理 / 分析任務，配額來自管理員「工具池」設定 `tool_pool` 含 `max_jobs_per_user`；`personal` 是已封存的舊個人工作區）
+- Project `status`：`pending | in_review | active | rejected | completed | archived`（核准前只有「申請」分頁；`active` 才能建資料來源 / 任務 / 管成員；`completed` = 已結束可重開）；`kind`：`standard | shared`（shared = 唯一的工具池 `tools`，放所有前處理 / 分析任務，配額來自管理員「工具池」設定 `tool_pool` 含 `max_jobs_per_user`，且不得超過總資源池；`personal` 是已封存的舊個人工作區）
 - Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是工具池的工具任務，頁面在 `/tools/jobs/{id}`，只有建立者與管理員看得到）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
 - Job `mode`（train）：`manual | auto`（auto = AutoML，候選模型 + Optuna 搜尋）
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）

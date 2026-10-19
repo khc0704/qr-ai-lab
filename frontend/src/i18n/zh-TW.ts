@@ -306,6 +306,7 @@ export const discussionCopy = {
   resolution: "處理結果",
   composer: "留言",
   composerPlaceholder: "留言…",
+  closedNoComposer: "討論已關閉，只有管理員可以留言。",
   send: "送出",
   adminTag: "管理員",
   guidanceTitle: "怎麼寫比較容易得到回覆",

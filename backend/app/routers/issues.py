@@ -5,6 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.core.deps import CurrentUser, DbSession, require_perm
+from app.core.errors import conflict
+from app.core.permissions import role_has
 from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.common import Ok, Page
@@ -65,7 +67,10 @@ async def list_comments(issue_id: int, session: DbSession, _: CurrentUser) -> li
 
 @router.post("/{issue_id}/comments", response_model=CommentRead, status_code=201)
 async def add_comment(issue_id: int, body: CommentCreate, session: DbSession, user: CurrentUser) -> CommentRead:
-    await issues_svc.get(session, issue_id)
+    """Anyone may reply while the thread is open; once an admin closed it, only moderators can add to it."""
+    issue = await issues_svc.get(session, issue_id)
+    if issue.status == "closed" and not role_has(user.role, "issues.moderate"):
+        raise conflict("ISSUE_CLOSED", "討論已關閉，只有管理員可以留言")
     c = await comments_svc.add(session, "issue", issue_id, user.id, body.body)
     await session.commit()
     return CommentRead.model_validate(c)

@@ -16,7 +16,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatCell, type CellKey } from "@/lib/preprocess-steps";
+import { formatCell, opAppliesTo, type CellKey } from "@/lib/preprocess-steps";
 import { cn } from "@/lib/utils";
 import type { PreprocessOp, PreviewColumnStat } from "@/types/domain";
 
@@ -208,6 +208,7 @@ function ColumnMenu({
   stat?: PreviewColumnStat;
   onColumnAction: (op: PreprocessOp, column: string, extra?: Record<string, unknown>) => void;
 }) {
+  const applicable = actions.filter((a) => opAppliesTo(a.op, stat?.dtype));
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -225,8 +226,10 @@ function ColumnMenu({
         <DropdownMenuSeparator />
         {locked ? (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">目標 / ID 欄位受保護，不會被處理。</div>
+        ) : applicable.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">這種型別的欄位沒有可用的操作。</div>
         ) : (
-          actions.map((a) =>
+          applicable.map((a) =>
             a.choice ? (
               <DropdownMenuSub key={a.op.id}>
                 <DropdownMenuSubTrigger>{a.op.label}</DropdownMenuSubTrigger>

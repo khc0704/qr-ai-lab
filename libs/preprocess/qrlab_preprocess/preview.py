@@ -17,7 +17,7 @@ from PIL import Image
 from qrlab_preprocess import Pipeline
 
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
-MAX_IMAGES = 8
+MAX_IMAGES = 16  # at THUMB px; larger thumbnails cap lower (see images_cap)
 MAX_ROWS_FOR_STATS = 5000
 MAX_CURVE_POINTS = 512
 THUMB = 256
@@ -36,9 +36,14 @@ def run_preview(
     sample: int = 5,
     spec: dict[str, Any] | None = None,
     task_type: str | None = None,
+    thumb: int = THUMB,
+    image_ids: list[str] | None = None,
 ) -> dict[str, Any]:
+    """``thumb``: longest side of IMAGE thumbnails (64–1024); ``image_ids``: IMAGE only, preview just these entries
+    (the editor's lightbox asks for one image at full thumbnail size)."""
     spec = spec or {}
     sample = max(1, min(int(sample), 500))
+    thumb = max(64, min(int(thumb), 1024))
     protected = [
         c for c in (spec.get("target"), spec.get("id_column"), spec.get("label_column"), spec.get("label")) if c
     ]
@@ -65,9 +70,9 @@ def run_preview(
         after = _curves_payload(pipe.fit_transform(X), ids, sample)
         return _result(data_type, pipe, before, after)
     if data_type == "IMAGE":
-        images, ids = _read_images(path, min(sample, MAX_IMAGES))
-        before = _images_payload(images, ids)
-        after = _images_payload(pipe.fit_transform(images), ids)
+        images, ids = _read_images(path, min(sample, images_cap(thumb)), only=image_ids)
+        before = _images_payload(images, ids, thumb)
+        after = _images_payload(pipe.fit_transform(images), ids, thumb)
         return _result(data_type, pipe, before, after)
     raise ValueError(f"未知的 data_type {data_type}")
 
@@ -172,7 +177,14 @@ def read_zip_entry(z: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     return data
 
 
-def _read_images(path: Path, n: int) -> tuple[list[Image.Image], list[str]]:
+def images_cap(thumb: int) -> int:
+    """How many images one preview may carry: the payload is base64 PNG, so bigger thumbnails mean fewer of them."""
+    return MAX_IMAGES if thumb <= 256 else 8 if thumb <= 512 else 2
+
+
+def _read_images(path: Path, n: int, only: list[str] | None = None) -> tuple[list[Image.Image], list[str]]:
+    """The first ``n`` images (spread across folders), or, with ``only``, just the entries with those ids."""
+    wanted = None if only is None else set(only)
     images, ids = [], []
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as z:
@@ -182,6 +194,7 @@ def _read_images(path: Path, n: int) -> tuple[list[Image.Image], list[str]]:
                 if i.filename.lower().endswith(IMAGE_EXT)
                 and not Path(i.filename).name.startswith(".")
                 and not i.is_dir()
+                and (wanted is None or i.filename in wanted)
             ]
             # spread the sample across folders (classes)
             by_dir: dict[str, list[zipfile.ZipInfo]] = {}
@@ -198,15 +211,18 @@ def _read_images(path: Path, n: int) -> tuple[list[Image.Image], list[str]]:
                 images.append(im)
                 ids.append(info.filename)
     elif path.is_dir():
-        for p in sorted(q for q in path.rglob("*") if q.suffix.lower() in IMAGE_EXT)[:n]:
+        files = sorted(q for q in path.rglob("*") if q.suffix.lower() in IMAGE_EXT)
+        if wanted is not None:
+            files = [q for q in files if str(q.relative_to(path)) in wanted]
+        for p in files[:n]:
             images.append(Image.open(p))
             ids.append(str(p.relative_to(path)))
-    else:
+    elif wanted is None or path.name in wanted:
         im = Image.open(path)
         im.load()
         images, ids = [im], [path.name]
     if not images:
-        raise ValueError("找不到影像檔")
+        raise ValueError("找不到指定的影像" if wanted is not None else "找不到影像檔")
     return images, ids
 
 
@@ -313,11 +329,11 @@ def _curves_payload(X: np.ndarray, ids: list[str], sample: int) -> dict[str, Any
     return {"curves": curves, "stats": stats, "points_step": step}
 
 
-def _images_payload(images: list[Image.Image], ids: list[str]) -> dict[str, Any]:
+def _images_payload(images: list[Image.Image], ids: list[str], size: int = THUMB) -> dict[str, Any]:
     out = []
     for im, i in zip(images, ids, strict=True):
         thumb = im.copy()
-        thumb.thumbnail((THUMB, THUMB))
+        thumb.thumbnail((size, size))
         if thumb.mode not in ("L", "RGB"):
             thumb = thumb.convert("RGB")
         buf = io.BytesIO()

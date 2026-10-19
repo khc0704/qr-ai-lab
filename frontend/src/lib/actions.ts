@@ -420,17 +420,24 @@ export async function deleteDataSourceAction(slug: string, id: number): Promise<
   return r;
 }
 
+/** IMAGE previews: `thumb` = longest side of the thumbnails, `imageIds` = only these entries (lightbox). */
+export interface PreviewOptions {
+  thumb?: number;
+  imageIds?: string[];
+}
+
 export async function previewPreprocessAction(
   slug: string,
   uploadId: number,
   steps: PreprocessStep[],
   spec: J,
   sample = 5,
+  opts: PreviewOptions = {},
 ): Promise<ActionResult<PreviewPayload>> {
   return run(() => {
     const s = slugSchema.parse(slug);
     const uid = idSchema.parse(uploadId);
-    const payload = previewBodySchema.parse({ steps, spec, sample });
+    const payload = previewBodySchema.parse({ steps, spec, sample, thumb: opts.thumb, image_ids: opts.imageIds });
     return apiFetch<PreviewPayload>(`/projects/${enc(s)}/uploads/${uid}/preview`, { method: "POST", body: payload });
   });
 }
@@ -442,10 +449,11 @@ export async function previewToolAction(
   steps: PreprocessStep[],
   spec: J,
   sample = 5,
+  opts: PreviewOptions = {},
 ): Promise<ActionResult<PreviewPayload>> {
   return run(() => {
     const uid = toolUploadIdSchema.parse(id);
-    const payload = previewBodySchema.parse({ steps, spec, sample });
+    const payload = previewBodySchema.parse({ steps, spec, sample, thumb: opts.thumb, image_ids: opts.imageIds });
     return apiFetch<PreviewPayload>(`/tools/uploads/${enc(uid)}/preview`, { method: "POST", body: payload });
   });
 }

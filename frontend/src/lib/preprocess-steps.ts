@@ -10,6 +10,21 @@ export function classifyOp(op: PreprocessOp): OpGroup {
   return "other";
 }
 
+const NUMERIC_ONLY = /\.(standardize|minmax|log|clip_outliers)$/;
+const CONVERTS_TEXT = /\.(to_numeric|encode)$/;
+
+/**
+ * Whether a column operation makes sense for a column of this dtype: text ops only on text, scalers only on
+ * numbers, converters (to_numeric / encode) only on non-numeric columns; everything else (impute, drop …) on all.
+ */
+export function opAppliesTo(op: PreprocessOp, dtype?: PreviewColumnStat["dtype"]): boolean {
+  if (!dtype) return true;
+  if (op.id.startsWith("text.")) return dtype === "text";
+  if (NUMERIC_ONLY.test(op.id)) return dtype === "number";
+  if (CONVERTS_TEXT.test(op.id)) return dtype !== "number";
+  return true;
+}
+
 export function defaultParams(op: PreprocessOp): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   for (const p of op.params) if (p.default !== undefined && p.default !== null) params[p.name] = p.default;
@@ -135,4 +150,59 @@ export function formatCell(v: unknown): string {
   if (typeof v === "boolean") return v ? "true" : "false";
   const s = String(v);
   return s.length > 60 ? `${s.slice(0, 57)}…` : s;
+}
+
+// --- images ---------------------------------------------------------------------------------------------
+
+/** Ratios (0–1) of the kept area, the parameter shape of `image.crop`. */
+export interface CropRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const MIN_CROP_SIDE = 0.02;
+
+/**
+ * Turn a drag (pixel start / end inside a box of `width` × `height`) into crop ratios: clamped to the box, ordered,
+ * rounded to 3 decimals; null when the rectangle is too thin to mean anything.
+ */
+export function normalizeCropRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  width: number,
+  height: number,
+): CropRect | null {
+  if (!(width > 0) || !(height > 0)) return null;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const rect = {
+    left: r3(clamp(Math.min(x0, x1) / width)),
+    top: r3(clamp(Math.min(y0, y1) / height)),
+    right: r3(clamp(Math.max(x0, x1) / width)),
+    bottom: r3(clamp(Math.max(y0, y1) / height)),
+  };
+  if (rect.right - rect.left < MIN_CROP_SIDE || rect.bottom - rect.top < MIN_CROP_SIDE) return null;
+  return rect;
+}
+
+/** Replace the params of the last step with this op (keeping its position), or append one. */
+export function upsertStep(steps: PreprocessStep[], op: PreprocessOp, params: Record<string, unknown>) {
+  const i = steps.map((s) => s.op).lastIndexOf(op.id);
+  if (i < 0) return [...steps, { op: op.id, params: { ...defaultParams(op), ...params } }];
+  return steps.map((s, k) => (k === i ? { ...s, params: { ...(s.params ?? {}), ...params } } : s));
+}
+
+/** The crop rectangle the step chain currently applies (last `image.crop`), if any. */
+export function cropFromSteps(steps: PreprocessStep[]): CropRect | null {
+  const step = [...steps].reverse().find((s) => s.op === "image.crop");
+  if (!step) return null;
+  const num = (k: keyof CropRect, d: number) => {
+    const v = Number(step.params?.[k]);
+    return Number.isFinite(v) ? v : d;
+  };
+  return { left: num("left", 0), top: num("top", 0), right: num("right", 1), bottom: num("bottom", 1) };
 }

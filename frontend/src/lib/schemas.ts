@@ -173,6 +173,9 @@ export const previewBodySchema = z.object({
   steps: preprocessStepsSchema,
   spec: jsonRecord,
   sample: z.number().int().min(1).max(500),
+  // IMAGE previews: thumbnail size and, for the lightbox, the entries to render
+  thumb: z.number().int().min(64).max(1024).optional(),
+  image_ids: z.array(z.string().min(1).max(500)).max(16).optional(),
 });
 
 export const jobCreateBodySchema = z.object({

@@ -31,6 +31,8 @@ class ToolProcessBody(BaseModel):
 
 class ToolPreviewBody(ToolProcessBody):
     sample: int = Field(default=5, ge=1, le=500)
+    thumb: int = Field(default=256, ge=64, le=1024)  # IMAGE: longest side of the preview thumbnails
+    image_ids: list[str] | None = Field(default=None, max_length=16)  # IMAGE: only these entries (lightbox)
 
 
 class PreviewTopValue(BaseModel):

@@ -139,7 +139,15 @@ def get(upload_id: str, user: User) -> ToolUploadRead:
 
 
 async def preview(
-    upload_id: str, user: User, steps: list[dict[str, Any]], *, sample: int, spec: dict[str, Any], task_type: str | None
+    upload_id: str,
+    user: User,
+    steps: list[dict[str, Any]],
+    *,
+    sample: int,
+    spec: dict[str, Any],
+    task_type: str | None,
+    thumb: int = 256,
+    image_ids: list[str] | None = None,
 ) -> PreviewRead:
     """Real-time preview on a bounded sample (the full run is a job): before / after payloads, per-step warnings
     and, for TABULAR / TEXT, per-column statistics of the input sample and of the pipeline output."""
@@ -156,6 +164,8 @@ async def preview(
                 sample=sample,
                 spec={**(meta.get("detected_spec") or {}), **spec},
                 task_type=task_type,
+                thumb=thumb,
+                image_ids=image_ids,
             ),
             timeout=timeout,
         )

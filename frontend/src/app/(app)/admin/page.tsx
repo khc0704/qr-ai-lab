@@ -116,7 +116,7 @@ async function Dashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ToolPoolForm pool={toolPool} readOnly={!canManagePool} />
+              <ToolPoolForm pool={toolPool} resourcePool={pool} readOnly={!canManagePool} />
             </CardContent>
           </Card>
         </div>

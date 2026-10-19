@@ -1,40 +1,31 @@
 "use client";
 
 // The preprocessing editor: a spreadsheet of the preview sample with per-column menus, row-level operations,
-// the step chain as chips and a live (debounced) preview. Non-tabular data types fall back to the step list.
-import { ArrowDown, ArrowUp, Eye, LoaderCircle, Settings2, TriangleAlert, X } from "lucide-react";
+// the step chain as chips and a live (debounced) preview. IMAGE gets the gallery workbench; sequences / spectra
+// fall back to the step list with a before / after plot.
+import { Eye, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PreprocessEditor } from "@/components/features/preprocess-editor";
 import { PreprocessGrid, type ColumnAction } from "@/components/features/preprocess-grid";
+import { ImageWorkbench } from "@/components/features/preprocess-images";
+import { StepChip } from "@/components/features/preprocess-step-chip";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import type { ActionResult } from "@/lib/actions";
+import type { ActionResult, PreviewOptions } from "@/lib/actions";
 import {
   addColumnStep,
   addStep,
   changedCells,
   classifyOp,
   columnDiff,
-  describeParams,
   moveStep,
   removeStep,
   updateStepParams,
 } from "@/lib/preprocess-steps";
 import { cn } from "@/lib/utils";
-import type {
-  DataType,
-  PreprocessOp,
-  PreprocessParam,
-  PreprocessStep,
-  PreviewColumnStat,
-  PreviewPayload,
-} from "@/types/domain";
+import type { DataType, PreprocessOp, PreprocessStep, PreviewColumnStat, PreviewPayload } from "@/types/domain";
 
 export const PREVIEW_ROWS = 300;
 
@@ -42,6 +33,7 @@ export type PreviewFn = (
   steps: PreprocessStep[],
   spec: Record<string, unknown>,
   sample: number,
+  opts?: PreviewOptions,
 ) => Promise<ActionResult<PreviewPayload>>;
 
 export function isGridType(dataType: DataType) {
@@ -105,6 +97,20 @@ export function PreprocessWorkbench({
     return () => clearTimeout(t);
   }, [uploadId, stepsKey, specKey, dataType, runPreview]);
 
+  if (dataType === "IMAGE") {
+    return (
+      <ImageWorkbench
+        ops={ops}
+        steps={steps}
+        onChange={onChange}
+        spec={spec}
+        uploadId={uploadId}
+        onPreview={onPreview}
+        onPreviewLoaded={onPreviewLoaded}
+        disabledReason={disabledReason}
+      />
+    );
+  }
   if (!isGridType(dataType)) {
     return (
       <PreprocessEditor
@@ -165,8 +171,9 @@ function TabularWorkbench({
     const choice = op.params.find((p) => p.type === "choice" && p.choices?.length);
     return choice ? { op, choice: { name: choice.name, label: choice.label, values: choice.choices ?? [] } } : { op };
   });
+  // The text column of a TEXT dataset is what the text ops work on, so it is editable; target / id / label stay locked.
   const protectedColumns = new Set(
-    ["target", "id_column", "label_column", "label", "text_column"]
+    ["target", "id_column", "label_column", "label"]
       .map((k) => spec[k])
       .filter((v): v is string => typeof v === "string" && v.length > 0),
   );
@@ -326,154 +333,6 @@ function TabularWorkbench({
           loading={loading}
         />
       </div>
-    </div>
-  );
-}
-
-function StepChip({
-  index,
-  step,
-  op,
-  warnings,
-  onMove,
-  onRemove,
-  onParams,
-  first,
-  last,
-}: {
-  index: number;
-  step: PreprocessStep;
-  op?: PreprocessOp;
-  warnings: string[];
-  onMove: (delta: number) => void;
-  onRemove: () => void;
-  onParams: (params: Record<string, unknown>) => void;
-  first: boolean;
-  last: boolean;
-}) {
-  const label = op?.label ?? step.op;
-  const summary = describeParams(step.params);
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md border bg-card py-0.5 pr-0.5 pl-2 text-xs",
-        warnings.length ? "border-warning/40" : "border-border",
-      )}
-    >
-      <span className="font-mono text-[11px] text-brand-ink">{index + 1}</span>
-      <span className="font-medium">{label}</span>
-      {summary ? (
-        <span className="max-w-56 truncate font-mono text-[11px] text-muted-foreground">{summary}</span>
-      ) : null}
-      {warnings.length ? (
-        <TriangleAlert className="size-3.5 text-warning" aria-label={`${warnings.length} 個警告`} />
-      ) : null}
-      {op?.params.length ? (
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={`編輯步驟 ${index + 1} 的參數`}>
-              <Settings2 />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-80 space-y-3">
-            <div className="text-sm font-medium">{label}</div>
-            {op.description ? <p className="text-xs text-muted-foreground">{op.description}</p> : null}
-            {op.params.map((p) => (
-              <ParamField
-                key={p.name}
-                param={p}
-                value={step.params?.[p.name]}
-                onChange={(v) => onParams({ [p.name]: v })}
-              />
-            ))}
-            {warnings.length ? (
-              <ul className="list-disc pl-4 text-xs text-warning">
-                {warnings.map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
-            ) : null}
-          </PopoverContent>
-        </Popover>
-      ) : null}
-      <Button variant="ghost" size="icon-sm" aria-label="上移" disabled={first} onClick={() => onMove(-1)}>
-        <ArrowUp />
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="下移" disabled={last} onClick={() => onMove(1)}>
-        <ArrowDown />
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="移除步驟" onClick={onRemove}>
-        <X />
-      </Button>
-    </span>
-  );
-}
-
-function ParamField({
-  param: p,
-  value,
-  onChange,
-}: {
-  param: PreprocessParam;
-  value: unknown;
-  onChange: (v: unknown) => void;
-}) {
-  const id = `wb-${p.name}`;
-  const v = value ?? p.default ?? "";
-  if (p.type === "bool")
-    return (
-      <label className="flex items-center gap-2 text-sm">
-        <Switch checked={Boolean(v)} onCheckedChange={(c) => onChange(c)} />
-        {p.label}
-      </label>
-    );
-  if (p.type === "choice")
-    return (
-      <div className="grid gap-1.5">
-        <Label htmlFor={id}>{p.label}</Label>
-        <Select value={String(v)} onValueChange={(x) => onChange((p.choices ?? []).find((c) => String(c) === x) ?? x)}>
-          <SelectTrigger id={id} size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(p.choices ?? []).map((c) => (
-              <SelectItem key={String(c)} value={String(c)}>
-                {String(c)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {p.help ? <p className="text-[11px] text-muted-foreground">{p.help}</p> : null}
-      </div>
-    );
-  const isList = p.type === "columns" || p.type === "list";
-  return (
-    <div className="grid gap-1.5">
-      <Label htmlFor={id}>{p.label}</Label>
-      <Input
-        id={id}
-        className="h-8 font-mono text-xs"
-        type={p.type === "int" || p.type === "float" ? "number" : "text"}
-        step={p.type === "float" ? "any" : undefined}
-        min={p.min}
-        max={p.max}
-        placeholder={isList ? "a,b,c（留空 = 自動）" : undefined}
-        value={Array.isArray(v) ? v.join(",") : String(v)}
-        onChange={(e) => {
-          const raw = e.target.value;
-          if (p.type === "int") onChange(raw === "" ? "" : Number.parseInt(raw, 10));
-          else if (p.type === "float") onChange(raw === "" ? "" : Number(raw));
-          else if (isList)
-            onChange(
-              raw
-                .split(",")
-                .map((x) => x.trim())
-                .filter(Boolean),
-            );
-          else onChange(raw);
-        }}
-      />
-      {p.help ? <p className="text-[11px] text-muted-foreground">{p.help}</p> : null}
     </div>
   );
 }

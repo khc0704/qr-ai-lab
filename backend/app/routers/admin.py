@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from app.core.deps import AdminUser, DbSession, require_perm
+from app.core.errors import bad_request
 from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.admin import (
@@ -111,10 +112,15 @@ async def put_pool(body: ResourcePool, session: DbSession, admin: PoolManager) -
     if physical:
         bad = [i for i in body.gpu_indices if i not in {g.index for g in physical}]
         if bad:
-            from app.core.errors import bad_request
-
             raise bad_request("GPU_NOT_PRESENT", f"實體沒有 GPU {bad}")
-    return await settings_svc.set_resource_pool(session, body, admin.id)
+    saved = await settings_svc.set_resource_pool(session, body, admin.id)
+    # the tool pool is a slice of this pool: shrink it along when the pool got smaller
+    tool = await settings_svc.get_tool_pool(session)
+    if settings_svc.tool_pool_violations(tool, saved):
+        clamped = settings_svc.clamp_tool_pool(tool, saved)
+        await projects_svc.sync_shared_quota(session, clamped)
+        await settings_svc.set_tool_pool(session, clamped, admin.id)
+    return saved
 
 
 @router.get("/settings/job-defaults", response_model=JobDefaults)
@@ -134,8 +140,11 @@ async def get_tool_pool(session: DbSession, _: AdminUser) -> ToolPool:
 
 @router.put("/settings/tool-pool", response_model=ToolPool, summary="工具池配額（superadmin）")
 async def put_tool_pool(body: ToolPool, session: DbSession, admin: PoolManager) -> ToolPool:
+    """The tool pool is a slice of the total resource pool: it can never promise more than the pool has."""
+    problems = settings_svc.tool_pool_violations(body, await settings_svc.get_resource_pool(session))
+    if problems:
+        raise bad_request("TOOL_POOL_EXCEEDS_POOL", "工具池不能超過總資源池：" + "；".join(problems))
     await projects_svc.sync_shared_quota(session, body)
-    """影響之後建立的個人工作區；已存在的工作區在專案配額頁個別調整。"""
     return await settings_svc.set_tool_pool(session, body, admin.id)
 
 

@@ -476,7 +476,7 @@ export function NewJobWizard({
               dataType={project.dataType}
               spec={Object.fromEntries(Object.entries(spec).filter(([, v]) => v !== ""))}
               uploadId={inputKind === "upload" ? upload?.id : undefined}
-              onPreview={(s, sp, n) => previewPreprocessAction(project.slug, Number(upload?.id ?? 0), s, sp, n)}
+              onPreview={(s, sp, n, o) => previewPreprocessAction(project.slug, Number(upload?.id ?? 0), s, sp, n, o)}
               onPreviewLoaded={setLastPreview}
               disabledReason={geometricBlocked ? "偵測 / 分割任務不能用會改變座標的步驟" : undefined}
             />

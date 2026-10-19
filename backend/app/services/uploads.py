@@ -187,6 +187,8 @@ async def preview(
     sample: int = 5,
     spec: dict[str, Any] | None = None,
     task_type: str | None = None,
+    thumb: int = 256,
+    image_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply preprocessing steps to a bounded sample of the upload and return before / after payloads."""
     up = await get(session, project, upload_id)
@@ -205,6 +207,8 @@ async def preview(
                 sample=sample,
                 spec={**(up.detected_spec or {}), **(spec or {})},
                 task_type=task_type or project.task_type,
+                thumb=thumb,
+                image_ids=image_ids,
             ),
             timeout=timeout,
         )

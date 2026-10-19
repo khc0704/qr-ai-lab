@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { common, discussionCopy, issueTypeLabel } from "@/i18n/zh-TW";
 import { updateIssueAction } from "@/lib/actions";
 import { isEdited } from "@/lib/format";
+import { isAdminRole } from "@/lib/roles";
 import { issueEditFormSchema, type IssueEditFormValues } from "@/lib/schemas";
 import type { Comment, Issue, IssueType, User } from "@/types/domain";
 
@@ -40,6 +41,8 @@ export function IssueThread({
   canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  // A closed thread only takes replies from admins (the backend answers 409 ISSUE_CLOSED to everyone else).
+  const canComment = issue.status === "open" || isAdminRole(currentUser.role);
   return (
     <div className="space-y-6">
       {editing ? (
@@ -85,9 +88,10 @@ export function IssueThread({
         currentUser={currentUser}
         target="issue"
         targetId={issue.id}
-        composer={!editing}
+        composer={!editing && canComment}
         editable={!editing}
       />
+      {!canComment ? <p className="text-xs text-muted-foreground">{discussionCopy.closedNoComposer}</p> : null}
     </div>
   );
 }

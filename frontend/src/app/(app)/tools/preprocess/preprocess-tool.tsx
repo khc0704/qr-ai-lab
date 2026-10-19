@@ -203,7 +203,7 @@ export function PreprocessTool({ ops }: { ops: PreprocessOp[] }) {
                 dataType={dataType}
                 spec={cleanSpec}
                 uploadId={upload?.id}
-                onPreview={(s, sp, n) => previewToolAction(upload?.id ?? "", s, sp, n)}
+                onPreview={(s, sp, n, o) => previewToolAction(upload?.id ?? "", s, sp, n, o)}
                 onPreviewLoaded={setLastPreview}
               />
             </PreprocessDrawer>

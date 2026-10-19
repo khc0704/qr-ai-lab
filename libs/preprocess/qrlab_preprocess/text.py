@@ -1,4 +1,7 @@
-"""Text ops: operate on the text column of a DataFrame so labels stay aligned when rows are dropped."""
+"""Text ops: operate on one or more text columns of a DataFrame so labels stay aligned when rows are dropped.
+
+``columns`` left empty means the text column of a TEXT dataset (``ctx.text_column``) or, in a TABULAR frame, every
+non-numeric column. Protected columns (target / id / label) are never touched and missing values stay missing."""
 
 from __future__ import annotations
 
@@ -9,24 +12,43 @@ import pandas as pd
 from qrlab_preprocess.base import Context, Op, Param, register
 
 TEXT = ("TEXT",)
+TEXT_AND_TABULAR = ("TEXT", "TABULAR")
+
+COLUMNS = Param("columns", "欄位", "columns", default=[], help="留空 = TEXT 的文字欄位，或表格裡所有文字型欄位")
 
 
-def _col(df: pd.DataFrame, ctx: Context) -> str:
-    if ctx.text_column not in df.columns:
-        raise ValueError(f"找不到文字欄位 {ctx.text_column}")
-    return ctx.text_column
+def _text_columns(df: pd.DataFrame, ctx: Context, selected: list[str] | None = None) -> list[str]:
+    if selected:
+        missing = [c for c in selected if c not in df.columns]
+        if missing:
+            raise ValueError(f"找不到文字欄位 {', '.join(missing)}")
+        cols = list(selected)
+    elif ctx.text_column in df.columns:
+        cols = [ctx.text_column]
+    else:
+        cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    cols = [c for c in cols if c not in ctx.protected]
+    if not cols:
+        raise ValueError("沒有可處理的文字欄位（目標 / ID / 標籤欄位受保護；請在 columns 指定欄位）")
+    return cols
 
 
 class _TextMap(Op):
-    data_types = TEXT
+    data_types = TEXT_AND_TABULAR
+    params = (COLUMNS,)
 
     def transform_text(self, s: pd.Series) -> pd.Series:
         raise NotImplementedError
 
     def apply(self, df: pd.DataFrame, ctx: Context) -> pd.DataFrame:
-        c = _col(df, ctx)
         out = df.copy()
-        out[c] = self.transform_text(out[c].astype(str))
+        for c in _text_columns(df, ctx, self.p["columns"]):
+            s = out[c]
+            mask = s.notna()
+            if not mask.any():
+                continue
+            transformed = self.transform_text(s[mask].astype(str))
+            out[c] = s.astype(object).where(~mask, transformed)
         return out
 
 
@@ -80,7 +102,7 @@ class RemoveNumbers(_TextMap):
 class Truncate(_TextMap):
     id = "text.truncate"
     label = "截斷長度"
-    params = (Param("max_chars", "最多字元", "int", default=512, min=8, max=100000),)
+    params = (COLUMNS, Param("max_chars", "最多字元", "int", default=512, min=8, max=100000))
 
     def transform_text(self, s: pd.Series) -> pd.Series:
         return s.str.slice(0, self.p["max_chars"])
@@ -130,6 +152,7 @@ class ReplaceRegex(_TextMap):
     label = "正規表達式取代"
     description = "Python 正規表達式；為避免災難性回溯，不接受巢狀量詞（如 (a+)+、(a*)*、(a{2,})+）。"
     params = (
+        COLUMNS,
         Param(
             "pattern",
             "樣式",
@@ -152,12 +175,16 @@ class ReplaceRegex(_TextMap):
 class DropEmpty(Op):
     id = "text.drop_empty"
     label = "刪除空白文字"
+    description = "移除文字為空白或缺值的列。"
     data_types = TEXT
     drops_rows = True
+    params = (COLUMNS,)
 
     def apply(self, df: pd.DataFrame, ctx: Context) -> pd.DataFrame:
-        c = _col(df, ctx)
-        return df[df[c].astype(str).str.strip() != ""].reset_index(drop=True)
+        keep = pd.Series(True, index=df.index)
+        for c in _text_columns(df, ctx, self.p["columns"]):
+            keep &= df[c].notna() & (df[c].astype(str).str.strip() != "")
+        return df[keep].reset_index(drop=True)
 
 
 @register
@@ -166,7 +193,8 @@ class Dedupe(Op):
     label = "刪除重複文字"
     data_types = TEXT
     drops_rows = True
+    params = (COLUMNS,)
 
     def apply(self, df: pd.DataFrame, ctx: Context) -> pd.DataFrame:
-        c = _col(df, ctx)
-        return df.drop_duplicates(subset=[c]).reset_index(drop=True)
+        cols = _text_columns(df, ctx, self.p["columns"])
+        return df.drop_duplicates(subset=cols).reset_index(drop=True)

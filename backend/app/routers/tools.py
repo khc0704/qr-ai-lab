@@ -45,7 +45,14 @@ async def preview(upload_id: str, body: ToolPreviewBody, user: CurrentUser) -> P
     """前後對照樣本、每個步驟的警告（如「文字數字轉成數值」把類別欄整欄變成缺值）；TABULAR / TEXT 另附輸入樣本與
     整條管線輸出的每欄統計（型別、缺值、唯一值數、範圍、最常見的值）與列數。"""
     return await tools_svc.preview(
-        upload_id, user, body.steps, sample=body.sample, spec=body.spec, task_type=body.task_type
+        upload_id,
+        user,
+        body.steps,
+        sample=body.sample,
+        spec=body.spec,
+        task_type=body.task_type,
+        thumb=body.thumb,
+        image_ids=body.image_ids,
     )
 
 

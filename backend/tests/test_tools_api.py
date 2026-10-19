@@ -174,7 +174,7 @@ async def test_analysis_job_and_validation(client, user, superadmin):
             "cpu_limit": 6,
             "memory_limit_mb": 8192,
             "storage_quota_mb": 4096,
-            "max_concurrent_jobs": 3,
+            "max_concurrent_jobs": 2,
             "max_jobs_per_user": 1,
             "result_ttl_hours": 48,
         },
@@ -185,6 +185,41 @@ async def test_analysis_job_and_validation(client, user, superadmin):
     pool = (await client.get("/api/v1/tools/pool", headers=user)).json()
     assert pool["cpu_limit"] == 6 and pool["max_jobs_per_user"] == 1
     assert (await client.get("/api/v1/projects/tools", headers=superadmin)).json()["cpu_limit"] == 6
+
+
+async def test_tool_pool_is_bounded_by_the_resource_pool(client, user, superadmin):
+    # conftest pool: GPU [0, 1], 8 cores, 32 GB, 2 running jobs
+    body = {
+        "gpu_limit": 2,
+        "cpu_limit": 9,
+        "memory_limit_mb": 8192,
+        "storage_quota_mb": 4096,
+        "max_concurrent_jobs": 3,
+        "max_jobs_per_user": 2,
+        "result_ttl_hours": 24,
+    }
+    r = await client.put("/api/v1/admin/settings/tool-pool", json=body, headers=superadmin)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "TOOL_POOL_EXCEEDS_POOL"
+    assert "CPU 9" in r.json()["detail"]["message"] and "同時任務數 3" in r.json()["detail"]["message"]
+    body.update(cpu_limit=8, max_concurrent_jobs=2)
+    assert (await client.put("/api/v1/admin/settings/tool-pool", json=body, headers=superadmin)).status_code == 200
+    # lowering the total pool shrinks the tool pool along with it (and the shared project's quota)
+    r = await client.put(
+        "/api/v1/admin/settings/resource-pool",
+        json={"gpu_indices": [0], "cpu_cores": 4, "memory_mb": 16384, "max_running_jobs": 1, "allow_backfill": True},
+        headers=superadmin,
+    )
+    assert r.status_code == 200, r.text
+    tool = (await client.get("/api/v1/admin/settings/tool-pool", headers=superadmin)).json()
+    assert (tool["gpu_limit"], tool["cpu_limit"], tool["memory_limit_mb"], tool["max_concurrent_jobs"]) == (
+        1,
+        4,
+        8192,
+        1,
+    )
+    assert tool["max_jobs_per_user"] == 2 and tool["result_ttl_hours"] == 24
+    status = (await client.get("/api/v1/tools/pool", headers=user)).json()  # what the tools pages show
+    assert status["cpu_limit"] == 4 and status["gpu_limit"] == 1 and status["max_concurrent_jobs"] == 1
 
 
 async def test_tool_rejects_bad_type_and_deletes(client, user):

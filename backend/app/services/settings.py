@@ -110,6 +110,33 @@ async def set_tool_pool(session: AsyncSession, d: ToolPool, actor_id: int) -> To
     return d
 
 
+def tool_pool_violations(tool: ToolPool, pool: ResourcePool) -> list[str]:
+    """Why ``tool`` does not fit inside the total resource pool (empty = it fits). The scheduler caps every job by
+    the pool anyway; this keeps the setting honest so the admin never sees a tool pool that cannot be delivered."""
+    out: list[str] = []
+    if tool.gpu_limit > len(pool.gpu_indices):
+        out.append(f"GPU {tool.gpu_limit} > 總池 {len(pool.gpu_indices)}")
+    if tool.cpu_limit > pool.cpu_cores:
+        out.append(f"CPU {tool.cpu_limit:g} > 總池 {pool.cpu_cores}")
+    if tool.memory_limit_mb > pool.memory_mb:
+        out.append(f"記憶體 {tool.memory_limit_mb} MB > 總池 {pool.memory_mb} MB")
+    if tool.max_concurrent_jobs > pool.max_running_jobs:
+        out.append(f"同時任務數 {tool.max_concurrent_jobs} > 總池 {pool.max_running_jobs}")
+    return out
+
+
+def clamp_tool_pool(tool: ToolPool, pool: ResourcePool) -> ToolPool:
+    """The tool pool shrunk to fit ``pool`` (used when the admin lowers the total pool)."""
+    return tool.model_copy(
+        update={
+            "gpu_limit": min(tool.gpu_limit, len(pool.gpu_indices)),
+            "cpu_limit": min(tool.cpu_limit, float(pool.cpu_cores)),
+            "memory_limit_mb": min(tool.memory_limit_mb, pool.memory_mb),
+            "max_concurrent_jobs": min(tool.max_concurrent_jobs, pool.max_running_jobs),
+        }
+    )
+
+
 def default_pool() -> ResourcePool:
     """Seed from the physical node so a fresh install can schedule immediately."""
     from app.services.node import detect_gpus, physical_cpu_cores, physical_memory_mb

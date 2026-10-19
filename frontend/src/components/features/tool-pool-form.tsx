@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updateToolPoolAction } from "@/lib/actions";
-import type { ToolPool } from "@/types/domain";
+import { cn } from "@/lib/utils";
+import type { ResourcePool, ToolPool } from "@/types/domain";
 
 const FIELDS: { key: keyof ToolPool; label: string; step?: number; min?: number }[] = [
   { key: "gpuLimit", label: "GPU" },
@@ -21,9 +22,29 @@ const FIELDS: { key: keyof ToolPool; label: string; step?: number; min?: number 
   { key: "resultTtlHours", label: "結果保留（小時）", min: 1 },
 ];
 
-export function ToolPoolForm({ pool, readOnly = false }: { pool: ToolPool; readOnly?: boolean }) {
+/** The tool pool is a slice of the total resource pool: these fields can never exceed it (the backend rejects). */
+export function toolPoolCaps(pool: ResourcePool): Partial<Record<keyof ToolPool, number>> {
+  return {
+    gpuLimit: pool.gpuIndices.length,
+    cpuLimit: pool.cpuCores,
+    memoryLimitMb: pool.memoryMb,
+    maxConcurrentJobs: pool.maxRunningJobs,
+  };
+}
+
+export function ToolPoolForm({
+  pool,
+  resourcePool,
+  readOnly = false,
+}: {
+  pool: ToolPool;
+  resourcePool: ResourcePool;
+  readOnly?: boolean;
+}) {
   const [v, setV] = useState(pool);
   const [pending, startTransition] = useTransition();
+  const caps = toolPoolCaps(resourcePool);
+  const over = FIELDS.filter((f) => caps[f.key] !== undefined && v[f.key] > (caps[f.key] as number));
   const dirty = JSON.stringify(v) !== JSON.stringify(pool);
   const save = () =>
     startTransition(async () => {
@@ -34,25 +55,47 @@ export function ToolPoolForm({ pool, readOnly = false }: { pool: ToolPool; readO
   return (
     <div className="space-y-3">
       <fieldset disabled={readOnly} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {FIELDS.map((f) => (
-          <div key={f.key} className="grid gap-1">
-            <Label htmlFor={`tool-${f.key}`} className="text-xs">
-              {f.label}
-            </Label>
-            <Input
-              id={`tool-${f.key}`}
-              type="number"
-              step={f.step}
-              min={f.min ?? 0}
-              className="text-right font-mono"
-              value={v[f.key]}
-              onChange={(e) => setV({ ...v, [f.key]: Number(e.target.value) })}
-            />
-          </div>
-        ))}
+        {FIELDS.map((f) => {
+          const cap = caps[f.key];
+          const exceeds = cap !== undefined && v[f.key] > cap;
+          return (
+            <div key={f.key} className="grid gap-1">
+              <Label htmlFor={`tool-${f.key}`} className="text-xs">
+                {f.label}
+                {cap !== undefined ? (
+                  <span className="ml-1 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
+                    ≤ {cap}
+                  </span>
+                ) : null}
+              </Label>
+              <Input
+                id={`tool-${f.key}`}
+                type="number"
+                step={f.step}
+                min={f.min ?? 0}
+                max={cap}
+                aria-invalid={exceeds || undefined}
+                className={cn("text-right font-mono", exceeds && "border-destructive")}
+                value={v[f.key]}
+                onChange={(e) => setV({ ...v, [f.key]: Number(e.target.value) })}
+              />
+            </div>
+          );
+        })}
       </fieldset>
+      {over.length ? (
+        <p className="text-xs text-destructive" data-testid="tool-pool-over">
+          超過總資源池：{over.map((f) => f.label).join("、")}。工具池是總資源池的一部分，不能比它大。
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          工具池佔總資源池的一部分（GPU {resourcePool.gpuIndices.length}、CPU {resourcePool.cpuCores} 核、記憶體{" "}
+          {Math.round(resourcePool.memoryMb / 1024)} GB、同時 {resourcePool.maxRunningJobs}{" "}
+          個任務）；調低總池時工具池會跟著縮。
+        </p>
+      )}
       {readOnly ? null : (
-        <Button size="sm" disabled={!dirty || pending} onClick={save} data-testid="save-tool-pool">
+        <Button size="sm" disabled={!dirty || pending || over.length > 0} onClick={save} data-testid="save-tool-pool">
           <Save />
           儲存工具池配額
         </Button>

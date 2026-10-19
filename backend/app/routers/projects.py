@@ -259,7 +259,15 @@ async def upload(
 )
 async def preview_upload(upload_id: int, body: PreprocessPreviewBody, access: ActiveMember, session: DbSession) -> dict:
     return await uploads_svc.preview(
-        session, access.project, upload_id, body.steps, sample=body.sample, spec=body.spec, task_type=body.task_type
+        session,
+        access.project,
+        upload_id,
+        body.steps,
+        sample=body.sample,
+        spec=body.spec,
+        task_type=body.task_type,
+        thumb=body.thumb,
+        image_ids=body.image_ids,
     )
 
 
