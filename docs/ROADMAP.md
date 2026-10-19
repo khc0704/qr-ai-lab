@@ -62,7 +62,7 @@
 - `SCHEDULER_EMBEDDED=true`：排程器跑在 backend 程序內，開發機與小型部署不需要 Redis。
 - 管理員「模型庫」頁：瀏覽器上傳、伺服器路徑匯入、內網 URL 下載，sha256 驗證、manifest、稽核；目錄回傳 `weights_ready`，精靈標示缺權重，建立任務時拒絕。
 - Dashboard 顯示「任務執行方式」（runner、哪些限制由 cgroup 強制、trainer python 路徑）；任務頁顯示分到的 CPU 核心。
-- infra：compose 只剩 MariaDB / Redis；`infra/systemd/*.service`、`infra/nginx/qr-ai-lab.conf`、`infra/install.sh`（走 PyPI / npm 鏡像）。
+- infra：compose 只剩 MariaDB / Redis；`infra/systemd/*.service`、`infra/nginx/qr-ai-lab.conf`、`infra/install-00…03-*.sh`（走 PyPI / npm 鏡像）。
 
 ## G. 這一輪（Keycloak、三種角色、資源限制、GPU 共用、使用率歷史、前處理服務）新增的能力
 

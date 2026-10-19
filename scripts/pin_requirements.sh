@@ -23,7 +23,7 @@ pin() {  # pin <dir> <runtime extras> <dev packages…>
   # torch and its CUDA wheels (nvidia-*, triton) are NOT pinned here: they depend on the host's driver and come from
   # a separate index (trainer/requirements-torch.txt, installed first); pip then keeps that torch for the rest.
   freeze() { "$pip" freeze --exclude-editable | grep -v -E '^(pip|setuptools|wheel)==' | grep -v -E '^(torch|torchvision|triton|cuda-)' | grep -v -P '^nvidia-(?!ml-py)' ; }
-  { echo "# Pinned runtime dependencies for $dir (installed with pip, e.g. by infra/install.sh through the company PyPI proxy)."
+  { echo "# Pinned runtime dependencies for $dir (installed with pip, e.g. by infra/install-02-backend.sh through the company PyPI proxy)."
     echo "# Regenerate with scripts/pin_requirements.sh after changing pyproject.toml; backend/tests/test_infra_contracts.py checks it."
     echo "-e ../libs/preprocess"; freeze; } > "$ROOT/$dir/requirements.txt"
   "$pip" install --quiet "$@"
