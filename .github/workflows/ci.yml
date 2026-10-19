@@ -30,7 +30,7 @@ jobs:
           cache: pip
           cache-dependency-path: trainer/requirements-dev.txt
       # CPU-only wheels are enough for the unit tests; the deep-learning run happens on the GPU host.
-      - run: cd trainer && pip install -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
+      - run: cd trainer && pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements-dev.txt
       - run: cd trainer && ruff check . && ruff format --check .
       - run: cd trainer && pytest -q
 

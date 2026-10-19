@@ -2,7 +2,7 @@
 # Re-pin backend/requirements.txt, backend/requirements-dev.txt, trainer/requirements.txt and
 # trainer/requirements-dev.txt from the dependency ranges in each pyproject.toml.
 # Run on a developer machine (pip reads /etc/pip.conf or PIP_INDEX_URL for the company PyPI proxy) after changing
-# a pyproject.toml; commit the four files. The server and CI only ever `pip install -r` them.
+# a pyproject.toml; commit the four files. torch itself is pinned by hand in trainer/requirements-torch.txt. The server and CI only ever `pip install -r` them.
 #   scripts/pin_requirements.sh            # both packages
 #   scripts/pin_requirements.sh backend    # one package
 set -euo pipefail
@@ -15,9 +15,14 @@ pin() {  # pin <dir> <runtime extras> <dev packages…>
   local pip="$tmp/venv/bin/pip"
   "$pip" install --quiet --upgrade pip
   "$pip" install --quiet -e "$ROOT/libs/preprocess"
+  if [ "$dir" = trainer ]; then  # torch first, CPU wheels are enough for pinning the rest
+    "$pip" install --quiet -r "$ROOT/trainer/requirements-torch.txt" --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+  fi
   "$pip" install --quiet "$ROOT/$dir$extras"
   # pip freeze lists the editable package with an absolute path; the repo-relative form is what the server needs
-  freeze() { "$pip" freeze --exclude-editable | grep -v -E '^(pip|setuptools|wheel)=='; }
+  # torch and its CUDA wheels (nvidia-*, triton) are NOT pinned here: they depend on the host's driver and come from
+  # a separate index (trainer/requirements-torch.txt, installed first); pip then keeps that torch for the rest.
+  freeze() { "$pip" freeze --exclude-editable | grep -v -E '^(pip|setuptools|wheel)==' | grep -v -E '^(torch|torchvision|triton|cuda-)' | grep -v -P '^nvidia-(?!ml-py)' ; }
   { echo "# Pinned runtime dependencies for $dir (installed with pip, e.g. by infra/install.sh through the company PyPI proxy)."
     echo "# Regenerate with scripts/pin_requirements.sh after changing pyproject.toml; backend/tests/test_infra_contracts.py checks it."
     echo "-e ../libs/preprocess"; freeze; } > "$ROOT/$dir/requirements.txt"

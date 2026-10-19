@@ -64,7 +64,7 @@ cd backend && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-
 bash scripts/pin_requirements.sh                 # 改了 pyproject.toml 的依賴之後：重新釘 backend / trainer 的 requirements*.txt（全專案只用 pip；CI 會比對）
 npm run screenshots:keycloak                      # 以 AUTH_MODE=keycloak 啟動的前後端 + 假 Keycloak 跑登入 / 登出截圖
 # trainer
-cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest && .venv/bin/python -m trainer check   # check：這個環境能跑哪些家族
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cu126 && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest   # torch 先、依驅動選 index（cu126 / cu130 / cpu） && .venv/bin/python -m trainer check   # check：這個環境能跑哪些家族
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest             # 共用前處理套件
 node scripts/build_manual.js                      # 使用手冊 DOCX（再用 soffice 轉 PDF）
 # model zoo（在有網路的機器）
@@ -117,7 +117,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 16. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
-17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。全專案只用 pip（沒有 uv / poetry）：改了 pyproject 的依賴就跑 `scripts/pin_requirements.sh` 重新釘 `requirements*.txt`。
+17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。全專案只用 pip（沒有 uv / poetry）：改了 pyproject 的依賴就跑 `scripts/pin_requirements.sh` 重新釘 `requirements*.txt`；torch 只釘在 `trainer/requirements-torch.txt`，`nvidia-*` / `triton` 永遠不寫進 requirements（它們隨 torch 來，而且版本跟驅動綁）。
 18. 任何寫入由不可信名稱決定路徑的地方（zip 成員、MinIO 物件、URL 檔名、trainer 回報的路徑）都走 `safe_join` / `job_relpath`；任務子程序的環境只從 `runner.ENV_PASSTHROUGH` 白名單繼承，不要把伺服器 secret 傳進去。
 
 ## 文件地圖

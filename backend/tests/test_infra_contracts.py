@@ -79,6 +79,12 @@ def test_requirements_cover_pyproject(subdir: str, extras: tuple[str, ...]):
     carry the runtime pins unchanged (scripts/pin_requirements.sh regenerates both)."""
     runtime = _pins(ROOT / subdir / "requirements.txt")
     dev = _pins(ROOT / subdir / "requirements-dev.txt")
+    torch_file = ROOT / subdir / "requirements-torch.txt"
+    if torch_file.exists():  # torch is pinned apart (CUDA flavour depends on the host driver)
+        runtime |= _pins(torch_file)
+        dev |= _pins(torch_file)
+        banned = [k for k in runtime if k.startswith(("nvidia-", "triton", "cuda-")) and k != "nvidia-ml-py"]
+        assert not banned, f"{subdir}: CUDA wheels must not be pinned (they come with torch): {banned}"
     declared = _declared(ROOT / subdir / "pyproject.toml", extras)
     missing = sorted(declared - set(runtime))
     assert not missing, f"{subdir}: not pinned in requirements.txt: {missing}"
