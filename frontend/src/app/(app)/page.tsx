@@ -6,6 +6,8 @@ import { Greeting } from "@/components/features/greeting";
 import { ProjectCard } from "@/components/features/project-card";
 import { StatCard } from "@/components/features/stat-card";
 import { StatusBadge } from "@/components/features/status-badge";
+import { Suspense } from "react";
+import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,7 +16,7 @@ import { formatBytes } from "@/lib/format";
 import { getAdminOverview, getCapacity, listJobs, listProjectRequests, listProjects } from "@/lib/api";
 import { getCurrentUser, isAdmin } from "@/lib/session";
 
-export default async function HomePage() {
+async function Home() {
   const user = await getCurrentUser();
   const admin = isAdmin(user);
   const [projects, jobs, runningJobs, requests, capacity, overview] = await Promise.all([
@@ -171,5 +173,13 @@ export default async function HomePage() {
         </div>
       </section>
     </>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Home />
+    </Suspense>
   );
 }

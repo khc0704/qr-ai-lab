@@ -5,6 +5,8 @@ import { ResourceMeter } from "@/components/features/resource-meter";
 import { ResourcePoolForm } from "@/components/features/resource-pool-form";
 import { ToolDefaultsForm } from "@/components/features/tool-defaults-form";
 import { StatCard } from "@/components/features/stat-card";
+import { Suspense } from "react";
+import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +14,7 @@ import { getAdminOverview, getNodeStatus, getResourcePool, getToolDefaults } fro
 import { formatMb } from "@/lib/format";
 import { can, getCurrentUser } from "@/lib/session";
 
-export default async function AdminDashboardPage() {
+async function Dashboard() {
   const [overview, pool, node, me, toolDefaults] = await Promise.all([
     getAdminOverview(),
     getResourcePool(),
@@ -209,5 +211,13 @@ export default async function AdminDashboardPage() {
         </aside>
       </div>
     </>
+  );
+}
+
+export default function AdminDashboardPage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Dashboard />
+    </Suspense>
   );
 }

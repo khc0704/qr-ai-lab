@@ -36,6 +36,7 @@ paths:
 - 檔名：所有元件與檔案 kebab-case（`status-badge.tsx` 匯出 `StatusBadge`）；hooks `use-xxx.ts`；路由資料夾 kebab-case。
 - 文案繁體中文，集中在元件常數或 `src/i18n/zh-TW.ts`（預留），不要散落硬編碼。
 - Lint 用 ESLint 直接執行（Next.js 16 已移除 `next lint`）；格式用 Prettier + `prettier-plugin-tailwindcss`（class 排序）。`npm run typecheck` 會先 `next typegen` 再 `tsc`。
+- **頁面的資料一律放在頁面自己的 `<Suspense>` 裡**（Next 16.4 instant navigation）：`page.tsx` 的 default export 必須是同步函式，只回傳 `<Suspense fallback={<PageSkeleton />}><Content params={params} /></Suspense>`，`await`（`@/lib/api`、`getCurrentUser()`、`params`、`searchParams`）全部寫在內層的 async 元件。父 layout 的 Suspense **不算**：client 端導覽只重新渲染目標 page segment，dev overlay 會報「Instant: encountered uncached data during prerendering or a navigation」。`src/app/pages-stream.test.ts`（`npm test`）會擋 `export default async function` 的頁面。
 - Cache Components 已開啟（`cacheComponents: true`），build 會驗證：讀 `params` / `searchParams` / `cookies()` / `headers()` 的 Server Component 與呼叫 `usePathname()` / `useSearchParams()` 的 Client Component 必須包在 `<Suspense>`（fallback 給 Skeleton 或無作用中狀態的同一元件）；伺服器渲染不可用 `new Date()` / `Math.random()`（放 client 元件 + `useSyncExternalStore`）；`(app)/layout.tsx` 不讀 cookie。範例見 `components/layout/breadcrumbs.tsx`、`components/features/greeting.tsx`。
 - `components/ui/**` 是從 shadcn registry 複製的，可為了 React Compiler 的 ESLint 規則做最小修改（已改：`sidebar.tsx` skeleton 寬度改用 `useId`、`hooks/use-mobile.ts` 改用 `useSyncExternalStore`）；重新用 `npx shadcn add --overwrite` 更新時要重套這兩處。
 - react-hook-form 取值用 `useWatch`，不要 `form.watch()`（React Compiler 無法記憶化）。

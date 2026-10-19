@@ -1,9 +1,11 @@
 import { QueueTable } from "@/components/features/queue-table";
+import { Suspense } from "react";
+import { TableSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { getJobLog, getQueue, getResourcePool } from "@/lib/api";
 import type { JobLogSnapshot } from "@/types/domain";
 
-export default async function AdminQueuePage() {
+async function Queue() {
   const [{ running, queued }, pool] = await Promise.all([getQueue(), getResourcePool()]);
   // Snapshots for every drawer at once (parallel); the drawer then continues live from each `lastEventId`.
   const jobs = [...running, ...queued];
@@ -20,5 +22,13 @@ export default async function AdminQueuePage() {
       />
       <QueueTable running={running} queued={queued} logs={logs} />
     </>
+  );
+}
+
+export default function AdminQueuePage() {
+  return (
+    <Suspense fallback={<TableSkeleton />}>
+      <Queue />
+    </Suspense>
   );
 }

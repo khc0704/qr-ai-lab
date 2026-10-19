@@ -1,9 +1,11 @@
+import { Suspense } from "react";
+import { TableSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { getResourcePool, listProjects } from "@/lib/api";
 import { can, getCurrentUser } from "@/lib/session";
 import { QuotasTable } from "./quotas-table";
 
-export default async function AdminQuotasPage() {
+async function Quotas() {
   const [projects, pool, me] = await Promise.all([
     listProjects({ includeArchived: true, includePersonal: true }),
     getResourcePool(),
@@ -32,5 +34,13 @@ export default async function AdminQuotasPage() {
         }))}
       />
     </>
+  );
+}
+
+export default function AdminQuotasPage() {
+  return (
+    <Suspense fallback={<TableSkeleton />}>
+      <Quotas />
+    </Suspense>
   );
 }

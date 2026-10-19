@@ -9,8 +9,12 @@ import { PreprocessTool } from "./preprocess-tool";
 
 export const metadata = { title: "資料前處理" };
 
-export default async function PreprocessToolPage() {
+async function Tool() {
   const ops = await listPreprocessOps();
+  return <PreprocessTool ops={ops} />;
+}
+
+export default function PreprocessToolPage() {
   return (
     <>
       <PageHeader
@@ -26,7 +30,9 @@ export default async function PreprocessToolPage() {
           記錄了步驟與擬合出的數值，之後建立訓練任務可用相同步驟重現。
         </AlertDescription>
       </Alert>
-      <PreprocessTool ops={ops} />
+      <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+        <Tool />
+      </Suspense>
       <Suspense fallback={<Skeleton className="h-40 w-full" />}>
         <ToolJobs kind="preprocess" />
       </Suspense>

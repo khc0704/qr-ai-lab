@@ -1,10 +1,12 @@
 import { FolderKanban } from "lucide-react";
 import { EmptyState } from "@/components/features/empty-state";
 import { ProjectCard } from "@/components/features/project-card";
+import { Suspense } from "react";
+import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { listJobs, listProjects } from "@/lib/api";
 
-export default async function ProjectsPage() {
+async function Projects() {
   const [projects, jobs] = await Promise.all([listProjects({ includeArchived: true }), listJobs({ limit: 100 })]);
   const active = projects.filter((p) => p.status === "active");
   const archived = projects.filter((p) => p.status === "archived");
@@ -31,5 +33,13 @@ export default async function ProjectsPage() {
         </section>
       ) : null}
     </>
+  );
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Projects />
+    </Suspense>
   );
 }
