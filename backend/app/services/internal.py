@@ -11,9 +11,11 @@ from app.catalog import loader
 from app.core.errors import bad_request
 from app.events.bus import get_bus
 from app.models import Artifact, Job
-from app.schemas.internal import ArtifactRef, JobSpec, MetricsBody, ResultBody, StatusBody
+from app.schemas.internal import ArtifactRef, ArtifactRegister, JobSpec, MetricsBody, ResultBody, StatusBody
+from app.services import artifacts as artifacts_svc
 from app.services import jobs as jobs_svc
 from app.storage.local import get_storage
+from app.utils.jsonsafe import finite
 
 CONTAINER_INPUT = "/job/input"
 CONTAINER_OUTPUT = "/job/output"
@@ -96,22 +98,34 @@ async def update_status(session: AsyncSession, job: Job, body: StatusBody) -> Jo
 
 
 async def add_metrics(session: AsyncSession, job: Job, body: MetricsBody) -> Job:
+    # NaN / ±inf from the trainer (a degenerate metric) become null: JSON columns and responses reject them
+    new_metrics: dict[str, Any] = finite(body.metrics)
+    leaderboard_row: dict[str, Any] | None = finite(body.leaderboard_row)
     metrics: dict[str, Any] = dict(job.metrics or {})
-    metrics.update(body.metrics)
+    metrics.update(new_metrics)
     if body.epoch is not None:
         metrics["epoch"] = body.epoch
     if body.trial is not None:
         metrics["trial"] = body.trial
-    if body.leaderboard_row:
+    if leaderboard_row:
         lb = list(metrics.get("leaderboard") or [])
-        lb.append(body.leaderboard_row)
+        lb.append(leaderboard_row)
         direction = loader.task_metric(job.task_type)[1] if job.task_type else "maximize"
-        lb.sort(key=lambda r: r.get("metric", 0), reverse=(direction == "maximize"))
-        metrics["leaderboard"] = lb[:200]
+        scored = [r for r in lb if isinstance(r.get("metric"), int | float)]
+        unscored = [r for r in lb if not isinstance(r.get("metric"), int | float)]  # metric was NaN: ranked last
+        scored.sort(key=lambda r: r["metric"], reverse=(direction == "maximize"))
+        metrics["leaderboard"] = (scored + unscored)[:200]
     job.metrics = metrics
     await session.commit()
-    await get_bus().publish(job.id, "metric", {"epoch": body.epoch, "trial": body.trial, "metrics": body.metrics})
+    await get_bus().publish(job.id, "metric", {"epoch": body.epoch, "trial": body.trial, "metrics": new_metrics})
     return job
+
+
+async def register_artifact(session: AsyncSession, job: Job, body: ArtifactRegister) -> Artifact:
+    """Artifact registration from the trainer: NaN / ±inf in ``metrics`` / ``metadata`` become null before the row
+    is stored and echoed back (the 201 response is serialised with ``allow_nan=False``)."""
+    clean = body.model_copy(update={"metrics": finite(body.metrics), "metadata": finite(body.metadata)})
+    return await artifacts_svc.register_from_job(session, job, clean)
 
 
 def job_relpath(job: Job, rel: str) -> str:
@@ -130,9 +144,10 @@ def job_relpath(job: Job, rel: str) -> str:
 
 
 async def set_result(session: AsyncSession, job: Job, body: ResultBody) -> Job:
-    if body.result is not None:
-        job.result = body.result
-        winner = body.result.get("model_family")
+    result: dict[str, Any] | None = finite(body.result)  # NaN / ±inf → null
+    if result is not None:
+        job.result = result
+        winner = result.get("model_family")
         if isinstance(winner, str) and winner and job.kind == "train":
             job.model_family = winner
     if body.output_path:

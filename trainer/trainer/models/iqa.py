@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage, stats
 
+from trainer import jsonsafe
 from trainer import metrics as M
 from trainer.data.split import holdout
 from trainer.dataset import Dataset
@@ -239,7 +240,7 @@ class ImageQualityTrainer(BaseTrainer):
         model_dir.mkdir(parents=True, exist_ok=True)
         (model_dir / "baseline.json").write_text(json.dumps(self.baseline.to_json()), encoding="utf-8")
         meta = {"threshold": self.baseline.threshold, "z_threshold": self.baseline.z_threshold, "metrics": self.metrics}
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         rep = out / "report"
         rep.mkdir(parents=True, exist_ok=True)
         with (rep / "baseline_ranges.csv").open("w", newline="", encoding="utf-8") as f:
@@ -314,7 +315,7 @@ class ImageQualityInferencer(BaseInferencer):
             table = self._compare(matrix, options)
             summary.update(table["summary"])
             summary["per_metric"] = table["per_metric"]
-            (out / "comparison.json").write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+            (out / "comparison.json").write_text(jsonsafe.dumps(table, indent=2), encoding="utf-8")
             with (out / "comparison.csv").open("w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=list(table["per_metric"][0].keys()))
                 w.writeheader()

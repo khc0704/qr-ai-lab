@@ -3,18 +3,26 @@ the groups are in embedding space, which images stand out."""
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from trainer.jsonsafe import finite
 from trainer.log import warn
 from trainer.models.iqa import LABELS, METRICS, image_metrics
 
 MAX_IMAGES = 2000
 MAX_POINTS = 600
 MIN_GROUP_IMAGES = 3  # below this a group's median / IQR say nothing: excluded from the drift ratio
+
+
+def _f(v: Any) -> float | None:
+    """A statistic as a float, or ``None`` when it does not exist (NaN / inf): the report never carries NaN."""
+    v = float(v)
+    return v if np.isfinite(v) else None
 
 
 def _groups(root: Path, paths: list[Path]) -> list[str]:
@@ -33,9 +41,16 @@ def _groups(root: Path, paths: list[Path]) -> list[str]:
 
 
 def _zscore(M: np.ndarray) -> np.ndarray:
-    mu = np.nanmedian(M, axis=0)
-    sd = np.nanstd(M, axis=0) + 1e-9
-    return (M - mu) / sd
+    """Robust z-score per column. A missing cell (NaN) sits at the column median (z = 0) and a column that is NaN
+    everywhere is all zeros, so the embedding is always finite."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice
+        mu = np.nanmedian(M, axis=0)
+        sd = np.nanstd(M, axis=0)
+    mu = np.where(np.isfinite(mu), mu, 0.0)
+    sd = np.where(np.isfinite(sd), sd, 0.0) + 1e-9
+    Z = (M - mu) / sd
+    return np.where(np.isfinite(Z), Z, 0.0)
 
 
 def _pca2(E: np.ndarray) -> np.ndarray:
@@ -79,36 +94,47 @@ def quality_report(
         if k % 10 == 0:
             tick(0.6 * (k + 1) / len(paths))
     M = np.asarray(rows, dtype=np.float64)
+    missing = ~np.isfinite(M)
+    if missing.any():
+        # a metric that could not be computed for an image (degenerate / tiny picture) is a missing cell, never NaN
+        # in the report: the group statistics skip it and the embedding puts it at the column median
+        warn(f"{int(missing.sum())} IQA metric value(s) could not be computed; treated as missing")
+        M[missing] = np.nan
     g = np.asarray(groups)
     tick(0.6)
 
     # --- per group statistics + drift ----------------------------------------------------------------
     per_group: dict[str, dict[str, Any]] = {}
-    for lab in labels:
-        sel = g == lab
-        q1, med, q3 = np.percentile(M[sel], [25, 50, 75], axis=0)
-        per_group[lab] = {
-            "images": int(sel.sum()),
-            "insufficient": bool(sel.sum() < MIN_GROUP_IMAGES),
-            "median": {n: float(v) for n, v in zip(METRICS, med, strict=True)},
-            "iqr": {n: float(v) for n, v in zip(METRICS, q3 - q1, strict=True)},
-        }
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slice → NaN → None below
+        for lab in labels:
+            sel = g == lab
+            q1, med, q3 = np.nanpercentile(M[sel], [25, 50, 75], axis=0)
+            per_group[lab] = {
+                "images": int(sel.sum()),
+                "insufficient": bool(sel.sum() < MIN_GROUP_IMAGES),
+                "median": {n: _f(v) for n, v in zip(METRICS, med, strict=True)},
+                "iqr": {n: _f(v) for n, v in zip(METRICS, q3 - q1, strict=True)},
+            }
+        overall_sd = np.nanstd(M, axis=0)
+    overall_sd = np.where(np.isfinite(overall_sd), overall_sd, 0.0) + 1e-9
     valid = [lab for lab in labels if not per_group[lab]["insufficient"]]
     small = [lab for lab in labels if per_group[lab]["insufficient"]]
     drift: list[dict[str, Any]] = []
-    overall_sd = M.std(axis=0) + 1e-9
     for j, name in enumerate(METRICS):
-        meds = np.array([per_group[lab]["median"][name] for lab in valid])
-        iqrs = np.array([per_group[lab]["iqr"][name] for lab in valid])
-        spread = float(meds.max() - meds.min()) if len(valid) > 1 else 0.0
-        within = float(np.median(iqrs)) if len(valid) else 0.0
+        meds = np.array([m for lab in valid if (m := per_group[lab]["median"][name]) is not None])
+        iqrs = np.array([q for lab in valid if (q := per_group[lab]["iqr"][name]) is not None])
+        spread = float(meds.max() - meds.min()) if len(meds) > 1 else 0.0
+        within = float(np.median(iqrs)) if len(iqrs) else 0.0
         note: str | None = None
         ratio: float | None
         if len(labels) < 2:
             ratio = 0.0
         elif len(valid) < 2:
             ratio, note = None, f"樣本不足（每個群組至少 {MIN_GROUP_IMAGES} 張才計算飄移比）"
-        elif not np.isfinite(within) or within <= 1e-9:
+        elif len(meds) < 2:
+            ratio, note = None, "指標無法計算（有群組算不出這個指標，無法比較）"
+        elif within <= 1e-9:
             ratio, note = None, "群內無變化（指標在群組內是常數，無法比較）"
         else:
             ratio = round(spread / within, 3)
@@ -116,12 +142,17 @@ def quality_report(
                 note = f"未計入樣本不足的群組：{', '.join(small)}"
         pval = None
         if len(valid) > 1:
-            try:
-                from scipy.stats import kruskal
+            samples = [M[g == lab, j] for lab in valid]
+            samples = [s[np.isfinite(s)] for s in samples]
+            if all(len(s) for s in samples):
+                try:
+                    from scipy.stats import kruskal
 
-                pval = float(kruskal(*[M[g == lab, j] for lab in valid]).pvalue)
-            except Exception:
-                pval = None
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)  # all values tied → 0 / 0 → NaN → None
+                        pval = _f(kruskal(*samples).pvalue)
+                except Exception:
+                    pval = None
         drift.append(
             {
                 "metric": name,
@@ -153,6 +184,7 @@ def quality_report(
             emb_kind = f"dino:{backbone}"
         except Exception as e:
             warn(f"dino embedding unavailable ({type(e).__name__}: {e}); using the IQA metric vector instead")
+    E = np.nan_to_num(np.asarray(E, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
     coords = _pca2(E)
     En = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
     centroids = {lab: En[g == lab].mean(axis=0) for lab in labels}
@@ -171,7 +203,7 @@ def quality_report(
         try:
             from sklearn.metrics import silhouette_score
 
-            silhouette = float(silhouette_score(En, g, metric="cosine"))
+            silhouette = _f(silhouette_score(En, g, metric="cosine"))
         except Exception:
             silhouette = None
     # outliers: distance to the own group's centroid, robust z within the group
@@ -181,12 +213,14 @@ def quality_report(
             for i in range(len(paths))
         ]
     )
+    dist = np.nan_to_num(dist, nan=0.0, posinf=0.0, neginf=0.0)
     oscore = np.zeros(len(paths))
     for lab in labels:
         sel = g == lab
         med = np.median(dist[sel])
-        mad = np.median(np.abs(dist[sel] - med)) + 1e-9
-        oscore[sel] = 0.6745 * (dist[sel] - med) / mad
+        mad = np.median(np.abs(dist[sel] - med))
+        if mad > 1e-9:  # MAD = 0 (identical images, tiny group): nobody stands out, score 0 instead of x / 0
+            oscore[sel] = 0.6745 * (dist[sel] - med) / mad
     order = np.argsort(-oscore)
     outliers = [
         {
@@ -292,25 +326,28 @@ def quality_report(
         )
     tick(1.0)
     stride = max(1, len(paths) // MAX_POINTS)
-    return {
-        "images_total": len(paths),
-        "sampled": sampled,
-        "groups": [{"name": lab, **per_group[lab]} for lab in labels],
-        "metrics": [{"name": n, "label": LABELS.get(n, n)} for n in METRICS],
-        "drift": drift,
-        "embedding": emb_kind,
-        "silhouette": silhouette,
-        "similarity": {"labels": labels, "matrix": [[round(v, 4) for v in row] for row in sim]},
-        "points": [
-            {
-                "id": str(paths[i].relative_to(root)),
-                "group": groups[i],
-                "x": round(float(coords[i, 0]), 4),
-                "y": round(float(coords[i, 1]), 4),
-                "outlier": round(float(oscore[i]), 2),
-            }
-            for i in range(0, len(paths), stride)
-        ],
-        "outliers": outliers,
-        "recommendations": recs,
-    }
+    # finite(): the report is JSON for the backend and the browser, NaN / inf would fail the job at registration
+    return finite(
+        {
+            "images_total": len(paths),
+            "sampled": sampled,
+            "groups": [{"name": lab, **per_group[lab]} for lab in labels],
+            "metrics": [{"name": n, "label": LABELS.get(n, n)} for n in METRICS],
+            "drift": drift,
+            "embedding": emb_kind,
+            "silhouette": silhouette,
+            "similarity": {"labels": labels, "matrix": [[round(v, 4) for v in row] for row in sim]},
+            "points": [
+                {
+                    "id": str(paths[i].relative_to(root)),
+                    "group": groups[i],
+                    "x": round(float(coords[i, 0]), 4),
+                    "y": round(float(coords[i, 1]), 4),
+                    "outlier": round(float(oscore[i]), 2),
+                }
+                for i in range(0, len(paths), stride)
+            ],
+            "outliers": outliers,
+            "recommendations": recs,
+        }
+    )

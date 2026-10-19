@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 
+from trainer import jsonsafe
 from trainer import metrics as M
 from trainer.data.image import all_images, class_folders
 from trainer.data.split import holdout
@@ -202,7 +203,7 @@ class YoloTrainer(BaseTrainer):
             "imgsz": self.meta.get("imgsz"),
             "metrics": self.metrics,
         }
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         arts = [
             ArtifactOut(
                 name="yolo",
@@ -337,9 +338,7 @@ class YoloInferencer(BaseInferencer):
                 rows.append(row)
                 objs.append(row)
             per_image.append({"id": image_id, "n_objects": n, "objects": objs})
-        (out / "detections.jsonl").write_text(
-            "\n".join(json.dumps(x, ensure_ascii=False) for x in per_image), encoding="utf-8"
-        )
+        (out / "detections.jsonl").write_text("\n".join(jsonsafe.dumps(x) for x in per_image), encoding="utf-8")
         extra = (
             [
                 ArtifactOut(
@@ -526,7 +525,7 @@ def _save_bank(
         "metrics": metrics,
         "inference_modes": DinoFewShotTrainer.inference_modes,
     }
-    (model_dir / "metadata.json").write_text(json.dumps(full_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    (model_dir / "metadata.json").write_text(jsonsafe.dumps(full_meta, indent=2), encoding="utf-8")
     return ArtifactOut(
         name="dino_fewshot",
         kind="model",
@@ -737,7 +736,7 @@ class DinoPatchCoreTrainer(BaseTrainer):
             "grid": self.grid,
             "metrics": self.metrics,
         }
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
             ArtifactOut(
                 name="dino_patchcore",

@@ -9,7 +9,7 @@ def holdout(n: int, y, task: str | None, val_ratio: float = 0.2, seed: int = 42)
     if n < 5:
         idx = np.arange(n)
         return idx, idx
-    n_val = max(1, int(round(n * val_ratio)))
+    n_val = max(1, round(n * val_ratio))
     if task == "classification" and y is not None:
         labels = np.asarray(y)
         classes, counts = np.unique(labels, return_counts=True)
@@ -18,7 +18,7 @@ def holdout(n: int, y, task: str | None, val_ratio: float = 0.2, seed: int = 42)
             for c in classes:
                 members = np.flatnonzero(labels == c)
                 rng.shuffle(members)
-                k = max(1, int(round(len(members) * val_ratio)))
+                k = max(1, round(len(members) * val_ratio))
                 val.extend(members[:k].tolist())
             val_idx = np.array(sorted(val))
             train_idx = np.setdiff1d(np.arange(n), val_idx)

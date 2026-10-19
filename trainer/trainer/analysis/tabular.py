@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from trainer.jsonsafe import finite
 from trainer.log import info
 
 MAX_ROWS = 50_000
@@ -15,6 +16,16 @@ MAX_CORR_COLUMNS = 40
 MAX_CATEGORIES = 50
 MAX_PERM_COLUMNS = 50  # permutation importance: top columns by mutual information
 MAX_PERM_ROWS = 2000  # permutation importance: holdout rows (5 repeats × columns × rows predictions)
+
+
+def _num(v: Any) -> float | None:
+    """A statistic as a float, or ``None`` when it does not exist (NaN / inf: one value has no std, a constant
+    target has no R², …). The report never carries NaN."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
 
 
 def _dtype(s: pd.Series) -> str:
@@ -41,17 +52,17 @@ def _column_summary(df: pd.DataFrame) -> list[dict[str, Any]]:
         if entry["dtype"] == "numeric" and s.notna().any():
             x = s.astype(float)
             q1, q3 = x.quantile([0.25, 0.75])
-            iqr = float(q3 - q1)
-            z = ((x - x.mean()) / (x.std() or 1.0)).abs()
+            std = _num(x.std())  # NaN for a single value (ddof = 1)
+            z = ((x - x.mean()) / (std or 1.0)).abs()
             entry.update(
                 {
-                    "mean": float(x.mean()),
-                    "std": float(x.std() or 0.0),
-                    "min": float(x.min()),
-                    "max": float(x.max()),
-                    "skew": float(x.skew()) if len(x.dropna()) > 2 else 0.0,
+                    "mean": _num(x.mean()),
+                    "std": std if std is not None else 0.0,
+                    "min": _num(x.min()),
+                    "max": _num(x.max()),
+                    "skew": (_num(x.skew()) if len(x.dropna()) > 2 else None) or 0.0,
                     "outlier_ratio": round(float((z > 5).mean()), 4),
-                    "iqr": iqr,
+                    "iqr": _num(q3 - q1),
                 }
             )
         elif entry["dtype"] in ("categorical", "text"):
@@ -222,7 +233,7 @@ def profile(
                     else RandomForestClassifier(n_estimators=200, random_state=0, n_jobs=max(1, n_jobs))
                 )
                 est.fit(Xtr, ytr)
-                score = float(est.score(Xte, yte))
+                score = _num(est.score(Xte, yte))  # None: a constant holdout target has no R²
                 Xpe, ype = Xte, yte
                 if len(Xte) > MAX_PERM_ROWS:
                     sel = np.sort(np.random.default_rng(0).choice(len(Xte), MAX_PERM_ROWS, replace=False))
@@ -247,7 +258,7 @@ def profile(
                 relevance["model"] = {
                     "estimator": type(est).__name__,
                     "metric": "r2" if task == "regression" else "accuracy",
-                    "holdout_score": round(score, 4),
+                    "holdout_score": round(score, 4) if score is not None else None,
                     "train_rows": len(ytr),
                     "test_rows": len(yte),
                     "columns_used": len(cols),
@@ -332,7 +343,7 @@ def profile(
                 }
             )
         m = relevance.get("model") or {}
-        if "holdout_score" in m:
+        if m.get("holdout_score") is not None:
             metric = "R²" if m["metric"] == "r2" else "accuracy"
             if m["holdout_score"] < (0.3 if m["metric"] == "r2" else 0.6):
                 recommendations.append(
@@ -369,7 +380,8 @@ def profile(
         )
     report["recommendations"] = recommendations
     tick(1.0)
-    return report
+    # finite(): the report is JSON for the backend and the browser, NaN / inf would fail the job at registration
+    return finite(report)
 
 
 def compact(report: dict[str, Any]) -> dict[str, Any]:

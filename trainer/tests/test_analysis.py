@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -105,6 +107,68 @@ def test_image_drift_marks_tiny_groups_and_constant_metrics_insufficient(tmp_pat
     flat = [d for d in rep["drift"] if d["drift_ratio"] is None]
     assert flat and all("群內無變化" in d["note"] or "樣本不足" in d["note"] for d in flat)
     assert all(d["drift_ratio"] < 1e6 for d in rep["drift"] if d["drift_ratio"] is not None)
+
+
+def test_image_quality_report_on_identical_images_is_json_safe(tmp_path):
+    # identical images in every group: MAD = 0 for the outlier score, within-group IQR = 0, every Kruskal sample
+    # tied (h / ties = 0 / 0), cosine silhouette on zero vectors — none of it may surface as NaN, because the
+    # backend serialises the registered report with allow_nan=False and a NaN would fail the job
+    for group, level in (("tool_a", 100), ("tool_b", 160)):
+        d = tmp_path / group
+        d.mkdir()
+        for i in range(4):
+            Image.fromarray(np.full((32, 32), level, dtype=np.uint8)).save(d / f"{i}.png")
+    rep = image_analysis.quality_report(tmp_path, embedding="metrics")
+    json.dumps(rep, allow_nan=False)
+    assert rep["images_total"] == 8 and all(p["outlier"] == 0 for p in rep["points"]) and rep["outliers"] == []
+    assert all(d["p_value"] is None or 0 <= d["p_value"] <= 1 for d in rep["drift"])
+    assert all(d["drift_ratio"] is None or d["drift_ratio"] < 1e6 for d in rep["drift"])
+    assert rep["silhouette"] is None or -1 <= rep["silhouette"] <= 1
+    assert all(v is None or abs(v) <= 1 for row in rep["similarity"]["matrix"] for v in row)
+
+
+def test_image_quality_report_tolerates_metrics_that_cannot_be_computed(tmp_path, monkeypatch):
+    rng = np.random.default_rng(4)
+    for group, base in (("tool_a", 90), ("tool_b", 150)):
+        d = tmp_path / group
+        d.mkdir()
+        for i in range(4):
+            a = np.clip(rng.normal(base, 20, size=(48, 64)), 0, 255).astype(np.uint8)
+            Image.fromarray(a).save(d / f"img{i}.png")
+    real = image_analysis.image_metrics
+
+    def broken(im):  # one metric is NaN on every image, another is inf on some
+        m = real(im)
+        m["spectral_slope"] = float("nan")
+        m["snr"] = float("inf") if im.size[0] % 2 == 0 else m["snr"]
+        return m
+
+    monkeypatch.setattr(image_analysis, "image_metrics", broken)
+    rep = image_analysis.quality_report(tmp_path, embedding="metrics")
+    json.dumps(rep, allow_nan=False)
+    slope = next(d for d in rep["drift"] if d["metric"] == "spectral_slope")
+    assert slope["drift_ratio"] is None and slope["insufficient"] and "無法計算" in slope["note"]
+    assert slope["group_medians"] == {"tool_a": None, "tool_b": None} and slope["p_value"] is None
+    assert all(g["median"]["spectral_slope"] is None and g["iqr"]["spectral_slope"] is None for g in rep["groups"])
+    assert rep["drift"][0]["metric"].startswith("brightness")  # the other metrics still rank normally
+    assert len(rep["points"]) == 8 and all(abs(p["outlier"]) < 1e6 for p in rep["points"])
+
+
+def test_tabular_profile_is_json_safe_with_degenerate_columns():
+    df = pd.DataFrame(
+        {
+            "single": [1.0] + [np.nan] * 39,  # one value: std is NaN with ddof = 1
+            "const": [2.0] * 40,
+            "x": np.arange(40, dtype=float),
+            "y": np.arange(40, dtype=float) * 2,
+        }
+    )
+    rep = tabular_analysis.profile(df, target="y")
+    json.dumps(rep, allow_nan=False)
+    cols = {c["name"]: c for c in rep["columns"]}
+    assert cols["single"]["std"] == 0.0 and cols["single"]["mean"] == 1.0 and cols["single"]["outlier_ratio"] == 0
+    assert cols["const"]["std"] == 0.0 and "const" in " ".join(r["text"] for r in rep["recommendations"])
+    json.dumps(tabular_analysis.compact(rep), allow_nan=False)
 
 
 def test_tabular_permutation_importance_is_capped():

@@ -113,3 +113,72 @@ def test_spectrum_preprocess_state(tmp_path):
     ds = dataset.load("SPECTRUM", "anomaly_detection", input_dir, spec, tmp_path / "work")
     assert ds.X.shape == (20, 64, 1) and abs(float(ds.X.mean())) < 1e-4
     assert len(ds.preprocess[0]["state"]["reference"]) == 64
+
+
+def test_tabular_encode_fit_then_replay(tmp_path, monkeypatch):
+    """Categorical encoding learns the category list at train time and replays it on inference rows, including a
+    category the training data never had (all-zero one-hot row)."""
+    input_dir, out1, out2 = tmp_path / "input", tmp_path / "out1", tmp_path / "out2"
+    input_dir.mkdir()
+    cls_frame().to_csv(input_dir / "train.csv", index=False)
+    steps = [
+        {"op": "tabular.encode", "params": {"columns": ["line"], "method": "onehot"}},
+        {"op": "tabular.standardize", "params": {"columns": ["x1", "x2"]}},
+    ]
+    spec = {
+        "job_id": 10,
+        "kind": "train",
+        "project_slug": "demo",
+        "data_type": "TABULAR",
+        "task_type": "classification",
+        "mode": "manual",
+        "model_family": "tabular.linear",
+        "config": {},
+        "input": {"kind": "upload", "format": "csv", "spec": {"target": "label", "preprocess": steps}},
+        "artifact": None,
+        "resources": {"gpu": 0, "cpu": 1, "memory_mb": 512},
+        "timeout_minutes": 10,
+        "families": families_for_spec("tabular.linear"),
+        "zoo_weights": {},
+    }
+    _env(monkeypatch, input_dir, out1, "train")
+    backend = FakeBackend(spec)
+    assert runtime.run(backend) == 0, backend.statuses[-1]
+    model = next(a for a in backend.artifacts_ if a["kind"] == "model")
+    assert [s["has_state"] for s in model["metadata"]["preprocess"]] == [True, True]
+    fitted = json.loads((out1 / "model" / "preprocess.json").read_text())
+    assert fitted[0]["op"] == "tabular.encode" and fitted[0]["state"] == {"categories": {"line": ["A", "B"]}}
+    # the model was trained on the encoded columns, not on the text column
+    assert model["metadata"]["feature_columns"] == ["x1", "x2", "line__A", "line__B"]
+
+    spec2 = {
+        **spec,
+        "kind": "inference",
+        "mode": None,
+        "config": {},
+        "input": {
+            "kind": "inline",
+            "format": "json",
+            "spec": {},
+            "rows": [
+                {"x1": 1.0, "x2": -1.0, "line": "A"},
+                {"x1": 1.0, "x2": -1.0, "line": "C"},  # unseen category → all-zero one-hot row, still predicts
+                {"x1": 1.0, "x2": -1.0, "line": None},
+            ],
+        },
+        "artifact": {
+            "id": 1,
+            "name": "m",
+            "version": 1,
+            "model_family": "tabular.linear",
+            "framework": "sklearn",
+            "file": "model",
+            "metadata": model["metadata"],
+        },
+    }
+    (tmp_path / "input2").mkdir()
+    _env(monkeypatch, tmp_path / "input2", out2, "inference", model_dir=out1)
+    backend2 = FakeBackend(spec2)
+    assert runtime.run(backend2) == 0, backend2.statuses[-1]
+    preview = backend2.result_[0]["preview"]
+    assert len(preview) == 3 and all(r["prediction"] in ("pass", "fail") for r in preview)

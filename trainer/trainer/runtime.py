@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from trainer import dataset, limits
+from trainer import dataset, jsonsafe, limits
 from trainer.api_client import Backend
 from trainer.config import Env
 from trainer.fetch import fetch_data_source
@@ -197,9 +197,7 @@ def _train(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
         (model_dir / PREPROCESS_STATE_FILE).write_text(json.dumps(ds.preprocess, ensure_ascii=False), encoding="utf-8")
     metrics_dir = env.output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    (metrics_dir / "metrics.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-    )
+    (metrics_dir / "metrics.json").write_text(jsonsafe.dumps(summary, indent=2, default=str), encoding="utf-8")
     artifacts.append(
         ArtifactOut(name="metrics", kind="metrics", path="metrics/metrics.json", framework=trainer.framework)
     )
@@ -316,9 +314,7 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     reporter.set_stage("exporting")
     csv_path = out_dir / "predictions.csv"
     _write_rows(res.rows, csv_path)
-    (out_dir / "summary.json").write_text(
-        json.dumps(res.summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-    )
+    (out_dir / "summary.json").write_text(jsonsafe.dumps(res.summary, indent=2, default=str), encoding="utf-8")
     artifacts = [
         ArtifactOut(
             name=f"predictions-{spec['job_id']}",
@@ -384,9 +380,7 @@ def _preprocess(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) 
             if p.is_file():
                 z.write(p, p.relative_to(work).as_posix())
     shutil.rmtree(work, ignore_errors=True)
-    (out_dir / "summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-    )
+    (out_dir / "summary.json").write_text(jsonsafe.dumps(summary, indent=2, default=str), encoding="utf-8")
     for line in summary.get("steps") or []:
         info(f"step: {line}")
     info(
@@ -442,9 +436,7 @@ def _analysis(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) ->
         raise ValueError(f"未知的分析 {kind}")
     ctx.check()
     reporter.set_stage("exporting")
-    (out_dir / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-    )
+    (out_dir / "report.json").write_text(jsonsafe.dumps(report, indent=2, default=str), encoding="utf-8")
     for r in report.get("recommendations") or []:
         info(f"{r.get('level', 'info')}: {r.get('text')}")
     registered = _register(
@@ -466,9 +458,7 @@ def _write_rows(rows: list[dict[str, Any]], path: Path) -> None:
         w = csv.DictWriter(f, fieldnames=keys or ["id"])
         w.writeheader()
         for r in rows:
-            w.writerow(
-                {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v) for k, v in r.items()}
-            )
+            w.writerow({k: (jsonsafe.dumps(v) if isinstance(v, (list, dict)) else v) for k, v in r.items()})
     with path.with_suffix(".jsonl").open("w", encoding="utf-8") as f:
         for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+            f.write(jsonsafe.dumps(r, default=str) + "\n")

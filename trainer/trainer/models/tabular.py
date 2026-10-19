@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
+from trainer import jsonsafe
 from trainer import metrics as M
 from trainer.data.split import holdout
 from trainer.data.tabular import preprocessor
@@ -212,7 +213,7 @@ class TabularTrainer(BaseTrainer):
             "threshold": self.threshold,
             "metrics": self.metrics,
         }
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         arts = [
             ArtifactOut(
                 name=self.family.split(".")[-1],
@@ -226,7 +227,7 @@ class TabularTrainer(BaseTrainer):
         if importance:
             rep = out / "report"
             rep.mkdir(parents=True, exist_ok=True)
-            (rep / "feature_importance.json").write_text(json.dumps(importance, ensure_ascii=False, indent=2))
+            (rep / "feature_importance.json").write_text(jsonsafe.dumps(importance, indent=2), encoding="utf-8")
             arts.append(
                 ArtifactOut(
                     name="feature_importance",

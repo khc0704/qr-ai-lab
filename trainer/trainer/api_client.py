@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 import httpx
 
+from trainer.jsonsafe import finite
 from trainer.log import warn
 
 Retry = Literal["short", "long", "none"]
@@ -56,6 +57,11 @@ class Backend:
         self._artifacts: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _req(self, method: str, path: str, json: dict[str, Any] | None = None, *, retry: Retry = "short") -> Any:
+        """The single place every payload leaves the trainer: NaN / ±inf → null, numpy scalars → Python, so a
+        degenerate metric or metadata value can never make the backend answer 500 (its responses use
+        ``allow_nan=False``)."""
+        if json is not None:
+            json = finite(json)
         budget = self.budgets[retry]
         started = time.monotonic()
         attempt = 0

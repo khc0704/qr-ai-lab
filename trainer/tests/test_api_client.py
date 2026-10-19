@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
+import numpy as np
 import pytest
 
 from trainer.api_client import Backend
@@ -57,8 +60,6 @@ def test_artifact_registration_is_memoised():
     posted: list[dict] = []
 
     def ok(request: httpx.Request) -> httpx.Response:
-        import json
-
         posted.append(json.loads(request.content))
         return httpx.Response(201, json={"id": len(posted), "version": len(posted)})
 
@@ -68,6 +69,31 @@ def test_artifact_registration_is_memoised():
     other = b.artifact(name="metrics", kind="metrics", path="metrics/metrics.json", framework="sklearn")
     assert first == again == {"id": 1, "version": 1} and other["id"] == 2 and len(posted) == 2
     assert posted[0]["idempotency_key"] == "model:m:model"
+
+
+def test_payloads_never_carry_nan_or_numpy_scalars():
+    posted: list[dict] = []
+
+    def ok(request: httpx.Request) -> httpx.Response:
+        assert b"NaN" not in request.content and b"Infinity" not in request.content
+        posted.append(json.loads(request.content))
+        return httpx.Response(201, json={"id": 1, "version": 1})
+
+    b, _ = _backend(ok)
+    b.metrics({"rmse": float("nan"), "r2": np.float32(0.5)}, trial=1, leaderboard_row={"metric": float("inf")})
+    b.artifact(
+        name="r",
+        kind="report",
+        path="output/report.json",
+        framework="numpy",
+        metadata={"score": float("nan"), "nested": [1.0, float("-inf")]},
+    )
+    b.result(result={"silhouette": float("nan"), "n": np.int64(3)})
+    b.status(progress=float("nan"), stage="x")
+    assert posted[0]["metrics"] == {"rmse": None, "r2": 0.5} and posted[0]["leaderboard_row"] == {"metric": None}
+    assert posted[1]["metadata"] == {"score": None, "nested": [1.0, None]}
+    assert posted[2]["result"] == {"silhouette": None, "n": 3}
+    assert posted[3]["progress"] is None
 
 
 def test_env_configures_budgets(monkeypatch):

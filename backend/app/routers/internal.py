@@ -8,7 +8,6 @@ from app.core.deps import DbSession, InternalJob, LiveInternalJob
 from app.schemas.artifact import ArtifactRead
 from app.schemas.common import Ok
 from app.schemas.internal import ArtifactRegister, JobSpec, MetricsBody, ResultBody, StatusBody
-from app.services import artifacts as artifacts_svc
 from app.services import internal as internal_svc
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal"])
@@ -33,7 +32,7 @@ async def metrics(body: MetricsBody, job: LiveInternalJob, session: DbSession) -
 
 @router.post("/{job_id}/artifacts", response_model=ArtifactRead, status_code=201)
 async def register_artifact(body: ArtifactRegister, job: LiveInternalJob, session: DbSession) -> ArtifactRead:
-    return ArtifactRead.model_validate(await artifacts_svc.register_from_job(session, job, body))
+    return ArtifactRead.model_validate(await internal_svc.register_artifact(session, job, body))
 
 
 @router.post("/{job_id}/result", response_model=Ok)

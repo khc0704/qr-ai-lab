@@ -10,7 +10,6 @@ Both learn an embedding per window plus a reconstruction error. Inference modes:
 from __future__ import annotations
 
 import itertools
-import json
 import math
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,7 @@ from typing import Any
 import joblib
 import numpy as np
 
+from trainer import jsonsafe
 from trainer import metrics as M
 from trainer.data.split import holdout
 from trainer.dataset import Dataset
@@ -349,7 +349,7 @@ class _SeqTrainer(BaseTrainer):
         if self.head is not None:
             joblib.dump(self.head, model_dir / "head.joblib")
         meta = {"threshold": self.threshold, "config": self.config, "metrics": self.metrics}
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
             ArtifactOut(
                 name=self.family.split(".")[-1],

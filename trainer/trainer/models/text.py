@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from trainer import jsonsafe
 from trainer import metrics as M
 from trainer.data.split import holdout
 from trainer.dataset import Dataset
@@ -123,7 +124,7 @@ class BertClassifierTrainer(BaseTrainer):
             "base": self.meta.get("base"),
             "metrics": self.metrics,
         }
-        (model_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
             ArtifactOut(
                 name="bert_classifier",
