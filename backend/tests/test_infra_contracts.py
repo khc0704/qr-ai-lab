@@ -104,3 +104,20 @@ def test_nothing_uses_uv():
     assert not (ROOT / "backend/uv.lock").exists() and not (ROOT / "trainer/uv.lock").exists()
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "uv" not in ci.replace("ubuntu", "")
+
+
+def test_source_packages_are_not_gitignored():
+    """`.gitignore` has broad rules (data/, runs/ …); none of them may swallow a Python package (trainer/trainer/data
+    went missing from the repo this way)."""
+    import subprocess
+
+    pkgs = [
+        p
+        for root in ("backend/app", "trainer/trainer", "libs/preprocess/qrlab_preprocess")
+        for p in (ROOT / root).rglob("__init__.py")
+        if "__pycache__" not in p.parts
+    ]
+    assert pkgs
+    rel = [str(p.relative_to(ROOT)) for p in pkgs]
+    res = subprocess.run(["git", "check-ignore", "--no-index", *rel], cwd=ROOT, capture_output=True, text=True)
+    assert res.stdout.strip() == "", f"gitignored source packages: {res.stdout}"
