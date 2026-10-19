@@ -172,7 +172,8 @@ export function NewJobWizard({
   const setUpload = (u: Upload | null) => {
     setUploadState(u);
     setLastPreview(null);
-    if (u && isTrain) setEditorOpen(true); // training inputs usually want preprocessing: open the editor right away
+    // The editor is not opened automatically here: the upload happens on step ①, while the target / id columns the
+    // editor protects are entered on step ②, where 開啟編輯器 sits next to those fields.
   };
   const [inlineText, setInlineText] = useState(
     cloneFrom?.input.rows ? JSON.stringify(cloneFrom.input.rows, null, 1) : "",
@@ -463,7 +464,7 @@ export function NewJobWizard({
             onOpen={() => setEditorOpen(true)}
             hint={
               inputKind === "upload"
-                ? "上傳後編輯器會自動開啟；也可以不加任何步驟。"
+                ? "填好欄位後按「開啟編輯器」加入步驟並預覽；也可以不加任何步驟。"
                 : "資料來源會在任務內處理：步驟可以先挑，但沒有檔案就無法預覽。"
             }
           />

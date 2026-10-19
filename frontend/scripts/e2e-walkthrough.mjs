@@ -459,13 +459,15 @@ try {
     await page.fill("#spec-target", "yield_pct");
     await page.fill("#spec-categorical", "line");
     await page.fill("#spec-id_column", "lot_id");
-    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "補值");
-    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "標準化（z-score）");
     await shot(
       page,
       "wizard-2-fields",
-      "② 欄位與前處理：目標欄位 yield_pct、類別欄位 line、識別欄位 lot_id；加入「補值」與「標準化」兩個步驟",
+      "② 欄位與前處理：目標欄位 yield_pct、類別欄位 line、識別欄位 lot_id（編輯器會保護這些欄位）；前處理步驟在「開啟編輯器」裡加",
     );
+    await page.getByTestId("open-editor").click();
+    await page.getByRole("dialog").waitFor();
+    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "補值");
+    await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "標準化（z-score）");
     await page.getByRole("button", { name: "抽樣預覽" }).click();
     await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
     await page.getByTestId("preprocess-grid").waitFor({ timeout: 60_000 });
@@ -659,6 +661,8 @@ try {
       await page.getByText("264 列").waitFor({ timeout: 60_000 });
       await page.getByRole("button", { name: "下一步" }).click();
       await page.fill("#spec-label", "label");
+      await page.getByTestId("open-editor").click();
+      await page.getByRole("dialog").waitFor();
       await pick(page, page.getByRole("combobox", { name: "新增前處理步驟" }), "SNV");
       await page.getByRole("button", { name: "抽樣預覽" }).click();
       await page.getByText("處理後").first().waitFor({ timeout: 60_000 });
