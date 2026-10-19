@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
-const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
+const OUT =
+  process.env.OUT_DIR ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/screenshots/e2e");
 const VIEWPORT = { width: 1440, height: 900 };
 await mkdir(OUT, { recursive: true });
 const readJson = async (f, d) => {
@@ -76,7 +77,7 @@ try {
   );
   await page.selectOption("#username", "superadmin");
   await page.getByRole("button", { name: "登入" }).click();
-  await page.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), {
+  await page.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.includes("/login"), {
     timeout: 60_000,
   });
   await settle(page, 1200);
@@ -112,7 +113,7 @@ try {
   await p2.waitForURL(/openid-connect\/auth/, { timeout: 30_000 });
   await p2.selectOption("#username", "alice");
   await p2.getByRole("button", { name: "登入" }).click();
-  await p2.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.startsWith("/login"), {
+  await p2.waitForURL((u) => u.origin === new URL(BASE).origin && !u.pathname.includes("/login"), {
     timeout: 60_000,
   });
   await settle(p2, 1200);

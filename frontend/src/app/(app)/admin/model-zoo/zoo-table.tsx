@@ -23,6 +23,7 @@ import { familyLabel } from "@/i18n/zh-TW";
 import { deleteWeightAction, importWeightAction } from "@/lib/actions";
 import { formatBytes } from "@/lib/format";
 import type { ModelZooEntry, ZooStatus } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 const zooStatusLabel: Partial<Record<ZooStatus, string>> = { error: "匯入失敗" };
 
@@ -57,7 +58,7 @@ export function ZooTable({
     try {
       const form = new FormData();
       form.append("file", file, file.name);
-      const res = await fetch(`/api/admin/model-zoo/${encodeURIComponent(entry.id)}/upload`, {
+      const res = await fetch(withBase(`/api/admin/model-zoo/${encodeURIComponent(entry.id)}/upload`), {
         method: "POST",
         body: form,
       });

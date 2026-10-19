@@ -5,6 +5,7 @@ import { useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { setDefaultArtifactAction } from "@/lib/actions";
+import { withBase } from "@/lib/base-path";
 
 export function ArtifactRowActions({
   id,
@@ -41,7 +42,7 @@ export function ArtifactRowActions({
         </Button>
       ) : null}
       <Button variant="ghost" size="icon-sm" aria-label="下載" asChild>
-        <a href={`/api/download/artifacts/${id}/download`} download>
+        <a href={withBase(`/api/download/artifacts/${id}/download`)} download>
           <Download />
         </a>
       </Button>

@@ -86,7 +86,12 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(
-        title="QR AI Lab API", version="0.1.0", lifespan=lifespan, docs_url="/docs", openapi_url="/openapi.json"
+        title="QR AI Lab API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs",
+        openapi_url="/openapi.json",
+        root_path=s.root_path,  # external prefix stripped by nginx (e.g. /ai-lab-api)
     )
     app.add_middleware(
         CORSMiddleware, allow_origins=s.cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]

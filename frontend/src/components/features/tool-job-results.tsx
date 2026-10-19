@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes } from "@/lib/format";
 import type { Job } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 /** Result of a preprocessing job: summary, and a one-shot download of the zip. */
 export function PreprocessJobResults({ job }: { job: Job }) {
@@ -42,7 +43,7 @@ export function PreprocessJobResults({ job }: { job: Job }) {
                 </Alert>
               ) : (
                 <Button asChild data-testid="tool-download">
-                  <a href={`/api/download/jobs/${job.id}/download`} download>
+                  <a href={withBase(`/api/download/jobs/${job.id}/download`)} download>
                     <Download />
                     下載結果 zip{typeof r.zip_size_bytes === "number" ? `（${formatBytes(r.zip_size_bytes)}）` : ""}
                   </a>

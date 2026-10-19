@@ -25,6 +25,7 @@
 // Authorization itself is decided by the backend on every API call; this only avoids rendering the shell.
 import type { NextAuthRequest } from "next-auth";
 import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+import { BASE_PATH, withBase } from "@/lib/base-path";
 
 type AuthedHandler = (req: NextAuthRequest, event: NextFetchEvent) => NextResponse;
 
@@ -50,21 +51,30 @@ function unauthorizedJson(expired: boolean): NextResponse {
   );
 }
 
+// Next.js is inconsistent about whether nextUrl.pathname carries the configured basePath inside the proxy, so
+// normalise it ourselves: `pathname` below is always base-less and every redirect target gets BASE_PATH back.
+function appPath(request: NextRequest): string {
+  const raw = request.nextUrl.pathname;
+  if (BASE_PATH && (raw === BASE_PATH || raw.startsWith(`${BASE_PATH}/`))) return raw.slice(BASE_PATH.length) || "/";
+  return raw;
+}
+
 function respond(request: NextRequest, decision: Decision): NextResponse {
-  const { pathname, search, searchParams } = request.nextUrl;
+  const { search, searchParams } = request.nextUrl;
+  const pathname = appPath(request);
   const headers = new Headers(request.headers);
   headers.delete(ACCESS_TOKEN_HEADER); // never trust a client-supplied value
   if (pathname.startsWith("/login")) {
     // A stale session (refresh failed, backend rejected the token) lands here with ?reason= / ?error=;
     // bouncing it back to "/" would loop, so only redirect plain visits.
     if (decision.authed && !searchParams.has("reason") && !searchParams.has("error")) {
-      return NextResponse.redirect(new URL("/", request.url));
+      return NextResponse.redirect(new URL(withBase("/"), request.url));
     }
     return NextResponse.next({ request: { headers } });
   }
   if (!decision.authed) {
     if (pathname.startsWith("/api/")) return unauthorizedJson(decision.expired);
-    const url = new URL("/login", request.url);
+    const url = new URL(withBase("/login"), request.url);
     if (decision.expired) url.searchParams.set("reason", "expired");
     if (pathname !== "/") url.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(url);
@@ -90,6 +100,8 @@ export async function proxy(request: NextRequest, event: NextFetchEvent): Promis
 
 export const config = {
   matcher: [
+    // the bare base path (https://host/ai-lab): Next matches it as an empty path, which the pattern below misses
+    "/",
     // every page (not Next internals, static files or /api/*) …
     "/((?!api/|_next/|favicon\\.ico|.*\\.[a-zA-Z0-9]+$).*)",
     // … plus the route handlers that forward the token to the backend (never /api/auth/*)

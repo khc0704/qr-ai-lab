@@ -184,7 +184,7 @@ try {
     await page.fill("#password", "user1234");
     await shot(page, "login-filled", "以一般使用者 user 登入", { fullPage: false });
     await page.getByRole("button", { name: "登入" }).click();
-    await page.waitForURL(`${BASE}/`);
+    await page.waitForURL((u) => u.href.replace(/\/$/, "") === BASE.replace(/\/$/, "")); // home (with or without a base path)
     await settle(page);
     await shot(page, "home-user-empty", "一般使用者首頁：尚無專案、任務與申請（總資源池來自 backend /capacity）");
     await goto(page, "/project-requests");

@@ -35,6 +35,7 @@ import { formatBytes, formatMetric } from "@/lib/format";
 import { canCancelJob, canProject, projectRole } from "@/lib/roles";
 import { can, getCurrentUser } from "@/lib/session";
 import type { AnalysisKind, InferenceMode, PreprocessStep } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: string }> }) {
   const { slug, jobId } = await params;
@@ -238,7 +239,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
             </span>
             {job.status === "succeeded" ? (
               <Button variant="outline" size="sm" asChild className="ml-auto">
-                <a href={`/api/download/jobs/${job.id}/download`} download>
+                <a href={withBase(`/api/download/jobs/${job.id}/download`)} download>
                   <Download />
                   下載結果（CSV）
                 </a>

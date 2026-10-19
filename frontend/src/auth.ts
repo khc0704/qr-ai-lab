@@ -7,6 +7,7 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import Keycloak from "next-auth/providers/keycloak";
+import { withBase } from "@/lib/base-path";
 
 const issuer = process.env.AUTH_KEYCLOAK_ISSUER ?? "";
 const clientId = process.env.AUTH_KEYCLOAK_ID ?? "";
@@ -85,6 +86,8 @@ async function refreshDeduped(token: JWT): Promise<JWT> {
 }
 
 export const authConfig: NextAuthConfig = {
+  // Auth.js would otherwise take AUTH_URL's path (/ai-lab) as its own base path; its routes live at <base>/api/auth.
+  basePath: withBase("/api/auth"),
   providers: [Keycloak({ clientId, clientSecret, issuer })],
   session: { strategy: "jwt", maxAge: Number(process.env.AUTH_SESSION_MAX_AGE ?? 12 * 60 * 60) },
   pages: { signIn: "/login", error: "/login" },

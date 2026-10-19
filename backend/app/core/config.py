@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     app_env: Literal["dev", "test", "prod"] = "dev"
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]  # comma separated in env
+    # External path prefix when nginx strips it before proxying (https://qrit.tsmc.com/ai-lab-api → /): keeps
+    # /docs and the OpenAPI "servers" entry correct. Empty when the API is served at the origin root.
+    root_path: str = ""
     log_level: str = "INFO"
 
     # Persistence

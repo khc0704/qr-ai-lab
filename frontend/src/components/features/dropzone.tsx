@@ -10,6 +10,7 @@ import { toUpload } from "@/lib/api/mappers";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Upload } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 /** Matches the backend / nginx limit; a larger file is refused before any byte is sent. */
 export const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -72,7 +73,7 @@ export function Dropzone({
       const form = new FormData();
       for (const [k, v] of Object.entries(fields ?? {})) form.append(k, v);
       form.append("file", f);
-      const url = endpoint ?? `/api/upload/${encodeURIComponent(slug ?? "")}`;
+      const url = withBase(endpoint ?? `/api/upload/${encodeURIComponent(slug ?? "")}`);
       const res = await fetch(url, { method: "POST", body: form });
       if (!res.ok) throw new Error(await readError(res));
       let json: Record<string, unknown>;

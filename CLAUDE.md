@@ -42,7 +42,7 @@ qr-ai-lab/
 ├─ frontend/           Next.js 16（src/app、src/components/{ui,layout,features}、src/lib、src/proxy.ts）
 ├─ backend/            FastAPI：app/{core,db,events,models,schemas,routers,services,scheduler,storage,catalog}、alembic/、tests/
 ├─ trainer/            訓練 / 推論 runtime：trainer/{runtime,automl,dataset,fetch,metrics}.py、trainer/{data,models}/、tests/
-└─ infra/              docker-compose.yml（mariadb、redis）、systemd/（三個 service + qrlab.env.example）、nginx/、install.sh、mariadb/
+└─ infra/              docker-compose.yml（mariadb :3307、redis :6380）、systemd/（三個 service + env 範本）、nginx/（/ai-lab 與 /ai-lab-api 的 location 範本）、install-00…03-*.sh、mariadb/
 ```
 
 frontend（已接 backend：`src/lib/api` 為 server-only fetch 層、`src/lib/actions.ts` 為 Server Actions、`src/app/api/*` 代理上傳 / SSE / 下載）、backend、trainer、infra 都已建立。不要自創頂層目錄。
@@ -71,7 +71,7 @@ node scripts/build_manual.js                      # 使用手冊 DOCX（再用 s
 python3 scripts/fetch_model_zoo.py --dest ./model_zoo     # 再複製到伺服器的 MODEL_ZOO_ROOT
 # infra
 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d            # mariadb、redis（只有這兩個跑在 docker）
-./infra/install.sh            # 伺服器：venv（pip + requirements.txt，走 /etc/pip.conf 的 proxy）、前端 build、migration、systemd 服務；--update 升級
+./infra/install-00-base.sh && ./infra/install-01-docker.sh && ./infra/install-02-backend.sh && ./infra/install-03-frontend.sh   # 伺服器：四步各自可重跑（--update 升級）；nginx 範本在 infra/nginx/（網站 /ai-lab、API /ai-lab-api）
 # design system
 python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ```
@@ -95,6 +95,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - Job 的 `requested_gpu_memory_mb`：有值 = 可與其他任務依剩餘顯存共用一張 GPU（資源池 `gpu_share`，trainer 以 `set_per_process_memory_fraction` 自限）；`null` = 獨占整張
 - 工具（不需專案）：`POST /tools/uploads` → `/preview`（即時抽樣）→ `/process`（preprocess 任務）或 `/analyze`（analysis 任務：`tabular_profile | image_quality`，實作在 `trainer/trainer/analysis/`）；上傳只在 `DATA_ROOT/tools/<id>/`（無資料庫列），建任務時移進任務 input；前處理結果 `GET /jobs/{id}/download` 交付一次即刪
 - GPU 共用是**實測模式**：`services/gpu.py` 用 pynvml 實際用量 + 暖機期（`GPU_WARMUP_S`）的「申請 − 實測」；不要改回以申請量保留
+- 正式網址 `https://qrit.tsmc.com/ai-lab`（前端，`NEXT_PUBLIC_BASE_PATH` 在 build 時編進去；手寫 URL 一律 `withBase()`）與 `https://qrit.tsmc.com/ai-lab-api`（backend，`ROOT_PATH`）；MariaDB / Redis 主機 port 3307 / 6380
 - 所有環境變數檔與變數清單：`docs/ENVIRONMENT.md`
 
 ## 全域工作規則

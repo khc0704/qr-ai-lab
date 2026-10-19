@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { deleteArtifactAction, setDefaultArtifactAction } from "@/lib/actions";
+import { withBase } from "@/lib/base-path";
 
 export function ModelRowActions({
   id,
@@ -58,7 +59,7 @@ export function ModelRowActions({
       <Tooltip>
         <TooltipTrigger asChild>
           <Button variant="ghost" size="icon-sm" aria-label="下載" asChild>
-            <a href={`/api/download/artifacts/${id}/download`} download>
+            <a href={withBase(`/api/download/artifacts/${id}/download`)} download>
               <Download />
             </a>
           </Button>

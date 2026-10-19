@@ -91,8 +91,10 @@ def test_requirements_cover_pyproject(subdir: str, extras: tuple[str, ...]):
 
 def test_nothing_uses_uv():
     """The project is installed with pip everywhere (dev, CI, server)."""
-    script = (ROOT / "infra/install.sh").read_text()
-    assert "uv " not in script and "requirements.txt" in script
+    for name in ("install-00-base.sh", "install-01-docker.sh", "install-02-backend.sh", "install-03-frontend.sh"):
+        script = (ROOT / "infra" / name).read_text()
+        assert "uv " not in script, name
+    assert "requirements.txt" in (ROOT / "infra/install-02-backend.sh").read_text()
     assert not (ROOT / "backend/uv.lock").exists() and not (ROOT / "trainer/uv.lock").exists()
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "uv" not in ci.replace("ubuntu", "")

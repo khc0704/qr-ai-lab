@@ -11,6 +11,7 @@ import { useJobStream } from "@/hooks/use-job-stream";
 import { jobStageLabel } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
 import type { Job, JobLogSnapshot } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 export function JobLive({
   job,
@@ -74,7 +75,7 @@ export function JobLive({
           status={live.status}
           title="job.log"
           maxHeight="max-h-[640px]"
-          downloadHref={`/api/download/jobs/${job.id}/logs/download`}
+          downloadHref={withBase(`/api/download/jobs/${job.id}/logs/download`)}
         />
       </TabsContent>
       <TabsContent value="results" className="pt-4">
@@ -98,7 +99,7 @@ export function JobLogLive({ job, log, maxHeight }: { job: Job; log: JobLogSnaps
       status={live.status}
       title="job.log"
       maxHeight={maxHeight}
-      downloadHref={`/api/download/jobs/${job.id}/logs/download`}
+      downloadHref={withBase(`/api/download/jobs/${job.id}/logs/download`)}
     />
   );
 }

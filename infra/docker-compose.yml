@@ -18,7 +18,7 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set in infra/.env}
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     ports:
-      - "127.0.0.1:${MARIADB_PORT:-3306}:3306"
+      - "127.0.0.1:${MARIADB_PORT:-3307}:3306"
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb/init:/docker-entrypoint-initdb.d:ro
@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
     command: redis-server --save 60 1 --loglevel warning
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

@@ -13,6 +13,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { Job, JobLogSnapshot, JobStage, JobStatus, LogLine } from "@/types/domain";
+import { withBase } from "@/lib/base-path";
 
 export const ACTIVE_STATUSES: readonly JobStatus[] = ["queued", "scheduled", "running"];
 export const MAX_LOG_LINES = 5000;
@@ -118,7 +119,7 @@ export function useJobStream(job: Job, snapshot: JobLogSnapshot) {
     const connect = () => {
       if (stopped) return;
       const qs = cursor.current ? `?last_event_id=${encodeURIComponent(cursor.current)}` : "";
-      const source = new EventSource(`/api/stream/jobs/${job.id}${qs}`);
+      const source = new EventSource(withBase(`/api/stream/jobs/${job.id}${qs}`));
       es = source;
       source.onopen = () => {
         attempt = 0;

@@ -16,7 +16,7 @@
                            │                                                                 │ /internal/*（per-job token）
             ┌──────────────┼──────────────┬──────────────┐                                   │
             ▼              ▼              ▼              ▼                                   │
-        MariaDB :3306   Redis :6379   DATA_ROOT/      scheduler（python -m app.scheduler）  systemd: qrlab-scheduler
+        MariaDB :3307   Redis :6380   DATA_ROOT/      scheduler（python -m app.scheduler）  systemd: qrlab-scheduler
         (docker compose) (docker compose) 主機目錄        │ systemd-run --scope（cgroup：MemoryMax / CPUQuota / AllowedCPUs）
                            ▲ events        ▲ 讀寫同一目錄   ▼
                            └───────────────┴──── Job = 主機子程序 trainer/.venv/bin/python -m trainer run
@@ -314,11 +314,11 @@ GET    /healthz  GET /readyz
 
 - 前置：Ubuntu 22.04 / 24.04、NVIDIA driver（只要 driver；CUDA 函式庫隨 torch wheel 來）、Docker Engine + Compose plugin（只跑 MariaDB / Redis）、Python 3.12 + `python3.12-venv`（pip 從 `requirements.txt` 安裝，走 `/etc/pip.conf` 的公司 PyPI proxy；全專案不用 uv）、系統層級的 Node ≥ 20.9、nginx。套件來源：公司的 PyPI 鏡像（`UV_INDEX_URL` / `PIP_INDEX_URL`）、npm 鏡像（`npm config set registry`）、image 鏡像（`infra/.env` 的 `DOCKER_REGISTRY`）。
 - 程式放 `/opt/qr-ai-lab`（git checkout），資料放 `/srv/qr-ai-lab/data`（`DATA_ROOT`，含 `model_zoo/`），權重傳輸資料夾 `/srv/qr-ai-lab/transfer`（`MODEL_ZOO_IMPORT_ROOT`）。專用使用者 `qrlab`，`loginctl enable-linger qrlab`（任務的 systemd scope 跑在它的 user slice）。
-- `infra/install.sh`：第一次只建使用者 / 資料夾 / 兩個 env 範本後停下；第二次檢查 env 檔（systemd 不接受行尾註解、secret 不能是預設）、建 venv（`python3.12 -m venv` + `pip install -r requirements.txt`，`requirements.txt` 由 `scripts/pin_requirements.sh` 釘版本）、`next build`、`alembic upgrade head` + `app.cli seed`（local 模式才建帳號）、安裝 `infra/systemd/qrlab-{backend,scheduler,frontend}.service` 並等健康檢查；`--update` 在 `git pull` 後重跑。環境變數：backend / scheduler 讀 `/etc/qr-ai-lab/qrlab.env`（範本 `infra/systemd/qrlab.env.example`，含 `AUTH_MODE=keycloak`、`KEYCLOAK_*`、`KEYCLOAK_ROLE_MAP`、`SUPERADMIN_USERNAMES`、`GPU_RESET_COMMAND`），frontend 讀 `/etc/qr-ai-lab/frontend.env`（範本 `infra/systemd/frontend.env.example`，含 `AUTH_MODE`、`AUTH_SECRET`、`AUTH_URL`、`AUTH_KEYCLOAK_*`）。公司私有的值只放在這兩個檔案。
-- nginx：`infra/nginx/qr-ai-lab.conf` + `snippets/qr-ai-lab-proxy.conf`（TLS 用公司 CA；`/api/v1` 轉 8000、其餘轉 3000；關閉 buffering 讓 SSE 與上傳串流；上傳路徑 20 GB、其餘 64 MB；登入路徑 `limit_req`；`large_client_header_buffers` 容納 Auth.js 的 session cookie；轉送 `X-Forwarded-*`）。沒有 TLS 時前端要設 `COOKIE_SECURE=0`，否則登入 cookie 不會被瀏覽器保存。
+- 安裝分四步：`infra/install-00-base.sh`（使用者、資料夾、env 範本）→ `install-01-docker.sh`（MariaDB 3307 / Redis 6380）→ `install-02-backend.sh`（兩個 venv、migration、backend + scheduler 服務）→ `install-03-frontend.sh`（`next build` 含 `NEXT_PUBLIC_BASE_PATH`、frontend 服務）；`--update` 各自重跑。
+- nginx：網站在 `https://qrit.tsmc.com/ai-lab`（Next.js `basePath`），API 在 `https://qrit.tsmc.com/ai-lab-api`（nginx 去掉前綴，backend 以 `ROOT_PATH` 回報）；`infra/nginx/qr-ai-lab.conf` 是要貼進現有 server 區塊的 location 範本（上傳路徑 20 GB、SSE 不 buffering、登入限速、`large_client_header_buffers`），`snippets/qr-ai-lab-proxy.conf` 是共用的 `X-Forwarded-*` header。
 - 任務執行：`JOB_RUNNER=auto`（systemd cgroup；Dashboard 會顯示實際偵測結果）。沒有任何容器，也不需要 NVIDIA Container Toolkit。
 - 模型庫：管理員在 `/admin/model-zoo` 用三種方式之一把權重帶進來：瀏覽器上傳、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）。有網路的機器可先用 `scripts/fetch_model_zoo.py` 抓好再整個資料夾放到傳輸資料夾。
-- 更新流程：`git pull` → `./infra/install.sh --update`（重 sync venv、重建前端、migration、重啟三個服務；執行中的任務不受排程器重啟影響）。
+- 更新流程：`git pull` → `sudo ./infra/install-02-backend.sh --update` + `sudo ./infra/install-03-frontend.sh --update`（各自停服務、重建、migration、再啟動；執行中的任務不受排程器重啟影響）。
 - 磁碟：`DATA_ROOT` 放在大容量磁碟；admin Dashboard 顯示剩餘空間（目前只顯示，沒有自動停排）。
 
 ## 14. 安全性注意事項
