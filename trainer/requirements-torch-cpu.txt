@@ -1,0 +1,6 @@
+# CPU-only twin of requirements-torch.txt (same pins, CPU wheels) for CI and machines without a GPU:
+#   .venv/bin/pip install -r requirements-torch-cpu.txt && .venv/bin/pip install -r requirements-dev.txt
+# backend/tests/test_infra_contracts.py checks that the two files pin the same versions.
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.9.*
+torchvision==0.24.*

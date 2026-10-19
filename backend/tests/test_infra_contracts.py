@@ -121,3 +121,14 @@ def test_source_packages_are_not_gitignored():
     rel = [str(p.relative_to(ROOT)) for p in pkgs]
     res = subprocess.run(["git", "check-ignore", "--no-index", *rel], cwd=ROOT, capture_output=True, text=True)
     assert res.stdout.strip() == "", f"gitignored source packages: {res.stdout}"
+
+
+def test_torch_requirements_carry_their_index():
+    """The torch index is written inside the requirements files (a file-level --index-url overrides the CLI flag, so a
+    flag on the command line is not needed and would be ignored); the CPU twin must pin the same versions."""
+    gpu = ROOT / "trainer/requirements-torch.txt"
+    cpu = ROOT / "trainer/requirements-torch-cpu.txt"
+    idx = {p: [ln.split()[1] for ln in p.read_text().splitlines() if ln.startswith("--index-url ")] for p in (gpu, cpu)}
+    assert idx[gpu] == ["https://download.pytorch.org/whl/cu126"], idx
+    assert idx[cpu] == ["https://download.pytorch.org/whl/cpu"], idx
+    assert _pins(gpu) == _pins(cpu) and {"torch", "torchvision"} <= set(_pins(gpu))

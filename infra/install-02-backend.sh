@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Step 2 of 3 — backend API + scheduler + trainer runtime (host processes, no containers).
 #   * backend/.venv and trainer/.venv with pip from requirements.txt (pip reads the company PyPI proxy from
-#     /etc/pip.conf; PIP_INDEX_URL overrides it for this run); torch comes first from TORCH_INDEX_URL
-#     (default https://download.pytorch.org/whl/cu126 for a CUDA 12.x driver — the wheel bundles its CUDA libraries)
+#     /etc/pip.conf; PIP_INDEX_URL overrides it for this run); torch comes first from trainer/requirements-torch.txt,
+#     whose built-in index (download.pytorch.org/whl/cu126, CUDA 12.x driver) TORCH_INDEX_URL replaces, e.g. with the
+#     company proxy of download.pytorch.org — the wheel bundles its CUDA libraries
 #   * alembic upgrade head (+ seed of system settings / local accounts on the first run)
 #   * systemd units qrlab-backend.service and qrlab-scheduler.service (scheduler skipped when SCHEDULER_EMBEDDED=true)
 # Usage, from the repo checkout:   sudo ./infra/install-02-backend.sh            # first install
@@ -14,8 +15,8 @@ APP_USER="${APP_USER:-qrlab}"
 DATA_ROOT="${DATA_ROOT:-/srv/qr-ai-lab/data}"
 ENV_FILE="/etc/qr-ai-lab/qrlab.env"
 PYTHON="${PYTHON:-python3.12}"
-# torch wheels for the host driver: CUDA 12.x driver → cu126 (a company proxy of download.pytorch.org works too)
-TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}"
+# torch index: empty = the one written in trainer/requirements-torch.txt (cu126); set it to the company proxy on offline hosts
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"
 UPDATE=0; [ "${1:-}" = "--update" ] && UPDATE=1
 
 command -v "$PYTHON" >/dev/null || { echo "missing: $PYTHON (apt install python3.12 python3.12-venv)"; exit 1; }
@@ -42,10 +43,16 @@ if [ "$UPDATE" = 1 ]; then
   systemctl stop qrlab-scheduler qrlab-backend 2>/dev/null || true
 fi
 echo ">> backend venv (pip → /etc/pip.conf proxy)"; venv backend
-echo ">> trainer venv: torch first from the CUDA index matching the driver (${TORCH_INDEX_URL}), then the rest"
+TORCH_REQ="requirements-torch.txt"
+if [ -n "$TORCH_INDEX_URL" ]; then  # a requirements-file index beats the CLI flag, so rewrite the file instead
+  TORCH_REQ=".torch-requirements.local.txt"
+  sed -e "s#^--index-url .*#--index-url ${TORCH_INDEX_URL}#" "$ROOT/trainer/requirements-torch.txt" > "$ROOT/trainer/$TORCH_REQ"
+  chown "$APP_USER:$APP_USER" "$ROOT/trainer/$TORCH_REQ"
+fi
+echo ">> trainer venv: torch first (index: ${TORCH_INDEX_URL:-from requirements-torch.txt}), then the rest"
 [ -x "$ROOT/trainer/.venv/bin/python" ] || as_app "$ROOT/trainer" "$PYTHON" -m venv .venv
 as_app "$ROOT/trainer" .venv/bin/pip install --quiet --upgrade pip
-as_app "$ROOT/trainer" .venv/bin/pip install --quiet -r requirements-torch.txt --index-url "$TORCH_INDEX_URL"
+as_app "$ROOT/trainer" .venv/bin/pip install --quiet -r "$TORCH_REQ"
 as_app "$ROOT/trainer" .venv/bin/pip install --quiet -r requirements.txt
 echo ">> database migration"
 as_app "$ROOT/backend" bash -c "set -a; . $ENV_FILE; set +a; exec .venv/bin/alembic upgrade head"

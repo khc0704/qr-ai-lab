@@ -95,7 +95,7 @@
 
 ## 套件來源（伺服器不連外）
 
-torch 另外處理：`trainer/requirements-torch.txt` 只釘 torch / torchvision 版本，安裝時用符合 **驅動** 的 index（CUDA 12.x 驅動 → `https://download.pytorch.org/whl/cu126`，13.x → `cu130`，無 GPU → `cpu`；`install-02-backend.sh` 讀 `TORCH_INDEX_URL`，內網指向 Nexus 代理的 download.pytorch.org）。torch wheel 自帶 CUDA 函式庫，`nvidia-*`、`triton` 是它的依賴會自動裝，不寫在 requirements 裡；主機裝的 CUDA toolkit 不會被用到。
+torch 另外處理：`trainer/requirements-torch.txt` 釘 torch / torchvision 版本並把符合 **驅動** 的 index 寫在檔案裡（CUDA 12.x 驅動 → `https://download.pytorch.org/whl/cu126`；無 GPU 用 `requirements-torch-cpu.txt`；13.x 驅動改檔案裡的 index 為 `cu130`）。命令列不要再加 `--index-url`：requirements 檔裡的 index 會蓋過它。`install-02-backend.sh` 有設 `TORCH_INDEX_URL` 時會把檔案裡的 index 換成它（內網指向 Nexus 代理的 download.pytorch.org）。torch wheel 自帶 CUDA 函式庫，`nvidia-*`、`triton` 是它的依賴會自動裝，不寫在 requirements 裡；主機裝的 CUDA toolkit 不會被用到。
 
 全專案只用 pip（沒有 uv / poetry）：`infra/install-02-backend.sh` 以 `python3.12 -m venv` + `pip install -r requirements.txt` 安裝 backend 與 trainer；開發機用 `requirements-dev.txt`（多 pytest / ruff）。四個 `requirements*.txt` 由 `scripts/pin_requirements.sh` 依 `pyproject.toml` 的範圍釘出，CI 會比對。pip 從 `/etc/pip.conf` 讀公司的 PyPI proxy（Nexus）：
 

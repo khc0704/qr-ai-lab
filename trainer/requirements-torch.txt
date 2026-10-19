@@ -1,11 +1,13 @@
-# PyTorch for the trainer (the GPU host can only use torch 2.9.x). Install this file FIRST (before requirements.txt) and pick the index that matches the
-# NVIDIA driver on the host; the wheel brings its own CUDA libraries (nvidia-*-cu12 / triton come along as torch's
-# dependencies), the system CUDA toolkit is not used:
-#   driver 12.x (e.g. CUDA 12.7 on the GPU host) → --index-url https://download.pytorch.org/whl/cu126
-#   driver 13.x                                   → --index-url https://download.pytorch.org/whl/cu130
-#   no GPU (CI, laptops)                           → --index-url https://download.pytorch.org/whl/cpu
-# Offline hosts: point the index at the company proxy of download.pytorch.org (TORCH_INDEX_URL in install-02-backend.sh).
-#   .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cu126
-#   .venv/bin/pip install -r requirements.txt
+# PyTorch for the trainer (the GPU host can only use torch 2.9.x). Install this file FIRST, then requirements*.txt:
+#   .venv/bin/pip install -r requirements-torch.txt
+#   .venv/bin/pip install -r requirements.txt            (requirements-dev.txt on a developer machine)
+# The --index-url below is part of the file, so no flag is needed on the command line (a flag would be ignored: a
+# requirements-file index wins over the CLI one). It selects the wheel for the host's NVIDIA DRIVER; the wheel bundles
+# its CUDA libraries (nvidia-*-cu12 / triton come along as torch's dependencies), the system CUDA toolkit is not used:
+#   driver 12.x (CUDA 12.7 on the GPU host) → cu126  (this file)
+#   no GPU (CI, laptops)                    → requirements-torch-cpu.txt
+#   driver 13.x                             → edit the index to https://download.pytorch.org/whl/cu130
+# Offline hosts: install-02-backend.sh rewrites the index to TORCH_INDEX_URL (the company proxy of download.pytorch.org).
+--index-url https://download.pytorch.org/whl/cu126
 torch==2.9.*
 torchvision==0.24.*

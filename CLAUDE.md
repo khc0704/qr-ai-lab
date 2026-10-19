@@ -64,7 +64,7 @@ cd backend && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-
 bash scripts/pin_requirements.sh                 # 改了 pyproject.toml 的依賴之後：重新釘 backend / trainer 的 requirements*.txt（全專案只用 pip；CI 會比對）
 npm run screenshots:keycloak                      # 以 AUTH_MODE=keycloak 啟動的前後端 + 假 Keycloak 跑登入 / 登出截圖
 # trainer
-cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cu126 && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest   # torch 先、依驅動選 index（cu126 / cu130 / cpu） && .venv/bin/python -m trainer check   # check：這個環境能跑哪些家族
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest   # torch 先（index 寫在檔案裡：cu126；無 GPU 用 requirements-torch-cpu.txt） && .venv/bin/python -m trainer check   # check：這個環境能跑哪些家族
 cd libs/preprocess && ../../trainer/.venv/bin/python -m pytest             # 共用前處理套件
 node scripts/build_manual.js                      # 使用手冊 DOCX（再用 soffice 轉 PDF）
 # model zoo（在有網路的機器）

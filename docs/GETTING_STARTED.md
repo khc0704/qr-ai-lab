@@ -91,7 +91,7 @@ curl -s localhost:8000/api/v1/admin/model-zoo -H "Authorization: Bearer $TOKEN"
 ### 4.2 排程器與任務執行方式（沒有容器）
 
 ```bash
-cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cu126 && .venv/bin/pip install -r requirements-dev.txt && cd ../backend   # 第一次：建立 trainer 的 venv（torch 先裝，依驅動選 index）（CPU 家族：sklearn / XGBoost / Optuna）
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt && .venv/bin/pip install -r requirements-dev.txt && cd ../backend   # 第一次：建立 trainer 的 venv（torch 先裝，依驅動選 index）（CPU 家族：sklearn / XGBoost / Optuna）
 # 分開跑（正式拓樸）：backend 與排程器各一個程序，兩邊都設 REDIS_URL 讓即時事件互通
 REDIS_URL=redis://localhost:6380/0 SCHEDULER_EMBEDDED=false .venv/bin/uvicorn app.main:app --reload
 REDIS_URL=redis://localhost:6380/0 .venv/bin/python -m app.scheduler
@@ -102,7 +102,7 @@ REDIS_URL=redis://localhost:6380/0 .venv/bin/python -m app.scheduler
 - systemd 模式的前提：跑排程器的使用者 `loginctl enable-linger`，而且 user slice 有委派 `cpu memory pids cpuset`（`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control`）。WSL2 要在 `/etc/wsl.conf` 開 `systemd=true`。
 - CPU 限制對原生函式庫也有效：runner 把 `OMP / MKL / OPENBLAS / NUMEXPR / TBB / NUMBA / LOKY_MAX_CPU_COUNT / TORCH_NUM_THREADS…` 全設成申請的核數，trainer 啟動時再用 threadpoolctl + torch 夾一次並把實際 affinity / 執行緒數印進任務 log（搜 `limits:`）。所以 sklearn 的 TSNE / HistGradientBoosting、numpy BLAS、torch 都只會用到分到的核心，不會把 88 核全吃掉。
 - GPU：`CUDA_VISIBLE_DEVICES` 指定。任務可填「每張 GPU 需要的顯存」→ 多個任務依 pynvml 的剩餘顯存共用一張（資源池的「依顯存共用 GPU」開關；子程序以 `set_per_process_memory_fraction` 自限）；沒填就要整張空卡（`GPU_BUSY_THRESHOLD`）。Dashboard 的 GPU 卡片顯示顯存 / 保留量 / 任務，superadmin 可「重置」（中斷本系統任務 → kill 所有程序 → `GPU_RESET_COMMAND`）。backend venv 請裝 `--extra gpu`（nvidia-ml-py）。
-- 深度學習家族：torch / torchvision 在 `trainer/requirements-torch.txt`，**先**用符合驅動的 index 安裝（驅動 CUDA 12.x → `--index-url https://download.pytorch.org/whl/cu126`；13.x → `cu130`；沒 GPU → `cpu`），再裝 `requirements*.txt`（ultralytics / transformers 等）。主機能用的版本是 torch 2.9.x 與 ultralytics 8.1.x，所以 YOLO 家族是 **YOLOv8**（權重 `yolov8n/s/m[-seg|-cls].pt`；YOLO11 要 ultralytics 8.3 以上，這裡沒有）；trainer 在匯入 ultralytics 前設 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`，因為 8.1 載入 checkpoint 沒帶 `weights_only`，torch ≥ 2.6 預設會拒絕。torch wheel 自帶 CUDA 函式庫（`nvidia-*` 套件是 torch 的依賴，不用也不該寫進 requirements），主機的 CUDA toolkit 不會被用到，只看驅動版本；伺服器上由 `install-02-backend.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
+- 深度學習家族：torch / torchvision 在 `trainer/requirements-torch.txt`，**先**裝它再裝 `requirements*.txt`（ultralytics / transformers 等）。index 寫在檔案裡（`--index-url https://download.pytorch.org/whl/cu126`，對應 CUDA 12.x 驅動），命令列不用、也不要再加 `--index-url`（requirements 檔裡的 index 會蓋過命令列的）；沒 GPU 用 `requirements-torch-cpu.txt`；13.x 驅動把檔案裡的 index 改成 `cu130`。主機能用的版本是 torch 2.9.x 與 ultralytics 8.1.x，所以 YOLO 家族是 **YOLOv8**（權重 `yolov8n/s/m[-seg|-cls].pt`；YOLO11 要 ultralytics 8.3 以上，這裡沒有）；trainer 在匯入 ultralytics 前設 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`，因為 8.1 載入 checkpoint 沒帶 `weights_only`，torch ≥ 2.6 預設會拒絕。torch wheel 自帶 CUDA 函式庫（`nvidia-*` 套件是 torch 的依賴，不用也不該寫進 requirements），主機的 CUDA toolkit 不會被用到，只看驅動版本；伺服器上由 `install-02-backend.sh` 以 pip 從 `trainer/requirements.txt` 安裝（含 dl）；開發機只想裝 CPU torch 見 §7。
 
 ### 4.3 模型庫（預訓練權重；伺服器不連外）
 
@@ -218,7 +218,7 @@ cd trainer && .venv/bin/ruff check . && .venv/bin/pytest
 # 一次性
 sudo apt install -y python3.12 python3.12-venv nodejs npm git     # Node ≥ 20.9（建議 nvm install 22）
 git clone <repo> && cd qr-ai-lab
-cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cu126 && .venv/bin/pip install -r requirements-dev.txt && cd ..   # trainer venv：torch 先（驅動 12.x 用 cu126；沒 GPU 用 cpu），再其餘
+cd trainer && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-torch.txt && .venv/bin/pip install -r requirements-dev.txt && cd ..   # trainer venv：torch 先（index 在檔案裡；沒 GPU 改用 requirements-torch-cpu.txt），再其餘
 cd backend && cp .env.example .env && python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && cd ..   # .env 預設 AUTH_MODE=local、SQLite、SCHEDULER_EMBEDDED=true
 cd frontend && cp .env.local.example .env.local && npm ci && cd ..   # AUTH_MODE=local、BACKEND_URL=http://localhost:8000
 # 每天
@@ -357,7 +357,7 @@ nano infra/.env                      # MARIADB_ROOT_PASSWORD、MARIADB_PASSWORD�
 
 ```bash
 sudo ./infra/install-02-backend.sh
-# 會檢查 env 檔 → 建兩個 venv（pip；trainer 先從 TORCH_INDEX_URL 裝 torch，預設 cu126 對應 CUDA 12.x 驅動，內網改成 Nexus 代理的 download.pytorch.org）
+# 會檢查 env 檔 → 建兩個 venv（pip；trainer 先裝 requirements-torch.txt 的 torch，index 預設是檔案裡的 cu126；內網設 TORCH_INDEX_URL 換成 Nexus 代理的 download.pytorch.org）
 # → alembic upgrade head + seed → 裝 qrlab-backend / qrlab-scheduler 並等 /healthz
 # TORCH_INDEX_URL=https://nexus.example.com/repository/pytorch-cu126/ sudo -E ./infra/install-02-backend.sh   # 內網範例
 curl -s http://127.0.0.1:8000/healthz          # {"status":"ok"}
@@ -398,7 +398,7 @@ sudo nginx -t && sudo systemctl reload nginx
 - **任務頁看不到即時 log，重新整理才有**：backend 與排程器分開跑時沒有 `REDIS_URL`，事件只在各自記憶體裡；設 `REDIS_URL=redis://localhost:6380/0` 給兩邊，或用 `SCHEDULER_EMBEDDED=true` 讓排程器跑在 backend 內。
 - **Dashboard 顯示 runner 是 subprocess 而不是 systemd**：`systemd-run --user --scope -p MemoryMax=64M -- /bin/true` 手動跑看錯誤；常見原因是沒有 `loginctl enable-linger`、`XDG_RUNTIME_DIR` 沒指到該使用者、或 WSL 沒開 systemd。subprocess 模式仍會釘核心並由 watchdog 管記憶體。
 - **任務因「memory limit exceeded」失敗**：申請的記憶體不夠；在精靈的資源步驟調高，或請管理員調整專案配額。
-- **開發機只想裝 CPU torch**：`cd trainer && .venv/bin/pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install -r requirements-dev.txt`。
+- **開發機只想裝 CPU torch**：`cd trainer && .venv/bin/pip install -r requirements-torch-cpu.txt && .venv/bin/pip install -r requirements-dev.txt`。
 - **上傳預覽逾時（`PREVIEW_TIMEOUT`）**：預覽在 API 程序內以執行緒計算，預設 30 秒（`PREVIEW_TIMEOUT_S`）；縮小取樣數或先用較小的檔案試步驟。
 - **MariaDB 一直不 healthy**：第一次初始化要 20–40 秒；看 `docker compose -f infra/docker-compose.yml logs mariadb`。
 - **Windows**：在 WSL2 內操作，MariaDB / Redis 交給 Docker Desktop 的 WSL integration（§7.1）；repo 放 WSL 檔案系統，避免 `/mnt/c` 的路徑、換行與執行位元問題。

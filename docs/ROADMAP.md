@@ -30,7 +30,7 @@
 2. **SQLite 僅限開發**：資料庫在單檔；沒有 `REDIS_URL` 時 event bus 在各程序的記憶體裡，backend 與排程器分開跑時 SSE 看不到 log 事件（沙盒串接測試即用本機 redis-server 解決）；正式環境一定要 Redis + MariaDB。
 3. **大型產物與下載**：目錄產物即時打包 zip 會占記憶體與時間，大模型（YOLO m、BERT）建議 nginx `X-Accel-Redirect` 或預先打包。
 4. **配額計算**：`storage_used_bytes` 以遞迴 stat 計算，專案產物多時每次任務結束都算一次會慢；可改為增量或背景計算。
-5. ✅ **CUDA 版本**：torch 由 `trainer/requirements-torch.txt` 依驅動從 cu126 / cu130 / cpu index 安裝（`TORCH_INDEX_URL`），wheel 自帶 CUDA 函式庫；伺服器只要驅動版本對得上。
+5. ✅ **CUDA 版本**：torch 由 `trainer/requirements-torch.txt`（index 寫在檔內：cu126；CPU 用 `requirements-torch-cpu.txt`；內網 `TORCH_INDEX_URL`）安裝，wheel 自帶 CUDA 函式庫；伺服器只要驅動版本對得上。
 6. **前處理在 backend 內執行**：預覽直接在 API 程序讀檔與運算（pandas / PIL），大檔或惡意檔會拖慢 API；已限制取樣大小並加 30 秒逾時（✅），但逾時只是放棄等待、執行緒仍會跑完，長期應搬到獨立 worker。
 7. **AutoML 單容器循序**：候選含深度學習家族時一個任務可能跑很久；可加「每個 trial 的 epoch 上限」與「先用小資料子集篩家族再全量」兩段式。
 8. **測試覆蓋**：systemd runner 只以假的 `systemd-run` 測參數組合，真正的 cgroup 強制要在伺服器上驗一次（建議：建一個申請 512 MB 的任務故意吃 1 GB，看是否被 OOM kill）；MariaDB、Keycloak、多 GPU 仍無自動化測試。

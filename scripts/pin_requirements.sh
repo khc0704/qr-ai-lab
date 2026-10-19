@@ -16,7 +16,7 @@ pin() {  # pin <dir> <runtime extras> <dev packages…>
   "$pip" install --quiet --upgrade pip
   "$pip" install --quiet -e "$ROOT/libs/preprocess"
   if [ "$dir" = trainer ]; then  # torch first, CPU wheels are enough for pinning the rest
-    "$pip" install --quiet -r "$ROOT/trainer/requirements-torch.txt" --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+    "$pip" install --quiet -r "$ROOT/trainer/requirements-torch-cpu.txt"
   fi
   "$pip" install --quiet "$ROOT/$dir$extras"
   # pip freeze lists the editable package with an absolute path; the repo-relative form is what the server needs

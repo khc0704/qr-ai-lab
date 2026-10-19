@@ -42,3 +42,6 @@ runs/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# install-02-backend.sh: requirements-torch.txt with TORCH_INDEX_URL swapped in
+trainer/.torch-requirements.local.txt
