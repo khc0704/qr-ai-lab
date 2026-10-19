@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.deps import CurrentUser, DbSession, ProjectAccess, project_access
+from app.core.deps import ROLE_ORDER, CurrentUser, DbSession, ProjectAccess, project_access
 from app.core.errors import forbidden, not_found
 from app.events.bus import get_bus
 from app.models import Job
@@ -29,6 +29,15 @@ def _job_access(min_role: str = "viewer"):
 
     async def dep(job_id: int, session: DbSession, user: CurrentUser) -> tuple[Job, ProjectAccess]:
         job = await jobs_svc.get(session, job_id)
+        if job.project.kind == "shared":
+            # tool pool: no members; the creator acts as a member of their own job, admins as owners
+            if user.is_admin:
+                return job, ProjectAccess(project=job.project, role="owner", user=user)
+            if job.created_by_id != user.id:
+                raise not_found("JOB_NOT_FOUND", "找不到 job")
+            if ROLE_ORDER[min_role] > ROLE_ORDER["member"]:
+                raise forbidden("PROJECT_ROLE", f"需要 {min_role} 以上的專案角色")
+            return job, ProjectAccess(project=job.project, role="member", user=user)
         access = await project_access(min_role)(session, user, job.project.slug)
         return job, access
 
@@ -47,9 +56,7 @@ async def recent_jobs(
     kind: str | None = None,
     limit: int = Query(20, ge=1, le=100),
 ) -> list[JobRead]:
-    project_ids = None
-    if not user.is_admin:
-        project_ids = [p.id for p in await projects_svc.list_for_user(session, user, include_archived=True)]
+    project_ids = await projects_svc.project_ids_for_user(session, user)
     statuses = [x.strip() for x in status.split(",") if x.strip()] if status else None
     rows = await jobs_svc.list_recent(session, project_ids=project_ids, statuses=statuses, kind=kind, limit=limit)
     return await ser.jobs(session, rows)

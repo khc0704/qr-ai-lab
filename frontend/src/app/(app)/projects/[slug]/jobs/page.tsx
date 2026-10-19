@@ -1,6 +1,6 @@
 import { Brain, Plus, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/features/empty-state";
 import { FamilyText, InputKindChip, KindChip } from "@/components/features/chips";
@@ -14,7 +14,7 @@ import { jobModeLabel } from "@/i18n/zh-TW";
 import { Duration, RelativeTime } from "@/components/features/time";
 import { getProject, listJobsPage } from "@/lib/api";
 import { formatMb } from "@/lib/format";
-import { canProject, projectRole } from "@/lib/roles";
+import { canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 
 const PAGE_SIZE = 20;
@@ -30,6 +30,7 @@ async function Jobs({
   const page = pageFromParam(sp.page);
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const jobs = await listJobsPage({ slug: project.slug, page, pageSize: PAGE_SIZE });
   const canRun = canProject(projectRole(project, user), "run") && project.status === "active";
   const href = (p: number) => pageHref(`/projects/${project.slug}/jobs`, {}, p);

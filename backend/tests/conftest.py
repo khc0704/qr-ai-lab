@@ -126,7 +126,6 @@ REQUEST = {
     "members": [{"email": "other@example.com", "role": "member"}],
 }
 APPROVE = {
-    "slug": "yield-forecast",
     "gpu_limit": 1,
     "cpu_limit": 4,
     "memory_limit_mb": 8192,
@@ -136,13 +135,12 @@ APPROVE = {
 
 
 async def make_project(client: AsyncClient, admin: dict, user: dict, slug: str = "yield-forecast", **overrides) -> dict:
-    r = await client.post("/api/v1/project-requests", json={**REQUEST, "proposed_slug": slug}, headers=user)
+    """Apply (creates the pending project) and approve it (quota from APPROVE + overrides)."""
+    r = await client.post("/api/v1/projects", json={**REQUEST, "proposed_slug": slug}, headers=user)
     assert r.status_code == 201, r.text
-    rid = r.json()["id"]
-    r = await client.post(
-        f"/api/v1/project-requests/{rid}/approve", json={**APPROVE, "slug": slug, **overrides}, headers=admin
-    )
-    assert r.status_code == 201, r.text
+    assert r.json()["slug"] == slug, r.text
+    r = await client.post(f"/api/v1/projects/{slug}/approve", json={**APPROVE, **overrides}, headers=admin)
+    assert r.status_code == 200, r.text
     return r.json()
 
 

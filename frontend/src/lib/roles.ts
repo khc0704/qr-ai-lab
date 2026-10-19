@@ -18,6 +18,8 @@ export type Permission =
   | "gpu.reset";
 
 export const SYSTEM_ROLES: readonly SystemRole[] = ["superadmin", "admin", "user"];
+/** Roles the UI may assign. superadmin is exactly one account fixed by the backend's SUPERADMIN_USERNAME: never granted here. */
+export const ASSIGNABLE_ROLES: readonly SystemRole[] = ["admin", "user"];
 
 export function isAdminRole(role: string | undefined | null): boolean {
   return role === "admin" || role === "superadmin";
@@ -73,4 +75,9 @@ export function canCancelJob(
   if (!role || !user) return false;
   if (!canProject(role, "run")) return false;
   return canProject(role, "manage") || createdById === user.id;
+}
+
+/** Work tabs (data sources, jobs, models, members, settings) exist only once the application was approved. */
+export function isApproved(project: Pick<Project, "status">): boolean {
+  return project.status === "active" || project.status === "completed" || project.status === "archived";
 }

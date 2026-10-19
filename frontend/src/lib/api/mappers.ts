@@ -14,16 +14,18 @@ import type {
   NodeStatus,
   PreprocessOp,
   Project,
-  ProjectRequest,
+  Application,
   ResourcePool,
   RunnerInfo,
   Upload,
   User,
+  UserLookup,
   ZooTask,
   GpuResetResult,
   UsageHistory,
   UsageProject,
-  ToolDefaults,
+  ToolPool,
+  ToolPoolStatus,
   ToolUpload,
   JobLogSnapshot,
   Page,
@@ -82,6 +84,16 @@ export function toUser(u: UserRead | J): User {
   };
 }
 
+/** GET /users/lookup row (autocomplete): identity only; display name falls back to the username like toUser. */
+export function toUserLookup(u: J): UserLookup {
+  return {
+    id: num(u.id),
+    username: str(u.username),
+    displayName: str(u.display_name) || str(u.username),
+    email: str(u.email),
+  };
+}
+
 export function toProject(p: J): Project {
   const usage = (p.usage as J) ?? {};
   return {
@@ -94,6 +106,7 @@ export function toProject(p: J): Project {
     status: asEnum<Project["status"]>(p.status, "active"),
     kind: asEnum<Project["kind"]>(p.kind, "standard"),
     owner: toUser(p.owner as J),
+    application: p.application ? toApplication(p.application as J) : undefined,
     gpuLimit: num(p.gpu_limit),
     cpuLimit: num(p.cpu_limit),
     memoryLimitMb: num(p.memory_limit_mb),
@@ -107,6 +120,9 @@ export function toProject(p: J): Project {
       addedAt: iso(m.created_at),
     })),
     createdAt: iso(p.created_at),
+    approvedAt: isoOpt(p.approved_at),
+    completedAt: isoOpt(p.completed_at),
+    archivedAt: isoOpt(p.archived_at),
     usage: {
       gpu: num(usage.gpu),
       cpu: num(usage.cpu),
@@ -228,32 +244,25 @@ export function toArtifact(a: J): Artifact {
   };
 }
 
-export function toRequest(r: J): ProjectRequest {
+export function toApplication(r: J): Application {
   return {
     id: num(r.id),
-    applicant: toUser(r.applicant as J),
-    title: str(r.title),
     purpose: str(r.purpose),
-    dataType: r.data_type as ProjectRequest["dataType"],
-    taskType: r.task_type as ProjectRequest["taskType"],
-    dataScale: r.data_scale as ProjectRequest["dataScale"],
+    dataScale: r.data_scale as Application["dataScale"],
     dataDescription: opt<string>(r.data_description),
     requestedGpu: num(r.requested_gpu),
     requestedCpu: num(r.requested_cpu),
     requestedMemoryMb: num(r.requested_memory_mb),
     requestedStorageMb: num(r.requested_storage_mb),
-    proposedSlug: opt<string>(r.proposed_slug),
     members: ((r.members as J[]) ?? []).map((m) => ({
       email: str(m.email),
-      role: asEnum<ProjectRequest["members"][number]["role"]>(m.role, "member"),
+      role: asEnum<Application["members"][number]["role"]>(m.role, "member"),
     })),
-    status: asEnum<ProjectRequest["status"]>(r.status, "submitted"),
     reviewer: r.reviewer ? toUser(r.reviewer as J) : undefined,
     reviewNote: opt<string>(r.review_note),
     reviewedAt: isoOpt(r.reviewed_at),
-    projectSlug: opt<string>(r.project_slug),
-    commentCount: num(r.comment_count),
     submittedAt: iso(r.submitted_at ?? r.created_at),
+    commentCount: num(r.comment_count),
   };
 }
 
@@ -270,6 +279,7 @@ export function toIssue(i: J): Issue {
     resolutionNote: opt<string>(i.resolution_note),
     commentCount: num(i.comment_count),
     createdAt: iso(i.created_at),
+    updatedAt: iso(i.updated_at ?? i.created_at),
     closedAt: isoOpt(i.closed_at),
   };
 }
@@ -283,6 +293,7 @@ export function toComment(c: J): Comment {
     kind: asEnum<Comment["kind"]>(c.kind, "comment"),
     body: str(c.body),
     createdAt: iso(c.created_at),
+    updatedAt: isoOpt(c.updated_at),
   };
 }
 
@@ -327,6 +338,7 @@ export function toNode(n: J): NodeStatus {
     })),
     cpuCores: num(n.cpu_cores),
     cpuUsedCores: num(n.cpu_used_cores),
+    platform: opt<string>(n.platform),
     memoryMb: num(n.memory_mb),
     memoryUsedMb: num(n.memory_used_mb),
     diskTotalGb: num(n.disk_total_gb),
@@ -500,15 +512,20 @@ export function toToolUpload(u: J): ToolUpload {
   };
 }
 
-export function toToolDefaults(d: J): ToolDefaults {
+export function toToolPool(d: J): ToolPool {
   return {
     gpuLimit: num(d.gpu_limit),
-    cpuLimit: num(d.cpu_limit, 2),
-    memoryLimitMb: num(d.memory_limit_mb, 4096),
-    storageQuotaMb: num(d.storage_quota_mb, 2048),
-    maxConcurrentJobs: num(d.max_concurrent_jobs, 1),
+    cpuLimit: num(d.cpu_limit, 4),
+    memoryLimitMb: num(d.memory_limit_mb, 8192),
+    storageQuotaMb: num(d.storage_quota_mb, 4096),
+    maxConcurrentJobs: num(d.max_concurrent_jobs, 2),
+    maxJobsPerUser: num(d.max_jobs_per_user, 2),
     resultTtlHours: num(d.result_ttl_hours, 24),
   };
+}
+
+export function toToolPoolStatus(d: J): ToolPoolStatus {
+  return { ...toToolPool(d), slug: str(d.slug, "tools"), myActiveJobs: num(d.my_active_jobs) };
 }
 
 export function toUpload(u: J): Upload {

@@ -6,6 +6,7 @@ from sqlalchemy import BigInteger, ForeignKey, Index, Integer, Numeric, SmallInt
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, BigInt, DateTime6, IdMixin, TimestampMixin, utcnow
+from app.models.project_request import ProjectRequest
 from app.models.user import User
 
 
@@ -18,8 +19,10 @@ class Project(IdMixin, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     data_type: Mapped[str] = mapped_column(String(32), nullable=False)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)  # active | archived
-    # standard = approved through a request; personal = one per user, hosts the preprocessing / analysis tool jobs
+    # pending | in_review | active | rejected | completed | archived (app.schemas.project.PROJECT_STATUSES)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    # standard = applied for and approved; shared = the tool pool that hosts every preprocessing / analysis job;
+    # personal = legacy per-user workspaces (archived by migration 0006, hidden everywhere)
     kind: Mapped[str] = mapped_column(String(16), default="standard", nullable=False)
     owner_id: Mapped[int] = mapped_column(BigInt, ForeignKey("users.id"), nullable=False, index=True)
     request_id: Mapped[int | None] = mapped_column(BigInt, ForeignKey("project_requests.id"), unique=True)
@@ -33,8 +36,12 @@ class Project(IdMixin, TimestampMixin, Base):
     approved_by_id: Mapped[int | None] = mapped_column(BigInt, ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime6)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime6)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime6)
 
     owner: Mapped[User] = relationship(foreign_keys=[owner_id], lazy="selectin")
+    application: Mapped[ProjectRequest | None] = relationship(
+        "ProjectRequest", foreign_keys=[request_id], lazy="selectin"
+    )
     members: Mapped[list[ProjectMember]] = relationship(
         back_populates="project", lazy="selectin", cascade="all, delete-orphan"
     )

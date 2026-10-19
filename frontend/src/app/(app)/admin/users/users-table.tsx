@@ -3,12 +3,14 @@
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { UserInline } from "@/components/features/member-avatars";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { systemRoleLabel } from "@/i18n/zh-TW";
+import { superadminFixedLabel, systemRoleLabel } from "@/i18n/zh-TW";
 import { RelativeTime } from "@/components/features/time";
 import { updateUserAction } from "@/lib/actions";
+import { ASSIGNABLE_ROLES } from "@/lib/roles";
 import type { User } from "@/types/domain";
 
 export function UsersTable({
@@ -54,30 +56,41 @@ export function UsersTable({
               </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground">{u.email}</TableCell>
               <TableCell>
-                <Select
-                  value={u.role}
-                  disabled={pending || !canManage || u.id === currentUserId}
-                  onValueChange={(v) =>
-                    update(u, { role: v }, `${u.displayName} → ${systemRoleLabel[v as User["role"]]}`)
-                  }
-                >
-                  <SelectTrigger size="sm" className="w-32" aria-label={`${u.displayName} 的系統角色`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="superadmin">{systemRoleLabel.superadmin}</SelectItem>
-                    <SelectItem value="admin">{systemRoleLabel.admin}</SelectItem>
-                    <SelectItem value="user">{systemRoleLabel.user}</SelectItem>
-                  </SelectContent>
-                </Select>
+                {u.role === "superadmin" ? (
+                  // exactly one, fixed by the backend's SUPERADMIN_USERNAME: nothing to select here
+                  <Badge variant="secondary">{superadminFixedLabel}</Badge>
+                ) : (
+                  <Select
+                    value={u.role}
+                    disabled={pending || !canManage || u.id === currentUserId}
+                    onValueChange={(v) =>
+                      update(u, { role: v }, `${u.displayName} → ${systemRoleLabel[v as User["role"]]}`)
+                    }
+                  >
+                    <SelectTrigger size="sm" className="w-32" aria-label={`${u.displayName} 的系統角色`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ASSIGNABLE_ROLES.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {systemRoleLabel[r]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </TableCell>
               <TableCell>
-                <Switch
-                  checked={u.isActive}
-                  disabled={pending || !canManage || u.id === currentUserId}
-                  aria-label={`啟用 ${u.displayName}`}
-                  onCheckedChange={(c) => update(u, { is_active: c }, `${u.displayName} 已${c ? "啟用" : "停用"}`)}
-                />
+                {u.role === "superadmin" ? (
+                  <span className="text-xs text-muted-foreground">固定啟用</span>
+                ) : (
+                  <Switch
+                    checked={u.isActive}
+                    disabled={pending || !canManage || u.id === currentUserId}
+                    aria-label={`啟用 ${u.displayName}`}
+                    onCheckedChange={(c) => update(u, { is_active: c }, `${u.displayName} 已${c ? "啟用" : "停用"}`)}
+                  />
+                )}
               </TableCell>
               <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
                 {u.lastLoginAt ? <RelativeTime iso={u.lastLoginAt} /> : "—"}

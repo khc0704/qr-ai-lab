@@ -78,13 +78,13 @@ export function CommandMenu({ projects, isAdmin }: { projects: CommandEntry[]; i
               <MessagesSquare />
               {nav.discussions}
             </CommandItem>
-            <CommandItem onSelect={() => go("/project-requests")}>
-              <ClipboardList />
-              {nav.projectRequests}
-            </CommandItem>
             <CommandItem onSelect={() => go("/projects")}>
               <FolderKanban />
               {nav.projects}
+            </CommandItem>
+            <CommandItem onSelect={() => go("/projects/new")}>
+              <ClipboardList />
+              專案申請
             </CommandItem>
             {isAdmin ? (
               <>

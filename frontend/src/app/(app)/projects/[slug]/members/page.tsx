@@ -1,8 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { TableSkeleton } from "@/components/features/skeletons";
 import { getProject } from "@/lib/api";
-import { canProject, projectRole } from "@/lib/roles";
+import { canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 import { MembersTable } from "./members-table";
 
@@ -10,6 +10,7 @@ async function Members({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const canManage = canProject(projectRole(project, user), "manage");
   return <MembersTable slug={project.slug} members={project.members} canManage={canManage} />;
 }

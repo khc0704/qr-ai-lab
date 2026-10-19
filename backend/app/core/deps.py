@@ -79,7 +79,10 @@ class ProjectAccess:
     user: User
 
 
-def project_access(min_role: str = "viewer"):
+def project_access(min_role: str = "viewer", *, active: bool = False):
+    """``active=True``: the route changes the project's work (data sources, uploads, jobs, members) and is only
+    allowed while the project is 進行中; pending / completed / archived projects stay readable."""
+
     async def dep(session: DbSession, user: CurrentUser, slug: Annotated[str, Path()]) -> ProjectAccess:
         project = (await session.execute(select(Project).where(Project.slug == slug))).scalar_one_or_none()
         if project is None:
@@ -89,8 +92,11 @@ def project_access(min_role: str = "viewer"):
             raise not_found("PROJECT_NOT_FOUND", f"找不到專案 {slug}")  # hide existence from non-members
         if ROLE_ORDER[role] < ROLE_ORDER[min_role]:
             raise forbidden("PROJECT_ROLE", f"需要 {min_role} 以上的專案角色")
+        if active and project.status != "active":
+            raise conflict("PROJECT_NOT_ACTIVE", f"專案狀態是 {project.status}，核准並進行中的專案才能操作")
         return ProjectAccess(project=project, role=role, user=user)
 
+    dep.__name__ = f"project_access_{min_role}{'_active' if active else ''}"
     return dep
 
 

@@ -159,6 +159,15 @@ async def pool_indices(session: AsyncSession) -> list[int]:
     return (await settings_svc.get_resource_pool(session)).gpu_indices
 
 
+def platform_note() -> str | None:
+    """`wsl2` when running under Windows Subsystem for Linux (psutil sees the WSL VM, not the Windows host)."""
+    try:
+        text = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return None
+    return "wsl2" if "microsoft" in text or "wsl" in text else None
+
+
 async def node_status(session: AsyncSession) -> NodeStatus:
     s = get_settings()
     gpus = detect_gpus()
@@ -204,6 +213,7 @@ async def node_status(session: AsyncSession) -> NodeStatus:
         disk_free_gb=int(du.free / 2**30),
         allocated=await allocated(session),
         runner=runner_info(),
+        platform=platform_note(),
     )
 
 

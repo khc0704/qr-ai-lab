@@ -3,24 +3,24 @@ import Link from "next/link";
 import { GpuCards } from "@/components/features/gpu-cards";
 import { ResourceMeter } from "@/components/features/resource-meter";
 import { ResourcePoolForm } from "@/components/features/resource-pool-form";
-import { ToolDefaultsForm } from "@/components/features/tool-defaults-form";
+import { ToolPoolForm } from "@/components/features/tool-pool-form";
 import { StatCard } from "@/components/features/stat-card";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getAdminOverview, getNodeStatus, getResourcePool, getToolDefaults } from "@/lib/api";
+import { getAdminOverview, getNodeStatus, getResourcePool, getToolPool } from "@/lib/api";
 import { formatMb } from "@/lib/format";
 import { can, getCurrentUser } from "@/lib/session";
 
 async function Dashboard() {
-  const [overview, pool, node, me, toolDefaults] = await Promise.all([
+  const [overview, pool, node, me, toolPool] = await Promise.all([
     getAdminOverview(),
     getResourcePool(),
     getNodeStatus(),
     getCurrentUser(),
-    getToolDefaults(),
+    getToolPool(),
   ]);
   const canManagePool = can(me, "pool.manage");
   const canResetGpu = can(me, "gpu.reset");
@@ -38,7 +38,7 @@ async function Dashboard() {
           icon={ClipboardCheck}
           tone={overview.pendingRequests > 0 ? "warning" : "default"}
           hint={
-            <Link href="/admin/requests" className="text-brand-ink hover:underline">
+            <Link href="/projects?status=pending" className="text-brand-ink hover:underline">
               前往審核
             </Link>
           }
@@ -96,7 +96,8 @@ async function Dashboard() {
             <CardHeader>
               <CardTitle>總資源池</CardTitle>
               <CardDescription>
-                Scheduler 以此為容量上限。變更只影響之後啟動的任務，並寫入稽核紀錄。
+                Scheduler
+                以此為容量上限；各專案的配額在專案的「設定」分頁調整。變更只影響之後啟動的任務，並寫入稽核紀錄。
                 {!canManagePool ? "只有 superadmin 可以調整；你目前只能檢視。" : ""}
               </CardDescription>
             </CardHeader>
@@ -106,16 +107,16 @@ async function Dashboard() {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>工具預設（個人工作區配額）</CardTitle>
+              <CardTitle>工具池（前處理 / 分析任務的公共配額）</CardTitle>
               <CardDescription>
-                每位使用者第一次用「資料前處理 /
-                資料分析」時會建立一個個人工作區，配額用這裡的值；已建立的工作區在「專案配額」頁個別調整。結果保留時間是前處理
+                所有使用者的「資料前處理 /
+                資料分析」任務都在同一個工具池排隊，不佔用任何專案的配額；「每人同時任務數」避免一個人占滿整池。結果保留時間是前處理
                 zip 沒被下載時的壽命。
                 {!canManagePool ? "只有 superadmin 可以調整。" : ""}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ToolDefaultsForm defaults={toolDefaults} readOnly={!canManagePool} />
+              <ToolPoolForm pool={toolPool} readOnly={!canManagePool} />
             </CardContent>
           </Card>
         </div>

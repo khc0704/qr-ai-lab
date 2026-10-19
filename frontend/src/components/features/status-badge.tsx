@@ -1,9 +1,8 @@
 import { cn } from "@/lib/utils";
-import { issueStatusLabel, jobStatusLabel, projectStatusLabel, requestStatusLabel } from "@/i18n/zh-TW";
-import type { IssueStatus, JobStatus, ProjectStatus, RequestStatus, ZooStatus } from "@/types/domain";
+import { issueStatusLabel, jobStatusLabel, projectStatusLabel } from "@/i18n/zh-TW";
+import type { IssueStatus, JobStatus, ProjectStatus, ZooStatus } from "@/types/domain";
 
-export type AnyStatus =
-  JobStatus | RequestStatus | IssueStatus | ProjectStatus | ZooStatus | "pending" | "purged" | "ok" | "error";
+export type AnyStatus = JobStatus | IssueStatus | ProjectStatus | ZooStatus | "purged" | "ok" | "error";
 type Tone = "muted" | "info" | "primary" | "success" | "warning" | "destructive";
 
 /** DESIGN.md §2.5 — the only mapping from status to color. */
@@ -12,15 +11,13 @@ const toneOf: Record<AnyStatus, Tone> = {
   cancelled: "muted",
   closed: "muted",
   archived: "muted",
-  withdrawn: "muted",
+  completed: "muted",
   purged: "muted",
   scheduled: "info",
   open: "info",
-  submitted: "info",
   pending: "info",
   running: "primary",
   succeeded: "success",
-  approved: "success",
   active: "success",
   ok: "success",
   failed: "destructive",
@@ -36,10 +33,8 @@ const toneOf: Record<AnyStatus, Tone> = {
 
 const labelOf: Record<AnyStatus, string> = {
   ...jobStatusLabel,
-  ...requestStatusLabel,
   ...issueStatusLabel,
   ...projectStatusLabel,
-  pending: "待處理",
   purged: "已清除",
   ok: "正常",
   error: "異常",

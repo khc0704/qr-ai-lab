@@ -25,7 +25,7 @@ paths:
 - 前綴 `/api/v1`；資源複數名詞 kebab-case；列表回 `{"items": [...], "total": n, "page": p, "page_size": s}`。
 - 錯誤：`HTTPException(detail={"code": "PROJECT_NOT_FOUND", "message": "..."})`，code 用 UPPER_SNAKE；422 交給 FastAPI 預設。
 - 每個 endpoint 都要 `response_model`、`status_code`、`tags`、docstring；`tests/` 至少一個 happy path + 一個權限拒絕測試。
-- 授權順序：驗 token（local HS256 或 Keycloak JWKS，快取 1 小時）→ upsert `users`（Keycloak：只有 token 帶 `KEYCLOAK_ROLE_MAP` 對應的 role 才覆蓋 `users.role`；`SUPERADMIN_USERNAMES` 永遠 superadmin）→ `require_perm` / 專案角色。superadmin 什麼都能做；admin 只有日常營運（`requests.review`、`jobs.control`、`issues.moderate`、唯讀的管理頁）；user 沒有管理操作。新 endpoint 屬於管理操作時一律用 `require_perm`，並在 `tests/test_permissions.py` 加一個 admin 被拒的案例。owner / maintainer 管成員；member 建資料來源 / Job、取消本專案 Job；viewer 只讀（含看 log）。
+- 授權順序：驗 token（local HS256 或 Keycloak JWKS，快取 1 小時）→ upsert `users`（Keycloak 只提供身分：`users.role` 以 `/admin/users` 的設定為準，`KEYCLOAK_ROLE_MAP` 預設空；`SUPERADMIN_USERNAME` 是唯一的 superadmin，其他帶 superadmin 的列登入時降為 admin）→ `require_perm` / 專案角色。superadmin 什麼都能做；admin 只有日常營運（`requests.review`、`jobs.control`、`issues.moderate`、唯讀的管理頁）；user 沒有管理操作。新 endpoint 屬於管理操作時一律用 `require_perm`，並在 `tests/test_permissions.py` 加一個 admin 被拒的案例。owner / maintainer 管成員；member 建資料來源 / Job、取消本專案 Job；viewer 只讀（含看 log）。
 - 長任務永遠非同步：endpoint 只建立 `jobs` row（status=queued，`queue_rank = max + 1000`）並回 202 + job id。
 - 管理員操作（資源池、佇列重排、強制中斷 / 重啟、刪 Job、GPU 重置、改配額、改角色、刪專案 / 討論串）一律寫 `audit_logs` 並記 reason。
 - 資源：Job 的 `requested_gpu_memory_mb` 決定獨占或依顯存共用（`services/gpu.py` 的 `plan` / `place`，排程器每 tick 重算）；runner 的 `thread_env()` 是原生執行緒池的唯一來源，新增變數加在那裡；使用率取樣只在排程器（`usage_svc.sample`）。

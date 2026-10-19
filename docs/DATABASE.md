@@ -7,7 +7,7 @@
 ## ER 概觀
 
 ```
-users ──< project_requests ──(approve, 1:1)── projects ──< project_members >── users
+users ──< project_requests ──(apply, 1:1)── projects ──< project_members >── users
   │                                              ├──< data_sources ──< jobs
   ├──< issues                                    ├──< uploads ──(claimed_by)── jobs
   ├──< comments (target_type: issue | project_request)
@@ -24,8 +24,8 @@ system_settings（key / value，資源池等）
 | username | VARCHAR(100) NOT NULL | `preferred_username` / 本地帳號名 |
 | email | VARCHAR(255) NOT NULL | `ix_users_email` |
 | display_name | VARCHAR(100) NULL | |
-| role | VARCHAR(32) NOT NULL DEFAULT 'user' | `superadmin \| admin \| user`；superadmin 在 UI 調整；Keycloak 登入時 token 帶 `KEYCLOAK_ROLE_MAP` 對應的 role 才覆蓋 |
-| is_active | BOOL NOT NULL DEFAULT 1 | superadmin 可停用（停用者 API 全拒）；不能停用自己或最後一位 superadmin |
+| role | VARCHAR(32) NOT NULL DEFAULT 'user' | `superadmin \| admin \| user`；只在 UI（`/admin/users`）調整、最多到 admin；superadmin 只有一位，由 `SUPERADMIN_USERNAME` 固定（Keycloak 只提供身分，不覆蓋） |
+| is_active | BOOL NOT NULL DEFAULT 1 | superadmin 可停用（停用者 API 全拒）；不能停用自己或 `SUPERADMIN_USERNAME` 的帳號 |
 | auth_provider | VARCHAR(16) NOT NULL DEFAULT 'local' | `local \| keycloak` |
 | password_hash | VARCHAR(255) NULL | argon2；只有 local |
 | last_login_at | DATETIME(6) NULL | |
@@ -43,7 +43,7 @@ system_settings（key / value，資源池等）
 固定 key：
 - `resource_pool`：`{"gpu_indices": [0, 1], "cpu_cores": 24, "memory_mb": 98304, "max_running_jobs": 4, "allow_backfill": true, "gpu_share": true}`（`gpu_indices` 必須唯一且 ≥ 0），所有專案合計可用的總資源；scheduler 以此為容量上限。
 - `job_defaults`：`{"timeout_minutes": 240, "upload_max_mb": 2048, "upload_ttl_minutes": 60, "log_max_mb": 50}`。
-- `tool_defaults`：個人工作區的配額與結果保留時間 `{"gpu_limit": 0, "cpu_limit": 2, "memory_limit_mb": 4096, "storage_quota_mb": 2048, "max_concurrent_jobs": 1, "result_ttl_hours": 24}`。
+- `tool_pool`：工具池（`projects.kind = shared`）的配額、每人同時上限與結果保留時間 `{"gpu_limit": 0, "cpu_limit": 4, "memory_limit_mb": 8192, "storage_quota_mb": 4096, "max_concurrent_jobs": 2, "max_jobs_per_user": 2, "result_ttl_hours": 24}`；儲存時同步到工具池專案的配額欄位。
 
 ## issues（討論區）
 
@@ -65,7 +65,7 @@ system_settings（key / value，資源池等）
 
 索引：`ix_issues_status_created_at`、`ix_issues_type_status`、`ix_issues_author_id`、`ix_issues_project_id`。
 
-## project_requests（專案申請，與討論區分開）
+## project_requests（專案申請內容；專案在送出時就建立）
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
@@ -81,13 +81,13 @@ system_settings（key / value，資源池等）
 | requested_cpu | DECIMAL(5,2) NOT NULL DEFAULT 2 | |
 | requested_memory_mb | INT UNSIGNED NOT NULL DEFAULT 4096 | |
 | requested_storage_mb | INT UNSIGNED NOT NULL DEFAULT 10240 | |
-| proposed_slug | VARCHAR(64) NULL | admin 核准時可改 |
+| proposed_slug | VARCHAR(64) NULL | 送出時決定的專案 slug（建議值或由題目產生，保證唯一） |
 | members | JSON NULL | `[{"email": "...", "role": "member"}]` |
-| status | VARCHAR(32) NOT NULL DEFAULT 'submitted' | `submitted \| in_review \| approved \| rejected \| withdrawn` |
+| status | VARCHAR(32) NOT NULL DEFAULT 'submitted' | `submitted \| in_review \| approved \| rejected`（`projects.status` 的歷史鏡像；真相在 projects） |
 | reviewer_id | BIGINT UNSIGNED NULL FK users | |
 | review_note | TEXT NULL | 退回理由 / 核准備註 |
 | reviewed_at | DATETIME(6) NULL | |
-| project_id | BIGINT UNSIGNED NULL FK projects | 核准後回填；`uq_project_requests_project_id` |
+| project_id | BIGINT UNSIGNED NULL FK projects | 送出時回填（撤回時連同專案一起刪除）；`uq_project_requests_project_id` |
 | submitted_at | DATETIME(6) NOT NULL | 重送時更新 |
 | created_at / updated_at | DATETIME(6) | |
 
@@ -117,10 +117,10 @@ system_settings（key / value，資源池等）
 | description | TEXT NULL | markdown |
 | data_type | VARCHAR(32) NOT NULL | |
 | task_type | VARCHAR(32) NOT NULL | |
-| status | VARCHAR(32) NOT NULL DEFAULT 'active' | `active \| archived` |
-| kind | VARCHAR(16) NOT NULL DEFAULT 'standard' | `standard \| personal`；personal = 使用者的個人工作區（工具任務），不列在一般專案列表，配額來自「工具預設」 |
+| status | VARCHAR(32) NOT NULL DEFAULT 'pending' | `pending \| in_review \| active \| rejected \| completed \| archived` |
+| kind | VARCHAR(16) NOT NULL DEFAULT 'standard' | `standard \| shared \| personal`；shared = 唯一的工具池（slug `tools`，所有前處理 / 分析任務），不列在專案列表，配額來自 `tool_pool`；personal = 舊版個人工作區（0007 封存） |
 | owner_id | BIGINT UNSIGNED NOT NULL FK users | |
-| request_id | BIGINT UNSIGNED NULL FK project_requests | 來源申請；`uq_projects_request_id` |
+| request_id | BIGINT UNSIGNED NULL FK project_requests | 申請內容；`uq_projects_request_id`（工具池沒有） |
 | gpu_limit | SMALLINT UNSIGNED NOT NULL DEFAULT 0 | 本專案同時可用 GPU 數 |
 | cpu_limit | DECIMAL(5,2) NOT NULL DEFAULT 2 | |
 | memory_limit_mb | INT UNSIGNED NOT NULL DEFAULT 4096 | |
@@ -130,6 +130,7 @@ system_settings（key / value，資源池等）
 | default_job_timeout_minutes | INT UNSIGNED NULL | NULL = 用 `system_settings.job_defaults` |
 | approved_by_id | BIGINT UNSIGNED NULL FK users | |
 | approved_at | DATETIME(6) NULL | |
+| completed_at | DATETIME(6) NULL | 結束時間（`completed`） |
 | archived_at | DATETIME(6) NULL | 軟刪除 |
 | created_at / updated_at | DATETIME(6) | |
 
@@ -195,7 +196,7 @@ system_settings（key / value，資源池等）
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
 | project_id | BIGINT UNSIGNED NOT NULL FK projects | |
-| kind | VARCHAR(32) NOT NULL | `train \| inference \| preprocess \| analysis`（後兩者 = 個人工作區的工具任務，`input.tool = true`） |
+| kind | VARCHAR(32) NOT NULL | `train \| inference \| preprocess \| analysis`（後兩者 = 工具池的工具任務，`input.tool = true`，只有 `created_by_id` 與管理員看得到） |
 | name | VARCHAR(120) NOT NULL | |
 | status | VARCHAR(32) NOT NULL DEFAULT 'queued' | `queued \| scheduled \| running \| succeeded \| failed \| cancelled` |
 | queue_rank | BIGINT NOT NULL | 佇列順序，小的先跑；新 Job = max + 1000；admin 重排會重新編號 |
@@ -279,9 +280,9 @@ system_settings（key / value，資源池等）
 
 ## 狀態機摘要
 
-- project_requests：`submitted → in_review → approved | rejected`；`rejected → submitted`（修改後重送）；`submitted | in_review → withdrawn`。
+- project_requests：`submitted → in_review → approved | rejected`；`rejected → submitted`（修改後重送）；撤回 = 連同專案刪除（鏡像 projects）。
 - issues：`open → closed`；`closed → open`（重開）。
-- projects：`active → archived`。
+- projects：`pending → in_review → active | rejected`；`rejected → pending`（修改後重送）；`pending | in_review | rejected → （撤回，刪除）`；`active → completed → active`（重新開啟）；`active | completed → archived → active`（解除封存）。
 - jobs：`queued → scheduled → running → succeeded | failed`；`queued | scheduled | running → cancelled`（成員取消、admin 強制中斷、逾時）。
 - uploads：`pending → claimed`（建立 Job）；`pending → purged`（過期）。
 
@@ -293,4 +294,4 @@ system_settings（key / value，資源池等）
 
 - `infra/mariadb/init/01_init.sh`：容器第一次啟動時依 `MARIADB_DATABASE` / `MARIADB_USER` 補字集並建立 `<db>_test`（資料庫與使用者本身由 MariaDB 映像的環境變數建立）。
 - 表由 Alembic 建立；第一個 revision 包含以上全部表；`system_settings` 的 `resource_pool`（依 pynvml / psutil 偵測到的實體值）、`job_defaults`、`tool_defaults` 在第一次讀取時寫入。
-- 第一位 superadmin：`SUPERADMIN_USERNAMES` 列出的帳號、或 token 帶有 `KEYCLOAK_ROLE_MAP` 對應角色的使用者，首次登入即為該角色；keycloak 模式不 seed 本地帳號。SQLite（dev / test）也會開 `PRAGMA foreign_keys=ON`，外鍵行為與 MariaDB 一致。
+- 唯一的 superadmin：`SUPERADMIN_USERNAME` 指定的帳號首次登入（或服務啟動）時即為 superadmin，其他帳號由 superadmin 在 `/admin/users` 指派為 admin / user；keycloak 模式不 seed 本地帳號。SQLite（dev / test）也會開 `PRAGMA foreign_keys=ON`，外鍵行為與 MariaDB 一致。

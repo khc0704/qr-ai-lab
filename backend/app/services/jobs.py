@@ -64,6 +64,7 @@ async def list_jobs(
     session: AsyncSession,
     *,
     project_id: int | None = None,
+    created_by_id: int | None = None,
     statuses: list[str] | None = None,
     kind: str | None = None,
     page: int = 1,
@@ -72,6 +73,8 @@ async def list_jobs(
     stmt = select(Job)
     if project_id:
         stmt = stmt.where(Job.project_id == project_id)
+    if created_by_id:
+        stmt = stmt.where(Job.created_by_id == created_by_id)
     if statuses:
         stmt = stmt.where(Job.status.in_(statuses))
     if kind:
@@ -319,12 +322,12 @@ async def create_tool_job(
     requested_gpu_memory_mb: int | None = None,
     timeout_minutes: int | None = None,
 ) -> Job:
-    """A preprocessing / analysis job in the user's personal workspace. The uploaded file is moved into the job's
-    input dir (deleted when the job ends, like every upload); resources default to the workspace quota."""
+    """A preprocessing / analysis job in the shared tool pool. The uploaded file is moved into the job's input dir
+    (deleted when the job ends, like every upload); resources default to the pool quota."""
     if kind not in TOOL_KINDS:
         raise bad_request("BAD_JOB_KIND", f"未知的工具任務 {kind}")
     if project.status != "active":
-        raise conflict("PROJECT_ARCHIVED", "個人工作區已封存")
+        raise conflict("PROJECT_ARCHIVED", "工具池已停用")
     defaults = await settings_svc.get_job_defaults(session)
     cpu = min(float(project.cpu_limit), requested_cpu or min(2.0, float(project.cpu_limit)))
     mem = min(project.memory_limit_mb, requested_memory_mb or min(4096, project.memory_limit_mb))

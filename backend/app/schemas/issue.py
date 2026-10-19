@@ -19,6 +19,7 @@ class IssueCreate(BaseModel):
 
 
 class IssueUpdate(BaseModel):
+    type: IssueType | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
     body: str | None = None
     assignee_id: int | None = None
@@ -49,6 +50,10 @@ class CommentCreate(BaseModel):
     body: str = Field(min_length=1)
 
 
+class CommentUpdate(BaseModel):
+    body: str = Field(min_length=1)
+
+
 class CommentRead(ORMModel):
     id: int
     target_type: str
@@ -57,3 +62,5 @@ class CommentRead(ORMModel):
     kind: str
     body: str
     created_at: datetime
+    # Equals created_at until the body is edited (the UI shows 「已編輯」 when it is later).
+    updated_at: datetime

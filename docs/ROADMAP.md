@@ -66,8 +66,8 @@
 
 ## G. 這一輪（Keycloak、三種角色、資源限制、GPU 共用、使用率歷史、前處理服務）新增的能力
 
-- 認證：`AUTH_MODE=keycloak` 時前端用 Auth.js（`src/auth.ts`，Keycloak provider，PKCE，session 內自動 refresh）取得 access token 再轉給 FastAPI；後端驗 realm JWKS、依 `KEYCLOAK_ROLE_MAP` 對應角色、`SUPERADMIN_USERNAMES` 引導第一位 superadmin、同名本地帳號自動接管；登出走 end-session。dev 維持本地帳號。`scripts/e2e-keycloak.mjs` + 假 Keycloak 可離線驗證整條流程。
-- 角色：`superadmin | admin | user` 與權限矩陣（`app/core/permissions.py`，`require_perm`，`/me.permissions`）；superadmin 在 `/admin/users` 調整角色（防自降 / 防刪最後一位）；新增刪專案、刪討論串、重啟任務；admin 的資源池 / 配額 / 模型庫頁改為唯讀。
+- 認證：`AUTH_MODE=keycloak` 時前端用 Auth.js（`src/auth.ts`，Keycloak provider，PKCE，session 內自動 refresh）取得 access token 再轉給 FastAPI；後端驗 realm JWKS 只取身分（角色在 `users.role`；`KEYCLOAK_ROLE_MAP` 預設空，留作未來 opt-in）、`SUPERADMIN_USERNAME` 指定唯一的 superadmin、同名本地帳號自動接管；登出走 end-session。dev 維持本地帳號。`scripts/e2e-keycloak.mjs` + 假 Keycloak 可離線驗證整條流程。
+- 角色：`superadmin | admin | user` 與權限矩陣（`app/core/permissions.py`，`require_perm`，`/me.permissions`）；superadmin 在 `/admin/users` 調整角色（最多到 admin；superadmin 由 `SUPERADMIN_USERNAME` 固定，不能指派 / 降級 / 停用）；新增刪專案、刪討論串、重啟任務；admin 的資源池 / 配額 / 模型庫頁改為唯讀。
 - 資源限制：runner 設齊所有原生執行緒池變數（OMP / MKL / OpenBLAS / numexpr / TBB / numba / loky…），trainer `limits.py` 在程序內用 threadpoolctl + torch 再夾一次並把實際 affinity / 執行緒數印進 log。
 - GPU：任務可填「每張 GPU 需要的顯存」，排程器依 pynvml 剩餘顯存 best-fit 讓多個任務共用一張（資源池 `gpu_share` 開關；trainer `set_per_process_memory_fraction`）；superadmin 可在 Dashboard 強制釋放顯存（中斷本系統任務 / kill 所有程序 / `GPU_RESET_COMMAND`）。
 - 使用率歷史：`resource_samples` + `GET /admin/usage` + `/admin/usage` 頁（1h–30d、分母切換：專案配額 / 資源池 / 系統總量、各專案時間加權占用與實測 CPU / 記憶體）。

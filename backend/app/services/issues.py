@@ -69,12 +69,16 @@ async def get(session: AsyncSession, issue_id: int) -> Issue:
 
 
 async def create(session: AsyncSession, user: User, body: IssueCreate) -> Issue:
+    # created_at == updated_at on a fresh thread: the UI shows 「已編輯」 only once they differ.
+    now = utcnow()
     issue = Issue(
         type=body.type,
         title=body.title,
         body=body.body,
         author_id=user.id,
         project_id=await _project_id(session, body.project_slug),
+        created_at=now,
+        updated_at=now,
     )
     session.add(issue)
     await session.commit()
@@ -84,6 +88,8 @@ async def create(session: AsyncSession, user: User, body: IssueCreate) -> Issue:
 async def update(session: AsyncSession, user: User, issue: Issue, body: IssueUpdate) -> Issue:
     if not (user.is_admin or issue.author_id == user.id):
         raise forbidden("ISSUE_EDIT", "只有作者或管理員可以編輯")
+    if body.type is not None:
+        issue.type = body.type
     if body.title is not None:
         issue.title = body.title
     if body.body is not None:
@@ -114,6 +120,7 @@ async def close(session: AsyncSession, admin: User, issue: Issue, note: str) -> 
     issue.resolution_note = note
     issue.closed_by_id = admin.id
     issue.closed_at = utcnow()
+    comments.keep_updated_at(issue)  # a status change is not a content edit
     await comments.add(
         session, "issue", issue.id, None, f"{admin.display_name or admin.username} 關閉了此問題：{note}", kind="system"
     )
@@ -127,6 +134,7 @@ async def reopen(session: AsyncSession, actor: User, issue: Issue) -> Issue:
     issue.status = "open"
     issue.closed_at = None
     issue.closed_by_id = None
+    comments.keep_updated_at(issue)
     await comments.add(
         session, "issue", issue.id, None, f"{actor.display_name or actor.username} 重開了此問題", kind="system"
     )

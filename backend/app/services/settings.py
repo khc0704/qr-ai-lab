@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import SystemSetting
-from app.schemas.settings import JobDefaults, ResourcePool, ToolDefaults
+from app.schemas.settings import JobDefaults, ResourcePool, ToolPool
 from app.services import audit
 
 RESOURCE_POOL = "resource_pool"
 JOB_DEFAULTS = "job_defaults"
-TOOL_DEFAULTS = "tool_defaults"
+TOOL_POOL = "tool_pool"
 _cache: dict[str, tuple[float, dict]] = {}
 CACHE_TTL = 10.0
 
@@ -92,19 +92,20 @@ async def set_job_defaults(session: AsyncSession, d: JobDefaults, actor_id: int)
     return d
 
 
-async def get_tool_defaults(session: AsyncSession) -> ToolDefaults:
-    v = await _get(session, TOOL_DEFAULTS)
+async def get_tool_pool(session: AsyncSession) -> ToolPool:
+    v = await _get(session, TOOL_POOL)
     if v is None:
-        d = ToolDefaults()
-        await _set(session, TOOL_DEFAULTS, d.model_dump(), None)
+        d = ToolPool()
+        await _set(session, TOOL_POOL, d.model_dump(), None)
         await session.commit()
         return d
-    return ToolDefaults.model_validate(v)
+    return ToolPool.model_validate(v)
 
 
-async def set_tool_defaults(session: AsyncSession, d: ToolDefaults, actor_id: int) -> ToolDefaults:
-    await _set(session, TOOL_DEFAULTS, d.model_dump(), actor_id)
-    await audit.record(session, actor_id, "settings.tool_defaults.update", "settings", None, d.model_dump())
+async def set_tool_pool(session: AsyncSession, d: ToolPool, actor_id: int) -> ToolPool:
+    """The shared project's quota columns are kept in sync by the caller (projects_svc.sync_shared_quota)."""
+    await _set(session, TOOL_POOL, d.model_dump(), actor_id)
+    await audit.record(session, actor_id, "settings.tool_pool.update", "settings", None, d.model_dump())
     await session.commit()
     return d
 

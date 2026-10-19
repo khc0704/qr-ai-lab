@@ -34,7 +34,7 @@
 | MariaDB | 11.x（docker compose，image 來自公司鏡像） | 所有業務資料（見 `docs/DATABASE.md`） |
 | Redis | 7.x（docker compose） | Job 事件與 log 的即時 stream；backend 與 scheduler 分開跑時必要，內嵌模式不需要 |
 | DATA_ROOT | 主機目錄（例 `/srv/qr-ai-lab/data`） | 產物、log、暫存上傳、Job 執行期間的輸入副本、模型庫 `model_zoo/` |
-| Keycloak | 內網既有 | 身分、密碼、realm role（`admin` / `user`） |
+| Keycloak | 內網既有 | 身分與密碼（只提供身分；系統角色與專案成員都在本服務的資料表） |
 
 單機部署；v1 不做多節點、不做 Kubernetes、不架自己的物件儲存。**Job 不跑在容器裡**：所有任務都是同一個主機 venv 的子程序，資源限制交給 cgroups（systemd）或排程器的 watchdog；Docker 只用來跑 MariaDB 與 Redis。伺服器不連外網：套件來自公司的 PyPI / npm / image 鏡像，預訓練權重由管理員經「模型庫」頁帶進來。
 
@@ -57,7 +57,7 @@
 ### 2.2 backend 驗證與角色對應
 - `core/security.py`：PyJWT + `PyJWKClient`（`<KEYCLOAK_ISSUER>/protocol/openid-connect/certs`，快取 1 小時），驗簽章、`iss`、`exp`；`KEYCLOAK_AUDIENCE` 有設才驗 `aud`（Keycloak 要加 audience mapper）。
 - `services/users.upsert_keycloak_user`：以 `sub` 找 `users`；找不到時若有同名（`preferred_username`）的本地帳號就接管它（`auth_provider=keycloak`、清掉密碼），否則新建。每次登入同步 email / display name / `last_login_at`。
-- 系統角色：`KEYCLOAK_ROLE_MAP=<keycloak role>:<系統角色>,…`（預設 `superadmin:superadmin,admin:admin`；realm role 與 `resource_access[KEYCLOAK_CLIENT_ID].roles` 都看）。token 帶到對應的 role → `users.role` 設為最高的那個；**沒帶任何對應 role → 維持 UI 設定的角色**（所以 superadmin 可以在 `/admin/users` 直接調整）。`SUPERADMIN_USERNAMES` 列出的帳號登入即為 superadmin（引導第一位管理員，不需要動 Keycloak）。
+- 系統角色：**Keycloak 只提供身分**（`sub`、`preferred_username`、email、姓名），不決定角色。`users.role` 只在 `/admin/users`（`users.manage`）設定，第一次登入一律是 `user`。superadmin **只有一位**，由 `SUPERADMIN_USERNAME`（本地帳號名稱 / Keycloak `preferred_username`）指定：該帳號登入或服務啟動（`services/users.ensure_single_superadmin`）時即為 superadmin，其他任何仍帶 superadmin 的列會被降為 admin；UI / CLI 最多只能指派到 admin（`PATCH /users/{id}` 給 `superadmin` 回 400 `SUPERADMIN_FIXED`，該帳號也不能被降級或停用）。`KEYCLOAK_ROLE_MAP` 預設空（不覆蓋），留作未來的 opt-in：設了 `<keycloak role>:<系統角色>` 才會以 token 的 realm role / `resource_access[KEYCLOAK_CLIENT_ID].roles` 覆蓋 `users.role`（最多對應到 admin；沒帶對應 role 時維持 UI 設定）。
 - `require_admin`（admin 以上）、`require_perm("<perm>")`（見 2.3）、`project_access(min_role)`：以 `project_members` 判斷；admin 以上隱含所有專案的 owner 權限（可看、可管成員），但配額 / 刪除仍看系統權限。
 
 ### 2.3 權限矩陣（`backend/app/core/permissions.py`；前端 `can(user, perm)` 只負責隱藏 UI）
@@ -71,7 +71,7 @@
 | `pool.manage` | ✓ | | | 總資源池、Job 預設值（admin 看到的是唯讀表單） |
 | `quota.manage` | ✓ | | | 專案配額 |
 | `projects.delete` | ✓ | | | 刪除專案（任務、產物、資料來源、資料夾） |
-| `users.manage` | ✓ | | | 改系統角色、停用帳號（不能降級 / 停用自己，不能移除最後一位 superadmin，`SUPERADMIN_USERNAMES` 內的不能降級） |
+| `users.manage` | ✓ | | | 改系統角色（最多到 admin）、停用帳號（superadmin 只有一位，由 `SUPERADMIN_USERNAME` 固定：不能指派、降級或停用） |
 | `model_zoo.manage` | ✓ | | | 上傳 / 匯入 / 移除預訓練權重 |
 | `gpu.reset` | ✓ | | | 強制釋放 GPU 顯存 |
 
@@ -94,11 +94,11 @@
 
 ## 4. 專案申請與審批
 
-- 獨立的「專案申請」區：`project_requests` 表，結構化欄位（題目、目的、資料類型、任務、資料量級、資料描述、需求 GPU / CPU / Memory / Storage、建議 slug、預計成員 email）。
-- 狀態機：`submitted → in_review → approved | rejected`；`rejected → submitted`（申請人修改後重送）；申請人可 `withdrawn`。
-- 審核過程的往返用 `comments`（`target_type = project_request`）；admin 要求補件時留言並維持 `in_review`。
-- 核准（`POST /project-requests/{id}/approve`，admin）在一個交易內：建立 `projects`（slug、配額，可修改申請值）、加 owner 與已存在的成員（其餘留在 `members` 待其登入後由 owner 邀請）、建立 `DATA_ROOT/projects/{slug}/`、申請標 `approved` 並寫 system comment、寫 `audit_logs`。
-- 退回需填 `review_note`。
+- 申請與專案是同一件事：`POST /projects` 送出申請時就建立 `projects` 列（`status = pending`，slug 由建議值或題目產生並確保唯一，申請人成為 owner），申請內容（目的、資料量級、資料描述、需求 GPU / CPU / Memory / Storage、預計成員 email）放在 `project_requests` 表並以 `projects.request_id` 連結，專案頁以「申請」分頁顯示。核准前只有這個分頁；核准後其他分頁才開放，申請分頁留作紀錄。
+- 專案狀態機：`pending → in_review → active`（核准）或 `rejected`（退回；申請人修改 `PATCH /projects/{slug}/application` 後回到 `pending`）；`pending | in_review | rejected` 可 `POST …/withdraw`（刪除這個專案）；`active → completed`（結束：不再接受新任務，產物與 log 保留，owner / admin 可 `reopen`）；`active | completed → archived`。`project_requests.status` 只是歷史鏡像。
+- 審核過程的往返用 `comments`（`target_type = project_request`，`GET/POST /projects/{slug}/application/comments`）；admin 要求補件時留言並維持 `in_review`。
+- 核准（`POST /projects/{slug}/approve`，`requests.review`）在一個交易內：設定配額（可修改申請值）與名稱、加入申請列出且已登入過的成員（其餘待 owner 之後邀請）、建立 `DATA_ROOT/projects/{slug}/`、`status = active`、寫 system comment 與 `audit_logs`。退回需填 `review_note`。
+- 只有 `active` 的專案能建資料來源、上傳、建立任務、管成員（`project_access(..., active=True)` → 409 `PROJECT_NOT_ACTIVE`）；`pending` 的專案對非成員回 404。管理員在專案「設定」分頁調整配額（`PATCH /projects/{slug}/quota`，`quota.manage`）；沒有獨立的審核頁或配額頁，待審清單就是 `GET /projects?status=pending`。
 
 ## 5. 資料來源與一次性上傳（不留存政策）
 
@@ -187,7 +187,7 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 推論：`config.mode` 選推論模式（`predict | score | embed | retrieve | detect | segment | measure | extend`），輸出 `output/predictions.csv` + `.jsonl` + `summary.json`，並以 `kind=report` 登記；`result.preview` 存前 20 列。
 - 產物 `path` 可以是目錄（例如 `model/`）；`GET /artifacts/{id}/download` 會即時打包成 zip。
 - 隔離等級：任務與排程器是同一個 OS 使用者（`qrlab`），彼此可讀對方的產物目錄；使用者只提交資料與設定、不提交程式碼，因此先以 cgroup 限資源為主。要升級隔離時改用 system 層的 `systemd-run`（`DynamicUser=`、`ProtectSystem=strict`、`ReadWritePaths=`），介面不變。
-- 前處理：`input.spec.preprocess` 的步驟由共用套件 `libs/preprocess`（`qrlab_preprocess`）定義；backend 用它做上傳抽樣預覽與驗證，trainer 在訓練時 fit 並把狀態存成 `model/preprocess.json` + 產物 metadata，推論時 replay。
+- 前處理：`input.spec.preprocess` 的步驟由共用套件 `libs/preprocess`（`qrlab_preprocess`）定義；backend 用它做上傳抽樣預覽與驗證，trainer 在訓練時 fit 並把狀態存成 `model/preprocess.json` + 產物 metadata，推論時 replay。步驟執行中可用 `ctx.warn()` 留下使用者看得懂的警告（例如「文字數字轉成數值」把類別欄整欄變成缺值）；`Pipeline` 以 `step_warnings` / `report()` 逐步驟保存，預覽回傳 `step_details` 與 `warnings`，整檔前處理寫進 `summary.json`。類別欄的編碼是 `tabular.encode`（label / onehot / ordinal，類別清單為 fitted state）。
 
 ### 6.5 GPU 配置（依實測剩餘顯存共用）
 - 任務可填 `requested_gpu_memory_mb`（精靈「每張 GPU 需要的顯存」，預設 8192）。排程器每個 tick 以 pynvml 讀每張資源池 GPU **實際已用的顯存**（所有程序），再用驅動程式的程序清單把顯存對應到本系統每個任務的程序樹（`services/gpu.measured_by_job`）。可用量 = `total − 實測已用 − 尚未分配 − GPU_RESERVE_MB`；「尚未分配」只計入啟動不到 `GPU_WARMUP_S`（預設 120 秒）且實測還沒達到申請量的任務（申請量 − 實測），避免兩個連續啟動的任務都看到「還很空」而擠在同一張卡；暖機期過後完全以實測為準。符合的卡用 best-fit（剩最少的先用）讓任務集中；沒填的任務要整張空卡（沒有任何任務、已用顯存 < `GPU_BUSY_THRESHOLD`）。資源池的 `gpu_share=false` 關閉共用，一律獨占。沒有 NVIDIA driver 時退化成按張數（共用任務平均分散）。
@@ -202,7 +202,7 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - 程序內：`trainer/limits.py` 在讀完 spec 後 `threadpoolctl.threadpool_limits(cpu)`（已載入的 BLAS / OpenMP）、`torch.set_num_threads(cpu)`、`set_num_interop_threads(1)`，並把實際 affinity、各執行緒池大小、torch threads 印進 job log（`limits: cpu=1 affinity=1 cores [3] threadpools[openmp/openmp=1, blas/openblas=1] torch_threads=1`）。sklearn 的 `n_jobs` 一律取 `ctx.cpu`。
 
 ### 6.6b 工具任務（kind = preprocess | analysis）
-- 「資料前處理」與「資料分析」服務不需要專案，但重活一律是任務：每位使用者第一次使用時自動建立一個 **個人工作區**（`projects.kind = personal`，slug `ws-<username>`，配額來自管理員的「工具預設」，之後可在專案配額頁個別調整；不出現在一般專案列表）。工具上傳（`DATA_ROOT/tools/<id>/`，無資料庫列）在建立任務時移進任務的 input（任務結束即刪）。
+- 「資料前處理」與「資料分析」服務不需要專案，但重活一律是任務：所有人的工具任務都在同一個 **工具池**（系統專案 `projects.kind = shared`，slug `tools`，第一次使用時自動建立，沒有成員，不出現在專案列表）排隊執行，配額來自管理員 Dashboard 的「工具池」設定（`system_settings.tool_pool`，儲存時同步到該專案的配額欄位），`max_jobs_per_user` 限制每人同時排隊 + 執行中的工具任務數（超過 → 409 `TOOL_JOB_LIMIT`）。工具任務只有建立者與管理員看得到（`/tools/jobs`、`/tools/jobs/{id}` 頁），不用專案的任務頁。舊版每人一個的個人工作區（`kind = personal`）由 migration 0007 封存。工具上傳（`DATA_ROOT/tools/<id>/`，無資料庫列）在建立任務時移進任務的 input（任務結束即刪）。
 - `preprocess`：trainer 以 `qrlab_preprocess.process.run_full` 處理整個檔案，輸出 `output/preprocessed.zip`（processed.* + pipeline.json + summary.json）；`GET /jobs/{id}/download` 交付一次後刪除檔案並在 `result.downloaded_at` 記錄，沒下載的在「工具預設」的 `result_ttl_hours` 後由排程器清理。抽樣預覽（`POST /tools/uploads/{id}/preview`）仍是即時的，只讀取有限樣本。
 - `analysis`：`config.analysis = tabular_profile | image_quality`（`trainer/analysis/`）。表格：欄位概況、Pearson 相關矩陣與高相關對、VIF、對目標的互資訊 / 相關性 / 隨機森林置換重要度與保留集分數、疑似洩漏、建議（補值、共線、離群、模型家族）。影像品質：以 zip 子資料夾為群組，每張影像 17 個 IQA 指標、各群組中位數 / IQR、每個指標的飄移比（群組中位數差 ÷ 群內 IQR）與 Kruskal–Wallis p 值、embedding（IQA 指標向量，或模型庫有 dinov2 且工作區有 GPU 時用 DINOv2）的 PCA 散佈、群組 centroid cosine 相似度、silhouette、偏離群組的影像、建議。報告寫到 `output/report.json` 並登記為 report 產物；`job.result` 放精簡版供任務頁繪圖。
 
@@ -267,26 +267,29 @@ DATA_ROOT/
 ```
 GET    /me                                   目前使用者（含 role、所屬專案摘要）
 GET    /users  PATCH /users/{id}             admin；role、is_active
+GET    /users/lookup?q=                      所有登入者；挑選器自動完成（id、username、display_name、email；≥ 2 字、最多 10 筆）
 GET    /catalog                              data types、tasks、families、搜尋空間、SOP 章節
 GET    /issues  POST /issues                 討論區列表（type、status、mine、q）/ 開單
 GET    /issues/{id}  PATCH /issues/{id}      詳情 / 作者或 admin 編輯
 POST   /issues/{id}/comments  POST /issues/{id}/close  POST /issues/{id}/reopen
-GET    /project-requests  POST /project-requests        我的申請（admin：全部）/ 送出申請
-GET    /project-requests/{id}  PATCH /project-requests/{id}  詳情 / 申請人修改（submitted 或 rejected 時）
-POST   /project-requests/{id}/comments
-POST   /project-requests/{id}/withdraw
-POST   /project-requests/{id}/review         admin；status → in_review
-POST   /project-requests/{id}/approve        admin；body: slug、quota、members → 建立專案
-POST   /project-requests/{id}/reject         admin；body: review_note
-GET    /projects  GET /projects/{slug}  PATCH /projects/{slug}  POST /projects/{slug}/archive  POST …/unarchive（owner；個人工作區不能封存）
-PATCH  /projects/{slug}/quota                admin
+PATCH  /issues/{id}/comments/{comment_id}     作者或 admin 編輯留言（系統事件不可編輯；內文為 Markdown）
+GET    /projects?status=&q=  POST /projects       我有權限的專案含申請中（admin：全部；status 逗號分隔，pending = pending,in_review）/ 送出申請（建立 pending 專案）
+PATCH  /projects/{slug}/application          申請人修改（pending / rejected；rejected → pending）
+GET    /projects/{slug}/application/comments  POST …/comments   審核往返
+POST   /projects/{slug}/withdraw             申請人撤回（刪除 pending 專案）
+POST   /projects/{slug}/review               requests.review；status → in_review
+POST   /projects/{slug}/approve              requests.review；body: name?、quota、members?、review_note? → active
+POST   /projects/{slug}/reject               requests.review；body: review_note
+POST   /projects/{slug}/complete  POST …/reopen   owner / admin：結束 ↔ 重新開啟
+GET    /projects/{slug}  PATCH /projects/{slug}  POST /projects/{slug}/archive  POST …/unarchive（owner；工具池不能封存）
+PATCH  /projects/{slug}/quota                quota.manage（專案「設定」分頁）
 POST   /projects/{slug}/members  PATCH …/{user_id}  DELETE …/{user_id}   （成員列表包含在 GET /projects/{slug}）
 GET    /projects/{slug}/data-sources  POST …  PATCH …/{id}  DELETE …/{id}  POST …/{id}/check
 POST   /projects/{slug}/uploads              multipart → upload_id + spec（一次性）
 GET    /projects/{slug}/jobs  POST …          建立訓練或推論 Job（202）
 GET    /jobs                                  最近任務（我參與的專案；admin：全部）
 GET    /capacity                              總資源池 + 已配置量（任何登入者；給精靈與首頁）
-POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sample、spec）；GET /catalog/preprocess?data_type=
+POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sample、spec）→ steps / before / after + step_details（每步驟 warnings）+ warnings；TABULAR / TEXT 另有 rows_in / rows_out、columns_in / columns_out（每欄 dtype、missing、unique、min / max / mean、top）；GET /catalog/preprocess?data_type=
 GET    /jobs/{id}  POST /jobs/{id}/cancel     成員取消
 GET    /jobs/{id}/events(SSE；`Last-Event-ID` 續讀)  GET /jobs/{id}/logs（回 `last_event_id`）  GET /jobs/{id}/logs/download  GET /jobs/{id}/download  GET /jobs/{id}/artifacts
 GET    /projects/{slug}/artifacts  PATCH /artifacts/{id}(is_default)  GET /artifacts/{id}/download  DELETE /artifacts/{id}
@@ -305,9 +308,10 @@ GET    /healthz  GET /readyz
 ### 12.1 這一輪新增的端點
 - `GET /auth/config`（不需登入）、`GET /me`（含 `permissions`、`auth_mode`）
 - `DELETE /projects/{slug}`（superadmin）、`DELETE /issues/{id}`（admin 以上）、`POST /admin/jobs/{id}/restart`（admin 以上，回 202 新任務）
-- `PATCH /users/{id}`（superadmin；role `superadmin|admin|user`、`is_active`）
+- `PATCH /users/{id}`（superadmin；role `admin|user`、`is_active`；superadmin 本身由 `SUPERADMIN_USERNAME` 固定）
+- `GET /users/lookup?q=`（所有登入者；≥ 2 字、不分大小寫比對帳號 / 顯示名稱 / email、只回啟用中帳號的 `id / username / display_name / email`、最多 10 筆，依 username 排序）；`POST /projects/{slug}/members` 接受 `user_id`（前端 `UserPicker` 自動完成）或原本的 `username_or_email`
 - `POST /admin/gpus/{index}/reset`（superadmin）、`GET /admin/usage?range=1h|6h|24h|7d|30d`（admin 以上）
-- `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`（即時）、`POST /tools/uploads/{id}/process`（→ 202 preprocess 任務）、`POST /tools/uploads/{id}/analyze`（→ 202 analysis 任務）、`DELETE /tools/uploads/{id}`、`GET /tools/workspace`、`GET /tools/jobs`（所有登入者）；`GET /projects?include_personal=true`；`GET/PUT /admin/settings/tool-defaults`（superadmin）；`GET /jobs/{id}/download` 對前處理結果交付一次即刪
+- `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`（即時）、`POST /tools/uploads/{id}/process`（→ 202 preprocess 任務）、`POST /tools/uploads/{id}/analyze`（→ 202 analysis 任務）、`DELETE /tools/uploads/{id}`、`GET /tools/pool`（工具池配額與我目前的任務數）、`GET /tools/jobs`（只回自己的；所有登入者）；`GET/PUT /admin/settings/tool-pool`（superadmin；含 `max_jobs_per_user`）；`GET /jobs/{id}/download` 對前處理結果交付一次即刪
 - 資源池多了 `gpu_share`；Job 多了 `requested_gpu_memory_mb`；`/admin/node` 的 GPU 多了 `job_ids`、`reserved_mb`、`processes`
 
 ## 13. 部署（公司 Ubuntu GPU 伺服器，不連外網）

@@ -521,7 +521,7 @@ class Scheduler:
                     removed += 1
         purged_samples = await usage_svc.purge(session, self.settings.usage_retention_days)
         purged_tools = tools_svc.purge_expired()
-        ttl = (await settings_svc.get_tool_defaults(session)).result_ttl_hours
+        ttl = (await settings_svc.get_tool_pool(session)).result_ttl_hours
         expired_results = await jobs_svc.expire_tool_outputs(session, ttl)
         if purged or removed or purged_samples or purged_tools or expired_results:
             log.info(

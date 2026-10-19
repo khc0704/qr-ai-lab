@@ -8,7 +8,15 @@ from app.core.deps import CurrentUser, DbSession, require_perm
 from app.models import User
 from app.routers import _serialize as ser
 from app.schemas.common import Ok, Page
-from app.schemas.issue import CommentCreate, CommentRead, IssueClose, IssueCreate, IssueRead, IssueUpdate
+from app.schemas.issue import (
+    CommentCreate,
+    CommentRead,
+    CommentUpdate,
+    IssueClose,
+    IssueCreate,
+    IssueRead,
+    IssueUpdate,
+)
 from app.services import comments as comments_svc
 from app.services import issues as issues_svc
 
@@ -61,6 +69,16 @@ async def add_comment(issue_id: int, body: CommentCreate, session: DbSession, us
     c = await comments_svc.add(session, "issue", issue_id, user.id, body.body)
     await session.commit()
     return CommentRead.model_validate(c)
+
+
+@router.patch("/{issue_id}/comments/{comment_id}", response_model=CommentRead, summary="編輯留言（作者或 admin）")
+async def update_comment(
+    issue_id: int, comment_id: int, body: CommentUpdate, session: DbSession, user: CurrentUser
+) -> CommentRead:
+    """Rewrite a comment's Markdown body. Only its author or an admin may; system events are immutable."""
+    await issues_svc.get(session, issue_id)
+    c = await comments_svc.get(session, "issue", issue_id, comment_id)
+    return CommentRead.model_validate(await comments_svc.update(session, user, c, body.body))
 
 
 @router.delete("/{issue_id}", response_model=Ok, summary="刪除討論串與留言（admin）")

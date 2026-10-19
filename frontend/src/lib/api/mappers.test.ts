@@ -9,8 +9,9 @@ import {
   toLogSnapshot,
   toPage,
   toProject,
-  toRequest,
+  toApplication,
   toUser,
+  toUserLookup,
 } from "@/lib/api/mappers";
 
 const user = { id: 7, username: "alice", email: "a@x", display_name: null, role: "user", is_active: true };
@@ -33,6 +34,20 @@ const job = (over: Record<string, unknown>) => ({
   created_by: user,
   created_at: "2026-10-16T01:02:03",
   ...over,
+});
+
+describe("toUserLookup", () => {
+  it("keeps identity fields only and falls back to the username as display name", () => {
+    expect(toUserLookup({ id: 3, username: "bob", display_name: null, email: "b@x" })).toEqual({
+      id: 3,
+      username: "bob",
+      displayName: "bob",
+      email: "b@x",
+    });
+    const row = toUserLookup({ id: 4, username: "carol", display_name: "Carol", email: "c@x", role: "admin" });
+    expect(row.displayName).toBe("Carol");
+    expect("role" in row).toBe(false);
+  });
 });
 
 describe("toJob", () => {
@@ -99,7 +114,7 @@ describe("enum pass-through", () => {
         .role,
     ).toBe("maintainer");
   });
-  it("toIssue / toRequest / toComment / toDataSource", () => {
+  it("toIssue / toApplication / toComment / toDataSource", () => {
     const issue = {
       id: 1,
       type: "bug",
@@ -115,19 +130,33 @@ describe("enum pass-through", () => {
       type: "incident",
       status: "triaged",
     });
-    const req = {
+    const app = {
       id: 1,
-      applicant: user,
-      title: "t",
       purpose: "p",
-      data_type: "IMAGE",
-      task_type: "detection",
       data_scale: "small",
-      status: "in_review",
-      members: [{ email: "a@x" }],
+      requested_gpu: 1,
+      requested_cpu: 2,
+      requested_memory_mb: 4096,
+      requested_storage_mb: 10240,
+      members: [{ email: "a@x", role: "member" }],
+      review_note: null,
       submitted_at: "2026-01-01T00:00:00",
+      comment_count: 0,
     };
-    expect(toRequest(req)).toMatchObject({ status: "in_review", members: [{ email: "a@x", role: "member" }] });
+    expect(toApplication(app)).toMatchObject({ dataScale: "small", members: [{ email: "a@x", role: "member" }] });
+    const pendingProject = {
+      id: 1,
+      slug: "s",
+      name: "n",
+      data_type: "TABULAR",
+      task_type: "classification",
+      status: "pending",
+      owner: user,
+      created_at: "2026-01-01T00:00:00",
+      application: app,
+    };
+    expect(toProject(pendingProject)).toMatchObject({ status: "pending" });
+    expect(toProject(pendingProject).application?.requestedGpu).toBe(1);
     expect(
       toComment({
         id: 1,

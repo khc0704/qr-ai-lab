@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense } from "react";
 import { cn } from "@/lib/utils";
+import type { ProjectStatus } from "@/types/domain";
 
-const tabs = [
+const WORK_TABS = [
   { seg: "", label: "總覽" },
   { seg: "data-sources", label: "資料來源" },
   { seg: "jobs", label: "任務" },
@@ -13,8 +14,24 @@ const tabs = [
   { seg: "members", label: "成員" },
   { seg: "settings", label: "設定" },
 ];
+const APPLICATION_TAB = { seg: "application", label: "申請" };
 
-function TabsView({ slug, pathname }: { slug: string; pathname: string | null }) {
+/** Before approval only the 申請 tab exists; afterwards it stays as the record, after the work tabs. */
+export function tabsFor(status: ProjectStatus, hasApplication: boolean) {
+  const approved = status === "active" || status === "completed" || status === "archived";
+  if (!approved) return [APPLICATION_TAB];
+  return hasApplication ? [...WORK_TABS, APPLICATION_TAB] : WORK_TABS;
+}
+
+function TabsView({
+  slug,
+  pathname,
+  tabs,
+}: {
+  slug: string;
+  pathname: string | null;
+  tabs: { seg: string; label: string }[];
+}) {
   const base = `/projects/${slug}`;
   return (
     <nav className="-mb-px flex gap-1 overflow-x-auto border-b border-border" aria-label="專案分頁">
@@ -41,14 +58,23 @@ function TabsView({ slug, pathname }: { slug: string; pathname: string | null })
   );
 }
 
-function TabsLive({ slug }: { slug: string }) {
-  return <TabsView slug={slug} pathname={usePathname()} />;
+function TabsLive({ slug, tabs }: { slug: string; tabs: { seg: string; label: string }[] }) {
+  return <TabsView slug={slug} pathname={usePathname()} tabs={tabs} />;
 }
 
-export function ProjectTabs({ slug }: { slug: string }) {
+export function ProjectTabs({
+  slug,
+  status,
+  hasApplication,
+}: {
+  slug: string;
+  status: ProjectStatus;
+  hasApplication: boolean;
+}) {
+  const tabs = tabsFor(status, hasApplication);
   return (
-    <Suspense fallback={<TabsView slug={slug} pathname={null} />}>
-      <TabsLive slug={slug} />
+    <Suspense fallback={<TabsView slug={slug} pathname={null} tabs={tabs} />}>
+      <TabsLive slug={slug} tabs={tabs} />
     </Suspense>
   );
 }

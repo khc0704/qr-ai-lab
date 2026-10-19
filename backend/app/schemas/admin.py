@@ -129,6 +129,9 @@ class NodeStatus(BaseModel):
     disk_free_gb: int
     allocated: Allocated
     runner: RunnerInfo | None = None
+    # "wsl2" when the backend runs inside WSL: psutil then reports the WSL VM (its vCPUs and the memory
+    # .wslconfig grants it), not the Windows host, so the node numbers differ from Task Manager.
+    platform: str | None = None
 
 
 class CapacityRead(BaseModel):

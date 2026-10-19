@@ -141,9 +141,9 @@ async def test_job_creation_refuses_missing_weights(client, admin, user, tmp_pat
     monkeypatch.setattr(type(s), "zoo_root", property(lambda self: tmp_path / "empty-zoo"))
     slug = "defect-images"
     body = {**REQUEST, "proposed_slug": slug, "data_type": "IMAGE", "task_type": "classification"}
-    rid = (await client.post("/api/v1/project-requests", json=body, headers=user)).json()["id"]
-    r = await client.post(f"/api/v1/project-requests/{rid}/approve", json={**APPROVE, "slug": slug}, headers=admin)
-    assert r.status_code == 201, r.text
+    assert (await client.post("/api/v1/projects", json=body, headers=user)).status_code == 201
+    r = await client.post(f"/api/v1/projects/{slug}/approve", json=APPROVE, headers=admin)
+    assert r.status_code == 200, r.text
     await client.patch(
         f"/api/v1/projects/{slug}/quota",
         json={"gpu_limit": 1, "cpu_limit": 4, "memory_limit_mb": 8192, "max_concurrent_jobs": 1},

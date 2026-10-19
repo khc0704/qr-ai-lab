@@ -17,7 +17,6 @@ import type {
   ModelFamily,
   ProjectRole,
   ProjectStatus,
-  RequestStatus,
   SystemRole,
   TaskType,
 } from "@/types/domain";
@@ -110,14 +109,6 @@ export const inputKindLabel: Record<InputKind, string> = {
   inline: "直接輸入",
 };
 
-export const requestStatusLabel: Record<RequestStatus, string> = {
-  submitted: "已送出",
-  in_review: "審核中",
-  approved: "已核准",
-  rejected: "已退回",
-  withdrawn: "已撤回",
-};
-
 export const dataScaleLabel: Record<DataScale, string> = {
   tiny: "極小（< 1k）",
   small: "小（1k–10k）",
@@ -132,17 +123,35 @@ export const issueTypeLabel: Record<IssueType, string> = {
 };
 
 export const issueStatusLabel: Record<IssueStatus, string> = { open: "開放", closed: "已關閉" };
-export const projectStatusLabel: Record<ProjectStatus, string> = { active: "進行中", archived: "已封存" };
+export const projectStatusLabel: Record<ProjectStatus, string> = {
+  pending: "申請中",
+  in_review: "審核中",
+  active: "進行中",
+  rejected: "已退回",
+  completed: "已結束",
+  archived: "已封存",
+};
+export const projectStatusHint: Record<ProjectStatus, string> = {
+  pending: "已送出申請，等待管理員審核",
+  in_review: "管理員審核中，可在「申請」分頁往返討論",
+  active: "已核准，可建立資料來源與任務",
+  rejected: "申請被退回，修改後可重新送出",
+  completed: "專案已結束：不再接受新任務，產物與 log 保留",
+  archived: "已封存：唯讀",
+};
 export const systemRoleLabel: Record<SystemRole, string> = {
   superadmin: "系統管理員",
   admin: "管理員",
   user: "使用者",
 };
 export const systemRoleHint: Record<SystemRole, string> = {
-  superadmin: "所有操作：資源池、專案配額、刪專案、模型庫、使用者角色、GPU 重置",
-  admin: "日常營運：審核申請、中斷 / 重啟 / 重排任務、管理討論區；不能改資源或刪專案",
+  superadmin:
+    "所有操作：資源池、專案配額、刪專案、模型庫、使用者角色、GPU 重置。只有一位，由環境變數 SUPERADMIN_USERNAME 指定，不能在這裡指派",
+  admin: "日常營運：審核申請、中斷 / 重啟 / 重排任務、管理討論區；不能改資源或刪專案。這裡最多只能指派到這個角色",
   user: "沒有任何管理操作，只有專案內的角色",
 };
+/** The fixed superadmin row in /admin/users (no role select, no deactivate switch). */
+export const superadminFixedLabel = "超級管理員（由 SUPERADMIN_USERNAME 指定）";
 
 export const projectRoleLabel: Record<ProjectRole, string> = {
   owner: "擁有者",
@@ -175,16 +184,14 @@ export const artifactKindLabel: Record<ArtifactKind, string> = {
 export const nav = {
   home: "首頁",
   discussions: "討論區",
-  projectRequests: "專案申請",
   projects: "專案",
+  pendingProjects: "待審申請",
   tools: "資料前處理",
   analyze: "資料分析",
   admin: "管理",
   adminDashboard: "Dashboard",
-  adminRequests: "申請審核",
   adminQueue: "佇列",
   adminUsers: "使用者",
-  adminQuotas: "專案配額",
   adminModelZoo: "模型庫",
   adminUsage: "使用率歷史",
   adminAudit: "稽核紀錄",
@@ -192,13 +199,11 @@ export const nav = {
 
 export const routeLabel: Record<string, string> = {
   discussions: nav.discussions,
-  "project-requests": nav.projectRequests,
   projects: nav.projects,
+  application: "申請",
   admin: nav.admin,
   queue: nav.adminQueue,
-  requests: nav.adminRequests,
   users: nav.adminUsers,
-  quotas: nav.adminQuotas,
   audit: nav.adminAudit,
   usage: nav.adminUsage,
   tools: "工具",
@@ -261,6 +266,62 @@ export const uploadCopy = {
   failed: (reason: string) => `上傳失敗：${reason}`,
   rejectedByServer: (status: number) =>
     status === 413 ? "檔案超過伺服器允許的大小" : status === 401 ? "登入已過期，請重新登入" : `HTTP ${status}`,
+} as const;
+
+/** Markdown editor / renderer copy (shared by the discussion board and the project application form). */
+export const markdownCopy = {
+  hint: "支援 Markdown",
+  write: "編輯",
+  preview: "預覽",
+  emptyPreview: "沒有內容可預覽",
+  toolbar: "格式工具列",
+  bold: "粗體",
+  list: "清單",
+  code: "程式碼",
+  link: "連結",
+  boldPlaceholder: "粗體文字",
+  codePlaceholder: "程式碼",
+  linkText: "連結文字",
+  linkUrl: "https://",
+  chars: (n: number) => `${n} 字`,
+} as const;
+
+export const discussionCopy = {
+  fieldTitle: "標題",
+  fieldType: "類型",
+  fieldBody: "內容",
+  fieldProject: "關聯專案（可選）",
+  noProject: "不關聯",
+  titlePlaceholder: "一句話說明問題",
+  bodyPlaceholder: "說明背景、重現步驟、預期與實際結果；可用標題、清單、程式碼區塊與表格整理內容。",
+  settings: "發表設定",
+  create: "建立問題",
+  created: (id: number) => `已建立問題 #${id}`,
+  edit: "編輯",
+  editComment: "編輯留言",
+  edited: "已編輯",
+  updated: "已更新問題",
+  commentUpdated: "已更新留言",
+  noBody: "（沒有內文）",
+  resolution: "處理結果",
+  composer: "留言",
+  composerPlaceholder: "留言…",
+  send: "送出",
+  adminTag: "管理員",
+  guidanceTitle: "怎麼寫比較容易得到回覆",
+  guidance: {
+    question: [
+      "說明想達成的目標，以及目前卡在哪一步",
+      "寫出資料類型、任務與用到的模型家族",
+      "附上任務編號或 log 片段（用程式碼區塊貼上）",
+    ],
+    bug: [
+      "重現步驟一步一步寫，別人才能照做",
+      "預期結果與實際結果各寫一段",
+      "任務編號、發生時間與錯誤訊息（用程式碼區塊貼上）",
+    ],
+    feature: ["想解決的問題與使用情境", "目前的替代做法與它的不足", "期望的行為或畫面；有參考資料可附連結"],
+  },
 } as const;
 
 export const common = {

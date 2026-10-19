@@ -45,6 +45,17 @@ export function formatDuration(startIso: string, endIso: string): string {
   return `${sec}s`;
 }
 
+/**
+ * Content was edited after creation (threads / comments show 「已編輯」). The tolerance absorbs the few
+ * microseconds between two separate server-side defaults on rows created before timestamps were pinned equal.
+ */
+export function isEdited(createdIso: string, updatedIso?: string | null, toleranceMs = 1000): boolean {
+  if (!updatedIso) return false;
+  const created = Date.parse(createdIso);
+  const updated = Date.parse(updatedIso);
+  return Number.isFinite(created) && Number.isFinite(updated) && updated - created > toleranceMs;
+}
+
 export function formatPercent(v: number, digits = 0): string {
   return `${v.toFixed(digits)}%`;
 }

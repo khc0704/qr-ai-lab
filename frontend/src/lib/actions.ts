@@ -8,22 +8,23 @@ import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { toGpuReset, toJob, toProject, toRequest, toUser } from "@/lib/api/mappers";
+import { toGpuReset, toJob, toProject, toUser } from "@/lib/api/mappers";
 import { ApiError, apiFetch, AUTH_MODE, errorMessage, PUBLIC_URL, readSessionJwt, TOKEN_COOKIE } from "@/lib/backend";
 import { safeNext } from "@/lib/safe-next";
 import {
   analysisKindEnum,
-  approveRequestBodySchema,
+  applicationBodySchema,
+  approveBodySchema,
   commentBodySchema,
   dataSourceBodySchema,
   gpuResetSchema,
   idSchema,
   issueBodySchema,
+  issueUpdateBodySchema,
   jobCreateBodySchema,
   memberAddSchema,
   memberRoleEnum,
   previewBodySchema,
-  projectRequestBodySchema,
   projectUpdateBodySchema,
   queuePositionEnum,
   quotaBodySchema,
@@ -33,7 +34,7 @@ import {
   slugSchema,
   stopReasonSchema,
   toolAnalyzeSchema,
-  toolDefaultsSchema,
+  toolPoolSchema,
   toolProcessSchema,
   toolUploadIdSchema,
   userUpdateBodySchema,
@@ -41,15 +42,7 @@ import {
   weightImportSchema,
   zodMessage,
 } from "@/lib/schemas";
-import type {
-  GpuResetMode,
-  GpuResetResult,
-  Job,
-  PreprocessStep,
-  PreviewPayload,
-  Project,
-  ProjectRequest,
-} from "@/types/domain";
+import type { GpuResetMode, GpuResetResult, Job, PreprocessStep, PreviewPayload, Project } from "@/types/domain";
 
 type J = Record<string, unknown>;
 export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string; code?: string };
@@ -124,74 +117,105 @@ export async function logoutAction(): Promise<void> {
   redirect("/login");
 }
 
-// --- project requests ------------------------------------------------------------------------------
+// --- project applications (a project is created when someone applies) ------------------------------
 
-export async function createProjectRequestAction(body: J): Promise<ActionResult<ProjectRequest>> {
+export async function applyProjectAction(body: J): Promise<ActionResult<Project>> {
   const r = await run(async () =>
-    toRequest(await apiFetch<J>("/project-requests", { method: "POST", body: projectRequestBodySchema.parse(body) })),
+    toProject(await apiFetch<J>("/projects", { method: "POST", body: applicationBodySchema.parse(body) })),
   );
-  if (r.ok) revalidatePath("/project-requests");
+  if (r.ok) revalidatePath("/projects");
   return r;
 }
 
-export async function withdrawRequestAction(id: number): Promise<ActionResult<ProjectRequest>> {
+export async function updateApplicationAction(slug: string, body: J): Promise<ActionResult<Project>> {
   const r = await run(async () => {
-    const rid = idSchema.parse(id);
-    return toRequest(await apiFetch<J>(`/project-requests/${rid}/withdraw`, { method: "POST" }));
+    const s = slugSchema.parse(slug);
+    const payload = applicationBodySchema.partial().parse(body);
+    return toProject(await apiFetch<J>(`/projects/${enc(s)}/application`, { method: "PATCH", body: payload }));
   });
-  if (r.ok) revalidatePath(`/project-requests/${id}`);
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
   return r;
 }
 
-export async function reviewRequestAction(id: number): Promise<ActionResult<ProjectRequest>> {
+export async function withdrawApplicationAction(slug: string): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
-    const rid = idSchema.parse(id);
-    return toRequest(await apiFetch<J>(`/project-requests/${rid}/review`, { method: "POST" }));
+    await apiFetch<J>(`/projects/${enc(slugSchema.parse(slug))}/withdraw`, { method: "POST" });
+    return undefined;
   });
-  if (r.ok) revalidatePath(`/project-requests/${id}`);
+  if (r.ok) revalidatePath("/projects");
   return r;
 }
 
-export async function approveRequestAction(id: number, body: J): Promise<ActionResult<Project>> {
+export async function reviewApplicationAction(slug: string): Promise<ActionResult<Project>> {
+  const r = await run(async () =>
+    toProject(await apiFetch<J>(`/projects/${enc(slugSchema.parse(slug))}/review`, { method: "POST" })),
+  );
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
+  return r;
+}
+
+export async function approveApplicationAction(slug: string, body: J): Promise<ActionResult<Project>> {
   const r = await run(async () => {
-    const rid = idSchema.parse(id);
-    const payload = approveRequestBodySchema.parse(body);
-    return toProject(await apiFetch<J>(`/project-requests/${rid}/approve`, { method: "POST", body: payload }));
+    const s = slugSchema.parse(slug);
+    const payload = approveBodySchema.parse(body);
+    return toProject(await apiFetch<J>(`/projects/${enc(s)}/approve`, { method: "POST", body: payload }));
   });
   if (r.ok) {
-    revalidatePath(`/project-requests/${id}`);
+    revalidatePath(`/projects/${slug}`, "layout");
     revalidatePath("/projects");
-    revalidatePath("/admin/requests");
+    revalidatePath("/admin");
   }
   return r;
 }
 
-export async function rejectRequestAction(id: number, reviewNote: string): Promise<ActionResult<ProjectRequest>> {
+export async function rejectApplicationAction(slug: string, reviewNote: string): Promise<ActionResult<Project>> {
   const r = await run(async () => {
-    const rid = idSchema.parse(id);
+    const s = slugSchema.parse(slug);
     const review_note = reviewNoteSchema.parse(reviewNote);
-    return toRequest(await apiFetch<J>(`/project-requests/${rid}/reject`, { method: "POST", body: { review_note } }));
+    return toProject(await apiFetch<J>(`/projects/${enc(s)}/reject`, { method: "POST", body: { review_note } }));
   });
-  if (r.ok) revalidatePath(`/project-requests/${id}`);
+  if (r.ok) {
+    revalidatePath(`/projects/${slug}`, "layout");
+    revalidatePath("/projects");
+  }
   return r;
 }
 
-const commentTargetEnum = z.enum(["issue", "project_request"]);
+export async function completeProjectAction(slug: string): Promise<ActionResult<Project>> {
+  const r = await run(async () =>
+    toProject(await apiFetch<J>(`/projects/${enc(slugSchema.parse(slug))}/complete`, { method: "POST" })),
+  );
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
+  return r;
+}
 
+export async function reopenProjectAction(slug: string): Promise<ActionResult<Project>> {
+  const r = await run(async () =>
+    toProject(await apiFetch<J>(`/projects/${enc(slugSchema.parse(slug))}/reopen`, { method: "POST" })),
+  );
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
+  return r;
+}
+
+const commentTargetEnum = z.enum(["issue", "application"]);
+
+/** `target` "issue" takes the issue id; "application" takes the project slug (review thread of its application). */
 export async function addCommentAction(
-  target: "issue" | "project_request",
-  id: number,
+  target: "issue" | "application",
+  id: number | string,
   body: string,
 ): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
     const t = commentTargetEnum.parse(target);
-    const tid = idSchema.parse(id);
     const text = commentBodySchema.parse(body);
-    const base = t === "issue" ? "/issues" : "/project-requests";
-    await apiFetch<J>(`${base}/${tid}/comments`, { method: "POST", body: { body: text } });
+    const path =
+      t === "issue"
+        ? `/issues/${idSchema.parse(id)}/comments`
+        : `/projects/${enc(slugSchema.parse(String(id)))}/application/comments`;
+    await apiFetch<J>(path, { method: "POST", body: { body: text } });
     return undefined;
   });
-  if (r.ok) revalidatePath(target === "issue" ? `/discussions/${id}` : `/project-requests/${id}`);
+  if (r.ok) revalidatePath(target === "issue" ? `/discussions/${id}` : `/projects/${id}/application`);
   return r;
 }
 
@@ -235,6 +259,37 @@ export async function deleteIssueAction(id: number): Promise<ActionResult<undefi
   return r;
 }
 
+/** Author or admin edits a thread's title / type / body (`PATCH /issues/{id}`; the backend decides who may). */
+export async function updateIssueAction(id: number, body: J): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    const iid = idSchema.parse(id);
+    await apiFetch<J>(`/issues/${iid}`, { method: "PATCH", body: issueUpdateBodySchema.parse(body) });
+    return undefined;
+  });
+  if (r.ok) {
+    revalidatePath(`/discussions/${id}`);
+    revalidatePath("/discussions");
+  }
+  return r;
+}
+
+/** Author or admin rewrites one issue comment (`PATCH /issues/{id}/comments/{comment_id}`). */
+export async function updateCommentAction(
+  issueId: number,
+  commentId: number,
+  body: string,
+): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    const iid = idSchema.parse(issueId);
+    const cid = idSchema.parse(commentId);
+    const text = commentBodySchema.parse(body);
+    await apiFetch<J>(`/issues/${iid}/comments/${cid}`, { method: "PATCH", body: { body: text } });
+    return undefined;
+  });
+  if (r.ok) revalidatePath(`/discussions/${issueId}`);
+  return r;
+}
+
 // --- projects --------------------------------------------------------------------------------------
 
 export async function updateProjectAction(slug: string, body: J): Promise<ActionResult<undefined>> {
@@ -274,7 +329,7 @@ export async function updateQuotaAction(slug: string, body: J): Promise<ActionRe
     await apiFetch<J>(`/projects/${enc(s)}/quota`, { method: "PATCH", body: quotaBodySchema.parse(body) });
     return undefined;
   });
-  if (r.ok) revalidatePath("/admin/quotas");
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
   return r;
 }
 
@@ -286,6 +341,22 @@ export async function addMemberAction(
   const r = await run(async () => {
     const s = slugSchema.parse(slug);
     const payload = memberAddSchema.parse({ username_or_email: usernameOrEmail, role });
+    await apiFetch<J>(`/projects/${enc(s)}/members`, { method: "POST", body: payload });
+    return undefined;
+  });
+  if (r.ok) revalidatePath(`/projects/${slug}`, "layout");
+  return r;
+}
+
+/** Add a member picked from the autocomplete (`UserPicker`): by user id instead of username / e-mail. */
+export async function addMemberByIdAction(
+  slug: string,
+  userId: number,
+  role: string,
+): Promise<ActionResult<undefined>> {
+  const r = await run(async () => {
+    const s = slugSchema.parse(slug);
+    const payload = memberAddSchema.parse({ user_id: idSchema.parse(userId), role });
     await apiFetch<J>(`/projects/${enc(s)}/members`, { method: "POST", body: payload });
     return undefined;
   });
@@ -411,17 +482,18 @@ export async function analyzeToolAction(
   return r;
 }
 
-export async function updateToolDefaultsAction(d: {
+export async function updateToolPoolAction(d: {
   gpuLimit: number;
   cpuLimit: number;
   memoryLimitMb: number;
   storageQuotaMb: number;
   maxConcurrentJobs: number;
+  maxJobsPerUser: number;
   resultTtlHours: number;
 }): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
-    const v = toolDefaultsSchema.parse(d);
-    await apiFetch<J>("/admin/settings/tool-defaults", {
+    const v = toolPoolSchema.parse(d);
+    await apiFetch<J>("/admin/settings/tool-pool", {
       method: "PUT",
       body: {
         gpu_limit: v.gpuLimit,
@@ -429,12 +501,16 @@ export async function updateToolDefaultsAction(d: {
         memory_limit_mb: v.memoryLimitMb,
         storage_quota_mb: v.storageQuotaMb,
         max_concurrent_jobs: v.maxConcurrentJobs,
+        max_jobs_per_user: v.maxJobsPerUser,
         result_ttl_hours: v.resultTtlHours,
       },
     });
     return undefined;
   });
-  if (r.ok) revalidatePath("/admin");
+  if (r.ok) {
+    revalidatePath("/admin");
+    revalidatePath("/tools");
+  }
   return r;
 }
 

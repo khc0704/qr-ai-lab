@@ -4,6 +4,7 @@ import { UserPlus, X } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { UserInline } from "@/components/features/member-avatars";
+import { UserPicker } from "@/components/features/user-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,14 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { projectRoleLabel } from "@/i18n/zh-TW";
 import { RelativeTime } from "@/components/features/time";
-import { addMemberAction, removeMemberAction, updateMemberAction } from "@/lib/actions";
-import type { ProjectMember, ProjectRole } from "@/types/domain";
+import { addMemberByIdAction, removeMemberAction, updateMemberAction } from "@/lib/actions";
+import type { ProjectMember, ProjectRole, UserLookup } from "@/types/domain";
 
 export function MembersTable({
   slug,
@@ -32,7 +32,7 @@ export function MembersTable({
   canManage: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
+  const [picked, setPicked] = useState<UserLookup | null>(null);
   const [role, setRole] = useState<ProjectRole>("member");
   const [pending, startTransition] = useTransition();
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, done: string) =>
@@ -118,21 +118,27 @@ export function MembersTable({
           </TableBody>
         </Table>
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) setPicked(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>邀請成員</DialogTitle>
-            <DialogDescription>輸入帳號或 email；對方必須已經登入過一次。</DialogDescription>
+            <DialogDescription>搜尋帳號、姓名或 email 後選擇；對方必須已經登入過一次。</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="inv-email">帳號或 Email</Label>
-              <Input
-                id="inv-email"
-                className="font-mono"
-                placeholder="name@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+              <Label htmlFor="inv-user">成員</Label>
+              <UserPicker
+                id="inv-user"
+                value={picked}
+                onChange={setPicked}
+                excludeIds={members.map((m) => m.user.id)}
+                disabled={pending}
               />
             </div>
             <div className="grid gap-2">
@@ -156,15 +162,16 @@ export function MembersTable({
               取消
             </Button>
             <Button
-              disabled={!email.trim() || pending}
+              disabled={!picked || pending}
               onClick={() =>
                 startTransition(async () => {
-                  const r = await addMemberAction(slug, email.trim(), role);
+                  if (!picked) return;
+                  const r = await addMemberByIdAction(slug, picked.id, role);
                   if (!r.ok) toast.error(r.error);
                   else {
-                    toast.success("已加入成員");
+                    toast.success(`已加入 ${picked.displayName}`);
                     setOpen(false);
-                    setEmail("");
+                    setPicked(null);
                   }
                 })
               }

@@ -19,7 +19,6 @@ from app.routers import (
     internal,
     issues,
     jobs,
-    project_requests,
     projects,
     tools,
     users,
@@ -50,6 +49,20 @@ async def init_dev_schema() -> None:
         log.warning("seeded local accounts", users=created, note="change the passwords via SEED_*_PASSWORD or the CLI")
 
 
+async def enforce_superadmin() -> None:
+    """Exactly one superadmin, fixed by SUPERADMIN_USERNAME: promote that row, demote any other row that still carries
+    the role (runs once tables exist: after the dev schema here, after `alembic upgrade head` in production)."""
+    from app.services import users as users_svc
+
+    name = get_settings().superadmin_username
+    async with get_sessionmaker()() as session:
+        changed = await users_svc.ensure_single_superadmin(session)
+    if changed["promoted"] or changed["demoted"]:
+        log.warning("superadmin rows reconciled", superadmin=name or None, **changed)
+    if not name:
+        log.warning("SUPERADMIN_USERNAME is empty: nobody is superadmin (resource pool, quotas, roles are read-only)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
@@ -60,6 +73,7 @@ async def lifespan(app: FastAPI):
     s.data_root.mkdir(parents=True, exist_ok=True)
     if s.app_env != "prod" and s.is_sqlite:
         await init_dev_schema()
+    await enforce_superadmin()
     scheduler_task: asyncio.Task | None = None
     if s.scheduler_embedded:
         # Single-process mode: the scheduler loop shares this event loop and the in-process event bus, so a
@@ -97,7 +111,7 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=s.cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
     )
     prefix = "/api/v1"
-    for r in (auth, users, catalog, issues, project_requests, projects, jobs, artifacts, admin, tools, internal):
+    for r in (auth, users, catalog, issues, projects, jobs, artifacts, admin, tools, internal):
         app.include_router(r.router, prefix=prefix)
     app.include_router(health.router)
     return app

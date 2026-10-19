@@ -198,10 +198,10 @@ async def test_deleting_a_data_source_used_by_a_finished_job(client, admin, user
     assert job["data_source_id"] is None and job["input"]["data_source_name"]
 
 
-async def test_personal_workspace_cannot_be_archived_but_projects_can_be_unarchived(client, admin, user):
-    ws = (await client.get("/api/v1/tools/workspace", headers=user)).json()
-    r = await client.post(f"/api/v1/projects/{ws['slug']}/archive", headers=user)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "PERSONAL_WORKSPACE"
+async def test_tool_pool_cannot_be_archived_but_projects_can_be_unarchived(client, admin, user):
+    pool = (await client.get("/api/v1/tools/pool", headers=user)).json()
+    r = await client.post(f"/api/v1/projects/{pool['slug']}/archive", headers=admin)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "TOOL_POOL"
     project = await make_project(client, admin, user)
     assert (await client.post(f"/api/v1/projects/{project['slug']}/archive", headers=user)).json()[
         "status"
@@ -351,15 +351,22 @@ async def test_cancel_and_launch_do_not_race(client, admin, user):
     del j
 
 
-async def test_parallel_first_use_creates_one_workspace(client, user):
-    """A page renders several server components at once: /tools/workspace and /tools/jobs race on creation."""
+async def test_parallel_first_use_creates_one_tool_pool(client, user):
+    """A page renders several server components at once: /tools/pool and /tools/jobs race on creation."""
     import asyncio
 
     results = await asyncio.gather(
-        client.get("/api/v1/tools/workspace", headers=user),
+        client.get("/api/v1/tools/pool", headers=user),
         client.get("/api/v1/tools/jobs", headers=user),
-        client.get("/api/v1/tools/workspace", headers=user),
+        client.get("/api/v1/tools/pool", headers=user),
     )
     assert [r.status_code for r in results] == [200, 200, 200], [r.text[:200] for r in results]
-    slugs = {r.json()["slug"] for r in results if "slug" in r.json()} if isinstance(results[0].json(), dict) else set()
-    assert slugs == {results[0].json()["slug"]}
+    assert results[0].json()["slug"] == results[2].json()["slug"] == "tools"
+    async with get_sessionmaker()() as session:
+        from sqlalchemy import func, select
+
+        from app.models import Project
+
+        stmt = select(func.count()).select_from(Project).where(Project.kind == "shared")
+        n = (await session.execute(stmt)).scalar_one()
+    assert n == 1

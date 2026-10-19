@@ -1,5 +1,5 @@
 """Standalone data tools (no project needed). Preview is real time on a sample; the heavy work is a job in the
-user's personal workspace so it goes through the queue, resource limits, logs and cleanup like any job."""
+shared tool pool so it goes through the queue, resource limits, logs and cleanup like any job."""
 
 from __future__ import annotations
 
@@ -9,17 +9,16 @@ from app.core.deps import CurrentUser, DbSession
 from app.routers import _serialize as ser
 from app.schemas.common import Ok
 from app.schemas.job import JobRead
-from app.schemas.project import ProjectRead
-from app.schemas.tools import ToolAnalyzeBody, ToolPreviewBody, ToolProcessBody, ToolUploadRead
-from app.services import projects as projects_svc
+from app.schemas.settings import ToolPoolStatus
+from app.schemas.tools import PreviewRead, ToolAnalyzeBody, ToolPreviewBody, ToolProcessBody, ToolUploadRead
 from app.services import tools as tools_svc
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 
-@router.get("/workspace", response_model=ProjectRead, summary="我的個人工作區（工具任務所在的專案）")
-async def workspace(session: DbSession, user: CurrentUser) -> ProjectRead:
-    return await ser.project(session, await projects_svc.personal(session, user))
+@router.get("/pool", response_model=ToolPoolStatus, summary="工具池配額與我目前排隊 / 執行中的工具任務數")
+async def pool(session: DbSession, user: CurrentUser) -> ToolPoolStatus:
+    return await tools_svc.pool_status(session, user)
 
 
 @router.get("/jobs", response_model=list[JobRead], summary="我的工具任務（前處理 / 分析）")
@@ -41,8 +40,10 @@ async def get_upload(upload_id: str, user: CurrentUser) -> ToolUploadRead:
     return tools_svc.get(upload_id, user)
 
 
-@router.post("/uploads/{upload_id}/preview", summary="抽樣套用步驟，即時回傳前後對照")
-async def preview(upload_id: str, body: ToolPreviewBody, user: CurrentUser) -> dict:
+@router.post("/uploads/{upload_id}/preview", response_model=PreviewRead, summary="抽樣套用步驟，即時回傳前後對照")
+async def preview(upload_id: str, body: ToolPreviewBody, user: CurrentUser) -> PreviewRead:
+    """前後對照樣本、每個步驟的警告（如「文字數字轉成數值」把類別欄整欄變成缺值）；TABULAR / TEXT 另附輸入樣本與
+    整條管線輸出的每欄統計（型別、缺值、唯一值數、範圍、最常見的值）與列數。"""
     return await tools_svc.preview(
         upload_id, user, body.steps, sample=body.sample, spec=body.spec, task_type=body.task_type
     )

@@ -1,5 +1,5 @@
 import { Database, Info, Plus } from "lucide-react";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { SourceKindChip } from "@/components/features/chips";
 import { EmptyState } from "@/components/features/empty-state";
@@ -12,7 +12,7 @@ import { RelativeTime } from "@/components/features/time";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dataFormatLabel, jobCopy } from "@/i18n/zh-TW";
 import { getProject, listDataSources } from "@/lib/api";
-import { canProject, projectRole } from "@/lib/roles";
+import { canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 import { NewDataSourceDialog } from "./new-data-source-dialog";
 import { SourceRowActions } from "./source-row-actions";
@@ -21,6 +21,7 @@ async function Sources({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const sources = await listDataSources(project.slug);
   const canEdit = canProject(projectRole(project, user), "edit");
   return (

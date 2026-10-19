@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DataSource, Issue, Job, Project, ProjectRequest
+from app.models import DataSource, Issue, Job, Project
 from app.schemas.data_source import DataSourceRead
 from app.schemas.issue import IssueRead
 from app.schemas.job import JobRead
-from app.schemas.project import ProjectRead
-from app.schemas.project_request import ProjectRequestRead
+from app.schemas.project import ApplicationRead, ProjectRead
 from app.services import (
     issues as issues_svc,
 )
@@ -18,9 +17,6 @@ from app.services import (
 )
 from app.services import (
     node as node_svc,
-)
-from app.services import (
-    project_requests as requests_svc,
 )
 from app.services import (
     projects as projects_svc,
@@ -32,7 +28,11 @@ from app.services import (
 
 async def projects(session: AsyncSession, rows: list[Project]) -> list[ProjectRead]:
     usage = await projects_svc.usage_map(session, [p.id for p in rows])
-    return [ProjectRead.model_validate(p).model_copy(update={"usage": usage[p.id]}) for p in rows]
+    out = []
+    for p in rows:
+        app = ApplicationRead.model_validate(p.application) if p.application is not None else None
+        out.append(ProjectRead.model_validate(p).model_copy(update={"usage": usage[p.id], "application": app}))
+    return out
 
 
 async def project(session: AsyncSession, p: Project) -> ProjectRead:
@@ -43,14 +43,6 @@ async def issues(session: AsyncSession, rows: list[Issue]) -> list[IssueRead]:
     slugs = await issues_svc.slug_map(session, rows)
     return [
         IssueRead.model_validate(i).model_copy(update={"project_slug": slugs.get(i.project_id or -1)}) for i in rows
-    ]
-
-
-async def requests(session: AsyncSession, rows: list[ProjectRequest]) -> list[ProjectRequestRead]:
-    slugs = await requests_svc.slug_map(session, rows)
-    return [
-        ProjectRequestRead.model_validate(r).model_copy(update={"project_slug": slugs.get(r.project_id or -1)})
-        for r in rows
     ]
 
 

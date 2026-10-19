@@ -11,7 +11,7 @@ import { analysisKindLabel, jobStageLabel } from "@/i18n/zh-TW";
 import { listToolJobs } from "@/lib/api";
 import type { AnalysisKind } from "@/types/domain";
 
-/** The user's preprocessing / analysis jobs (personal workspace); refreshes itself while any job is active. */
+/** The user's preprocessing / analysis jobs (shared tool pool); refreshes itself while any job is active. */
 export async function ToolJobs({ kind }: { kind?: "preprocess" | "analysis" }) {
   const jobs = (await listToolJobs()).filter((j) => !kind || j.kind === kind);
   const active = jobs.some((j) => j.status === "queued" || j.status === "scheduled" || j.status === "running");
@@ -20,7 +20,7 @@ export async function ToolJobs({ kind }: { kind?: "preprocess" | "analysis" }) {
       <CardHeader>
         <CardTitle>我的{kind === "analysis" ? "分析" : kind === "preprocess" ? "前處理" : "工具"}任務</CardTitle>
         <CardDescription>
-          在你的個人工作區排隊執行（全域佇列、資源限制、log 與其他任務相同）；點任務看即時 log、結果與下載。
+          在公共的工具池排隊執行（全域佇列、資源限制、log 與其他任務相同）；點任務看即時 log、結果與下載。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -44,10 +44,7 @@ export async function ToolJobs({ kind }: { kind?: "preprocess" | "analysis" }) {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <KindChip kind={j.kind} />
-                        <Link
-                          href={`/projects/${j.projectSlug}/jobs/${j.id}`}
-                          className="font-medium hover:text-brand-ink"
-                        >
+                        <Link href={`/tools/jobs/${j.id}`} className="font-medium hover:text-brand-ink">
                           {j.name}
                         </Link>
                         <span className="font-mono text-xs text-subtle-foreground">#{j.id}</span>

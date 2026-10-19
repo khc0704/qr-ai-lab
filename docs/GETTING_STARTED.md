@@ -86,7 +86,7 @@ curl -s localhost:8000/api/v1/catalog -H "Authorization: Bearer $TOKEN" | head -
 curl -s localhost:8000/api/v1/admin/model-zoo -H "Authorization: Bearer $TOKEN"
 ```
 
-- 流程：`user` 送出專案申請（`POST /project-requests`）→ `admin` 核准（`POST /project-requests/{id}/approve`，給 slug 與配額）→ 專案內上傳檔案（`POST /projects/{slug}/uploads`）→ 建 Job（`POST /projects/{slug}/jobs`，回 202）→ 排程器執行 → `GET /jobs/{id}`、`/logs`、`/events`（SSE）、`/artifacts`。`/docs` 有完整清單。
+- 流程：`user` 送出專案申請（`POST /projects`，專案立刻以 `pending` 建立）→ `admin` 核准（`POST /projects/{slug}/approve`，給配額）→ 專案內上傳檔案（`POST /projects/{slug}/uploads`）→ 建 Job（`POST /projects/{slug}/jobs`，回 202）→ 排程器執行 → `GET /jobs/{id}`、`/logs`、`/events`（SSE）、`/artifacts`。`/docs` 有完整清單。
 
 ### 4.2 排程器與任務執行方式（沒有容器）
 
@@ -151,9 +151,9 @@ QR_TEST_ZOO=/path/to/zoo .venv/bin/pytest tests/test_yolo_cpu.py                
 ### 4.7 使用率歷史與資料前處理服務
 
 - **管理 → 使用率歷史**（`/admin/usage`）：排程器每 30 秒（`USAGE_SAMPLE_INTERVAL_S`）寫一筆 `resource_samples`；頁面可切 1h / 6h / 24h / 7d / 30d，分母可切「專案配額 / 資源池 / 系統總量」；下方表格是各專案在該區間的時間加權配置（相對分母的百分比）與實測 CPU / 記憶體。保留 `USAGE_RETENTION_DAYS`（預設 90 天）。
-- **資料前處理**（`/tools/preprocess`，所有登入者）：不需要專案；選資料類型 → 上傳 → 挑步驟 → 抽樣預覽（即時，只取樣）→ 「建立前處理任務」。整檔處理是個人工作區裡的任務（全域佇列、CPU / 記憶體配額、即時 log），完成後在任務頁下載 zip（`processed.*`、`pipeline.json`、`summary.json`）；下載一次就刪，沒下載的在「工具預設」的保留時間（預設 24 小時）後刪。
+- **資料前處理**（`/tools/preprocess`，所有登入者）：不需要專案；選資料類型 → 上傳 → 挑步驟 → 抽樣預覽（即時，只取樣）→ 「建立前處理任務」。整檔處理是公共工具池裡的任務（全域佇列、工具池配額、每人同時上限、即時 log），完成後在 `/tools/jobs/{id}` 下載 zip（`processed.*`、`pipeline.json`、`summary.json`）；下載一次就刪，沒下載的在「工具池」的保留時間（預設 24 小時）後刪。
 - **資料分析**（`/tools/analyze`）：表格資料探勘（相關性、VIF 共線性、對目標的解釋力、建議）與影像品質分析（zip 子資料夾 = 機台 / 條件；最會飄的 IQA 指標、embedding 相似度與散佈、離群影像）。同樣是任務，報告在任務頁。
-- 個人工作區：第一次用工具時自動建立（`ws-<帳號>`），配額由 Dashboard 的「工具預設」決定，管理員可在專案配額頁個別調整。
+- 工具池：所有人的工具任務共用一個系統專案（slug `tools`，第一次用工具時自動建立，不列在專案列表），配額與「每人同時任務數」由 Dashboard 的「工具池」設定。各專案的配額在專案的「設定」分頁（superadmin）。
 
 ### 4.8 使用手冊（DOCX / PDF）
 
@@ -169,7 +169,7 @@ dev 用本地帳號（`AUTH_MODE=local`）；正式環境把前後端都切到 `
 1. 向 Keycloak 管理員要一個 **confidential client**（Standard flow / Authorization Code + PKCE）：
    - Valid redirect URIs：`https://<你的網址>/api/auth/callback/keycloak`
    - Valid post logout redirect URIs：`https://<你的網址>/login`
-   - 角色：realm role 或這個 client 的 client role 皆可，例如 `superadmin`、`admin`（名稱可自訂，用 `KEYCLOAK_ROLE_MAP` 對應）。沒有任何對應 role 的人登入後是 `user`。
+   - 角色：不需要在 Keycloak 設任何 role（Keycloak 只提供身分）。所有人登入後都是 `user`，由 superadmin 在 `/admin/users` 指派 admin；superadmin 只有一位，由 backend 的 `SUPERADMIN_USERNAME` 指定。
 2. 前端（`/etc/qr-ai-lab/frontend.env`，或開發時 `frontend/.env.local`）：
    ```
    AUTH_MODE=keycloak
@@ -184,8 +184,7 @@ dev 用本地帳號（`AUTH_MODE=local`）；正式環境把前後端都切到 `
    AUTH_MODE=keycloak
    KEYCLOAK_ISSUER=https://<sso>/realms/<realm>        # 要和 token 的 iss 一字不差
    KEYCLOAK_CLIENT_ID=<client id>
-   KEYCLOAK_ROLE_MAP=superadmin:superadmin,admin:admin  # <Keycloak role>:<系統角色>
-   SUPERADMIN_USERNAMES=<你的帳號>                        # 第一位 superadmin；之後其他人在 UI 調整即可
+   SUPERADMIN_USERNAME=<你的帳號>                         # 唯一的 superadmin（preferred_username）；其他人在 UI 指派 admin / user
    ```
    `KEYCLOAK_AUDIENCE` 只有在 Keycloak 加了 audience mapper 時才設。
 4. 重啟三個服務。登入頁變成「使用公司帳號登入（Keycloak）」；第一次登入會自動在 `users` 建立帳號（同名的本地帳號會被接管）。切換期間要保留本地登入的話前端設 `AUTH_LOCAL_FALLBACK=1`。
@@ -278,7 +277,7 @@ sudo ./infra/install-00-base.sh
 sudo nano /etc/qr-ai-lab/qrlab.env
 #   APP_ENV=prod   DATABASE_URL=mariadb+asyncmy://qr:<密碼>@127.0.0.1:3307/qr_ai_lab   REDIS_URL=redis://127.0.0.1:6380/0
 #   ROOT_PATH=/ai-lab-api   CORS_ORIGINS=http://localhost
-#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAMES=superadmin
+#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAME=superadmin
 #   AUTH_SECRET / JOB_TOKEN_SECRET = openssl rand -hex 32   DATASET_SECRET_KEY = python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
 sudo nano /etc/qr-ai-lab/frontend.env
 #   NEXT_PUBLIC_BASE_PATH=/ai-lab   AUTH_URL=http://localhost/ai-lab   AUTH_MODE=keycloak   COOKIE_SECURE=0
@@ -338,7 +337,7 @@ sudo ./infra/install-00-base.sh
 sudo nano /etc/qr-ai-lab/qrlab.env
 #   DATABASE_URL=mariadb+asyncmy://qr:<密碼>@127.0.0.1:3307/qr_ai_lab   REDIS_URL=redis://127.0.0.1:6380/0
 #   CORS_ORIGINS=https://qrit.tsmc.com   ROOT_PATH=/ai-lab-api
-#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=https://sso…/realms/<realm>   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAMES=<你的帳號>
+#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=https://sso…/realms/<realm>   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAME=<你的帳號>
 #   AUTH_SECRET / JOB_TOKEN_SECRET（openssl rand -hex 32）   DATASET_SECRET_KEY（Fernet）   MODEL_ZOO_* 
 sudo nano /etc/qr-ai-lab/frontend.env
 #   NEXT_PUBLIC_BASE_PATH=/ai-lab   AUTH_URL=https://qrit.tsmc.com/ai-lab   AUTH_MODE=keycloak
@@ -384,7 +383,7 @@ sudo nginx -t && sudo systemctl reload nginx
 **上線檢查**
 
 - `https://qrit.tsmc.com/ai-lab/login` → Keycloak → 回首頁；`https://qrit.tsmc.com/ai-lab-api/docs` 打得開。
-- 以 `SUPERADMIN_USERNAMES` 的帳號登入，Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；資源池勾選要開放的 GPU；模型庫把權重帶進來。
+- 以 `SUPERADMIN_USERNAME` 的帳號登入，Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；資源池勾選要開放的 GPU；模型庫把權重帶進來。
 - dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）、路徑前綴（無 / `/ai-lab`）。任務本身、權限判斷、資料不留存政策在兩邊完全一樣。
 
 ## 8. 常見問題

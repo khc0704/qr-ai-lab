@@ -9,7 +9,8 @@ export const dataTypeEnum = z.enum(["TABULAR", "IMAGE", "SEQUENCE", "TEXT", "SPE
 export const taskTypeEnum = z.enum(["classification", "regression", "detection", "segmentation", "anomaly_detection"]);
 export const dataScaleEnum = z.enum(["tiny", "small", "medium", "large"]);
 export const issueTypeEnum = z.enum(["question", "bug", "feature"]);
-export const systemRoleEnum = z.enum(["superadmin", "admin", "user"]);
+// superadmin is exactly one account fixed by the backend (SUPERADMIN_USERNAME); the UI assigns at most admin.
+export const assignableRoleEnum = z.enum(["admin", "user"]);
 export const memberRoleEnum = z.enum(["maintainer", "member", "viewer"]);
 export const dataFormatEnum = z.enum([
   "csv",
@@ -45,7 +46,7 @@ export const preprocessStepsSchema = z.array(preprocessStepSchema).max(50);
 
 // --- forms (values the user types; camelCase) ---------------------------------------------------------------
 
-export const projectRequestFormSchema = z.object({
+export const applicationFormSchema = z.object({
   title: z.string().min(4, "至少 4 個字").max(200),
   purpose: z.string().min(20, "請說明目的與背景（至少 20 個字）"),
   dataType: dataTypeEnum,
@@ -59,7 +60,7 @@ export const projectRequestFormSchema = z.object({
   proposedSlug: proposedSlugSchema.optional().or(z.literal("")),
   members: z.array(z.object({ email: z.string().email("email 格式不正確"), role: memberRoleEnum })),
 });
-export type ProjectRequestFormValues = z.infer<typeof projectRequestFormSchema>;
+export type ApplicationFormValues = z.infer<typeof applicationFormSchema>;
 
 export const issueFormSchema = z.object({
   type: issueTypeEnum,
@@ -71,9 +72,9 @@ export type IssueFormValues = z.infer<typeof issueFormSchema>;
 
 // --- backend bodies (snake_case, what the actions forward) ---------------------------------------------------
 
-export const projectRequestBodySchema = z.object({
-  title: projectRequestFormSchema.shape.title,
-  purpose: projectRequestFormSchema.shape.purpose,
+export const applicationBodySchema = z.object({
+  title: applicationFormSchema.shape.title,
+  purpose: applicationFormSchema.shape.purpose,
   data_type: dataTypeEnum,
   task_type: taskTypeEnum,
   data_scale: dataScaleEnum,
@@ -83,7 +84,7 @@ export const projectRequestBodySchema = z.object({
   requested_memory_mb: z.number().int().min(1024),
   requested_storage_mb: z.number().int().min(1024),
   proposed_slug: proposedSlugSchema.nullable().optional(),
-  members: projectRequestFormSchema.shape.members,
+  members: applicationFormSchema.shape.members,
 });
 
 export const issueBodySchema = z.object({
@@ -93,14 +94,28 @@ export const issueBodySchema = z.object({
   project_slug: slugSchema.nullable().optional(),
 });
 
-export const approveRequestBodySchema = z.object({
-  slug: proposedSlugSchema,
+/** Author / admin edit of a thread (title, type, body). */
+export const issueEditFormSchema = issueFormSchema.pick({ type: true, title: true, body: true });
+export type IssueEditFormValues = z.infer<typeof issueEditFormSchema>;
+
+/** `PATCH /issues/{id}`: every field optional, at least one present. */
+export const issueUpdateBodySchema = z
+  .object({
+    type: issueTypeEnum.optional(),
+    title: issueFormSchema.shape.title.optional(),
+    body: issueFormSchema.shape.body.optional(),
+  })
+  .refine((v) => v.type !== undefined || v.title !== undefined || v.body !== undefined, "沒有要更新的欄位");
+
+export const approveBodySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
   gpu_limit: z.number().int().min(0),
   cpu_limit: z.number().min(1),
   memory_limit_mb: z.number().int().min(1),
   storage_quota_mb: z.number().int().min(1),
   max_concurrent_jobs: z.number().int().min(1).max(64),
   members: z.array(z.object({ email: z.string().email(), role: memberRoleEnum })),
+  review_note: z.string().trim().max(2000).optional(),
 });
 
 export const reviewNoteSchema = z.string().trim().min(1, "請填寫理由").max(2000);
@@ -122,13 +137,17 @@ export const quotaBodySchema = z.object({
 });
 
 export const userUpdateBodySchema = z
-  .object({ role: systemRoleEnum.optional(), is_active: z.boolean().optional() })
+  .object({ role: assignableRoleEnum.optional(), is_active: z.boolean().optional() })
   .refine((v) => v.role !== undefined || v.is_active !== undefined, "沒有要更新的欄位");
 
-export const memberAddSchema = z.object({
-  username_or_email: z.string().trim().min(1, "請輸入帳號或 email").max(200),
-  role: memberRoleEnum,
-});
+/** Either `user_id` (UserPicker) or the legacy `username_or_email`; the backend requires one of them. */
+export const memberAddSchema = z
+  .object({
+    user_id: idSchema.optional(),
+    username_or_email: z.string().trim().min(1, "請輸入帳號或 email").max(200).optional(),
+    role: memberRoleEnum,
+  })
+  .refine((v) => v.user_id !== undefined || v.username_or_email !== undefined, "請選擇使用者");
 
 export const dataSourceBodySchema = z.discriminatedUnion("kind", [
   z.object({
@@ -190,12 +209,13 @@ export const toolAnalyzeSchema = z.object({
   name: z.string().trim().max(200).optional(),
 });
 
-export const toolDefaultsSchema = z.object({
+export const toolPoolSchema = z.object({
   gpuLimit: z.number().int().min(0),
-  cpuLimit: z.number().min(0),
-  memoryLimitMb: z.number().int().min(0),
-  storageQuotaMb: z.number().int().min(0),
-  maxConcurrentJobs: z.number().int().min(1).max(64),
+  cpuLimit: z.number().min(0.5),
+  memoryLimitMb: z.number().int().min(256),
+  storageQuotaMb: z.number().int().min(64),
+  maxConcurrentJobs: z.number().int().min(1).max(32),
+  maxJobsPerUser: z.number().int().min(1).max(32),
   resultTtlHours: z.number().int().min(1),
 });
 

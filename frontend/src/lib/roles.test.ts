@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { can, canCancelJob, canProject, isAdminRole, projectRole } from "@/lib/roles";
+import { ASSIGNABLE_ROLES, SYSTEM_ROLES, can, canCancelJob, canProject, isAdminRole, projectRole } from "@/lib/roles";
 import type { Project, User } from "@/types/domain";
 
 const user = (id: number, role: User["role"] = "user"): Pick<User, "id" | "role"> => ({ id, role });
@@ -71,5 +71,13 @@ describe("system permissions", () => {
     expect(can({ permissions: ["jobs.control"] }, "jobs.control")).toBe(true);
     expect(can({ permissions: ["jobs.control"] }, "pool.manage")).toBe(false);
     expect(can(null, "admin.view")).toBe(false);
+  });
+});
+
+describe("system roles", () => {
+  it("the UI can assign at most admin: superadmin is fixed by the backend's SUPERADMIN_USERNAME", () => {
+    expect(SYSTEM_ROLES).toEqual(["superadmin", "admin", "user"]);
+    expect(ASSIGNABLE_ROLES).toEqual(["admin", "user"]);
+    expect(ASSIGNABLE_ROLES).not.toContain("superadmin");
   });
 });

@@ -1,4 +1,4 @@
-"""Standalone tools: upload → real-time preview → the heavy part is a job in the personal workspace → download once."""
+"""Standalone tools: upload → real-time preview → the heavy part is a job in the shared tool pool → download once."""
 
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ async def _upload(client, user, name=b"wat.csv", data=CSV, data_type="TABULAR"):
     return r.json()
 
 
-async def test_preview_is_real_time_and_process_becomes_a_workspace_job(client, user, other, admin):
-    # first call creates the workspace (fresh instance must serialize with members / owner)
-    ws = (await client.get("/api/v1/tools/workspace", headers=user)).json()
-    assert ws["kind"] == "personal" and ws["members"][0]["user"]["username"] == "user"
+async def test_preview_is_real_time_and_process_becomes_a_pool_job(client, user, other, admin):
+    # first call creates the shared tool pool
+    pool = (await client.get("/api/v1/tools/pool", headers=user)).json()
+    assert pool["slug"] == "tools" and pool["my_active_jobs"] == 0 and pool["max_jobs_per_user"] == 2
     up = await _upload(client, user)
     uid = up["id"]
     assert up["format"] == "csv" and up["detected_spec"]["row_count"] == 4
@@ -37,28 +37,57 @@ async def test_preview_is_real_time_and_process_becomes_a_workspace_job(client, 
         f"/api/v1/tools/uploads/{uid}/preview", json={"steps": steps, "spec": {"target": "yield_pct"}}, headers=user
     )
     assert r.status_code == 200, r.text
-    assert {s["column"]: s for s in r.json()["after"]["stats"]}["x1"]["missing"] == 0
+    body = r.json()
+    assert {s["column"]: s for s in body["after"]["stats"]}["x1"]["missing"] == 0
+    # the typed response keeps the new per-step / per-column fields
+    assert [s["op"] for s in body["step_details"]] == ["tabular.impute", "tabular.standardize"]
+    assert body["step_details"][0]["warnings"] == [] and body["warnings"] == []
+    assert body["rows_in"] == 4 and body["rows_out"] == 4
+    cin = {c["name"]: c for c in body["columns_in"]}
+    cout = {c["name"]: c for c in body["columns_out"]}
+    assert cin["x1"]["dtype"] == "number" and cin["x1"]["missing"] >= 1 and cout["x1"]["missing"] == 0
+    assert abs(cout["x1"]["mean"]) < 1e-6 and set(cin["x1"]) == {
+        "name",
+        "dtype",
+        "missing",
+        "missing_ratio",
+        "unique",
+        "min",
+        "max",
+        "mean",
+        "top",
+    }
 
     r = await client.post(
         f"/api/v1/tools/uploads/{uid}/process", json={"steps": steps, "spec": {"target": "yield_pct"}}, headers=user
     )
     assert r.status_code == 202, r.text
     job = r.json()
-    assert job["kind"] == "preprocess" and job["status"] == "queued" and job["project_slug"] == "ws-user"
+    assert job["kind"] == "preprocess" and job["status"] == "queued" and job["project_slug"] == "tools"
     assert job["input"]["tool"] is True and job["input"]["data_type"] == "TABULAR" and job["config"]["steps"] == steps
     # the upload was consumed (moved into the job input dir), nothing is left in tools/
     assert not get_storage().abs(f"tools/{uid}").exists()
     assert get_storage().job_input_dir(job["id"]).joinpath("data.csv").exists()
-    # personal workspace: created on first use with the tool defaults, hidden from the normal project list
-    ws = (await client.get("/api/v1/tools/workspace", headers=user)).json()
-    assert ws["kind"] == "personal" and ws["cpu_limit"] == 2 and ws["members"][0]["role"] == "owner"
+    # the tool pool is hidden from the project list; only the creator (and admins) see the job
     assert [p["slug"] for p in (await client.get("/api/v1/projects", headers=user)).json()] == []
-    assert "ws-user" in [
-        p["slug"] for p in (await client.get("/api/v1/projects?include_personal=true", headers=user)).json()
-    ]
+    assert [p["slug"] for p in (await client.get("/api/v1/projects", headers=admin)).json()] == []
+    assert (await client.get("/api/v1/projects/tools", headers=user)).status_code == 404
+    assert (await client.get("/api/v1/tools/pool", headers=user)).json()["my_active_jobs"] == 1
     mine = (await client.get("/api/v1/tools/jobs", headers=user)).json()
     assert [j["id"] for j in mine] == [job["id"]]
+    assert (await client.get("/api/v1/tools/jobs", headers=other)).json() == []
     assert (await client.get(f"/api/v1/jobs/{job['id']}", headers=other)).status_code == 404
+    assert (await client.get(f"/api/v1/jobs/{job['id']}", headers=admin)).status_code == 200
+    # per-user fairness: a second job is allowed, a third is not while two are still active
+    up2 = await _upload(client, user)
+    r = await client.post(f"/api/v1/tools/uploads/{up2['id']}/process", json={"steps": steps, "spec": {}}, headers=user)
+    assert r.status_code == 202, r.text
+    job2 = r.json()
+    up3 = await _upload(client, user)
+    r = await client.post(f"/api/v1/tools/uploads/{up3['id']}/process", json={"steps": steps, "spec": {}}, headers=user)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "TOOL_JOB_LIMIT"
+    await client.delete(f"/api/v1/tools/uploads/{up3['id']}", headers=user)
+    assert (await client.post(f"/api/v1/jobs/{job2['id']}/cancel", headers=user)).status_code == 200
 
     # the scheduler runs it like any job; the trainer gets the tool data type and the file name in the spec
     runner = FakeRunner()
@@ -119,7 +148,7 @@ async def test_analysis_job_and_validation(client, user, superadmin):
         and job["config"]["analysis"] == "tabular_profile"
         and job["config"]["target"] == "yield_pct"
     )
-    # image analysis with DINO falls back to metrics when the workspace has no GPU quota
+    # image analysis with DINO falls back to metrics when the tool pool has no GPU quota
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         from PIL import Image
@@ -137,21 +166,25 @@ async def test_analysis_job_and_validation(client, user, superadmin):
     )
     assert r.status_code == 202, r.text
     assert r.json()["requested_gpu"] == 0 and r.json()["config"]["embedding"] == "metrics"
-    # tool defaults are superadmin territory and shape new workspaces
+    # the tool pool quota is superadmin territory and flows into the shared project
     r = await client.put(
-        "/api/v1/admin/settings/tool-defaults",
+        "/api/v1/admin/settings/tool-pool",
         json={
             "gpu_limit": 1,
-            "cpu_limit": 4,
+            "cpu_limit": 6,
             "memory_limit_mb": 8192,
             "storage_quota_mb": 4096,
-            "max_concurrent_jobs": 2,
+            "max_concurrent_jobs": 3,
+            "max_jobs_per_user": 1,
             "result_ttl_hours": 48,
         },
         headers=superadmin,
     )
-    assert r.status_code == 200 and r.json()["cpu_limit"] == 4
-    assert (await client.get("/api/v1/admin/settings/tool-defaults", headers=user)).status_code == 403
+    assert r.status_code == 200 and r.json()["cpu_limit"] == 6
+    assert (await client.get("/api/v1/admin/settings/tool-pool", headers=user)).status_code == 403
+    pool = (await client.get("/api/v1/tools/pool", headers=user)).json()
+    assert pool["cpu_limit"] == 6 and pool["max_jobs_per_user"] == 1
+    assert (await client.get("/api/v1/projects/tools", headers=superadmin)).json()["cpu_limit"] == 6
 
 
 async def test_tool_rejects_bad_type_and_deletes(client, user):

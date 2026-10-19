@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -50,10 +51,14 @@ class Settings(BaseSettings):
     keycloak_issuer: str | None = None  # https://sso.example.com/realms/<realm>
     keycloak_audience: str | None = None  # verify `aud` when set (Keycloak needs an audience mapper for that)
     keycloak_client_id: str | None = None  # also look at resource_access[<client>].roles for the role map
-    # "<keycloak role>:<system role>" pairs. A login whose token carries a mapped role sets users.role to the most
-    # privileged match; a token without any mapped role leaves the role as managed in the UI.
-    keycloak_role_map: Annotated[list[str], NoDecode] = ["superadmin:superadmin", "admin:admin"]
-    # Bootstrap: these usernames (preferred_username / local username) are always superadmin after login.
+    # Keycloak supplies identity only: system roles live in users.role (managed at /admin/users). The role map is an
+    # opt-in for the future: "<keycloak role>:<system role>" pairs (a mapping to superadmin is capped at admin). A
+    # login whose token carries a mapped role sets users.role to the most privileged match; empty = never override.
+    keycloak_role_map: Annotated[list[str], NoDecode] = []
+    # Exactly one superadmin, fixed by configuration: this username (local username / Keycloak preferred_username)
+    # always holds the role and nobody else can (the UI assigns at most admin). Empty string = nobody is superadmin.
+    superadmin_username: str = "superadmin"
+    # Deprecated spelling (comma-separated list): still read, only the first entry counts. Use SUPERADMIN_USERNAME.
     superadmin_usernames: Annotated[list[str], NoDecode] = []
     seed_superadmin_password: str = "superadmin1234"
     seed_admin_password: str = "admin1234"
@@ -93,6 +98,26 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @field_validator("superadmin_username", mode="before")
+    @classmethod
+    def _strip_username(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _legacy_superadmin_usernames(self) -> Settings:
+        """SUPERADMIN_USERNAMES (old comma list) still works so existing env files do not break: its first entry
+        becomes SUPERADMIN_USERNAME unless the new variable is set explicitly."""
+        if self.superadmin_usernames:
+            warnings.warn(
+                "SUPERADMIN_USERNAMES is deprecated: set SUPERADMIN_USERNAME=<one username> instead "
+                "(only the first entry is used)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if "superadmin_username" not in self.model_fields_set:
+                self.superadmin_username = self.superadmin_usernames[0]
+        return self
 
     @model_validator(mode="after")
     def _check_production(self) -> Settings:

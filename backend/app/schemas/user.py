@@ -19,6 +19,15 @@ class UserRead(ORMModel):
     last_login_at: datetime | None = None
 
 
+class UserLookup(ORMModel):
+    """Autocomplete row for pickers (member invite, request form): identity only, never role / hashes."""
+
+    id: int
+    username: str
+    display_name: str | None
+    email: str
+
+
 class MeRead(UserRead):
     """`/me`: the user plus the resolved permission list (frontend hides UI from it; the backend still decides)."""
 

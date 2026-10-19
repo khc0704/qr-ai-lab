@@ -19,7 +19,7 @@
 | 層 | 選型 |
 |---|---|
 | Frontend | Next.js 16（App Router、Turbopack、`proxy.ts`）+ React 19 + TypeScript strict + Tailwind CSS v4 + shadcn/ui + next-themes + Auth.js（next-auth v5，Keycloak provider）+ npm |
-| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + pip（`requirements*.txt`，不用 uv / poetry）+ Ruff + pytest；`AUTH_MODE=local`（dev：argon2 + HS256 本地帳號）或 `keycloak`（prod：驗 realm JWKS、`KEYCLOAK_ROLE_MAP` 對應角色）；權限矩陣在 `app/core/permissions.py`（`require_perm`） |
+| Backend API | Python ≥ 3.12 + FastAPI + SQLAlchemy 2.0 async（`mariadb+asyncmy`；dev / test 用 `sqlite+aiosqlite`）+ Alembic + Pydantic v2 + pip（`requirements*.txt`，不用 uv / poetry）+ Ruff + pytest；`AUTH_MODE=local`（dev：argon2 + HS256 本地帳號）或 `keycloak`（prod：驗 realm JWKS，只取身分；角色在 `users.role`）；權限矩陣在 `app/core/permissions.py`（`require_perm`） |
 | Scheduler | 與 backend 同一套件（`app/scheduler`）：Job 是主機子程序（trainer venv），`JOB_RUNNER=auto` 優先用 `systemd-run --scope`（cgroup 限 Memory / CPU / 核心），否則 subprocess + affinity + 記憶體 watchdog；GPU 以 `CUDA_VISIBLE_DEVICES` 分配並用 pynvml 預檢；事件走 Redis（兩個程序）或記憶體（`SCHEDULER_EMBEDDED=true` 單程序）；容量上限 = 管理員設定的總資源池 |
 | Trainer | 獨立套件 `trainer/`，裝在主機的 `trainer/.venv`（torch CUDA wheel、ultralytics、transformers、Optuna、scikit-learn、XGBoost）：自行從使用者的 MinIO / URL 抓資料；**離線執行（runner 設 HF_HUB_OFFLINE 等），預訓練權重只從模型庫 `MODEL_ZOO_ROOT` 載入**，由管理員經「模型庫」頁上傳 / 路徑匯入 / 內網 URL 帶進來 |
 | DB | MariaDB 11（Docker）、utf8mb4、InnoDB |
@@ -83,15 +83,15 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
 - 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
-- ProjectRequest（專案申請）`status`：`submitted | in_review | approved | rejected | withdrawn`；核准才建立 project
+- 專案申請 = 建立 `pending` 的 project（`POST /projects`）；申請內容在 `project_requests`（`projects.request_id`），專案頁的「申請」分頁顯示與審核；沒有獨立的申請列表 / 審核頁 / 配額頁
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
-- Project `status`：`active | archived`；`kind`：`standard | personal`（personal = 每人一個的個人工作區 `ws-<username>`，放工具任務，配額來自管理員「工具預設」，不列在一般專案列表）
-- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是個人工作區的工具任務）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
+- Project `status`：`pending | in_review | active | rejected | completed | archived`（核准前只有「申請」分頁；`active` 才能建資料來源 / 任務 / 管成員；`completed` = 已結束可重開）；`kind`：`standard | shared`（shared = 唯一的工具池 `tools`，放所有前處理 / 分析任務，配額來自管理員「工具池」設定 `tool_pool` 含 `max_jobs_per_user`；`personal` 是已封存的舊個人工作區）
+- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是工具池的工具任務，頁面在 `/tools/jobs/{id}`，只有建立者與管理員看得到）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
 - Job `mode`（train）：`manual | auto`（auto = AutoML，候選模型 + Optuna 搜尋）
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
 - Artifact `kind`：`model | weights | preprocessor | report | metrics`；存 `DATA_ROOT/projects/{slug}/jobs/{job_id}/`
-- 角色：系統角色 `superadmin | admin | user`（`users.role`；Keycloak 登入時依 `KEYCLOAK_ROLE_MAP` 覆蓋，否則以 UI 設定為準）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`
+- 角色：系統角色 `superadmin | admin | user`（`users.role`，只在 `/admin/users` 管理；Keycloak 只提供身分、不決定角色；superadmin 只有一位、由 `SUPERADMIN_USERNAME` 指定，UI / CLI 最多指派到 admin）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`
 - Job 的 `requested_gpu_memory_mb`：有值 = 可與其他任務依剩餘顯存共用一張 GPU（資源池 `gpu_share`，trainer 以 `set_per_process_memory_fraction` 自限）；`null` = 獨占整張
 - 工具（不需專案）：`POST /tools/uploads` → `/preview`（即時抽樣）→ `/process`（preprocess 任務）或 `/analyze`（analysis 任務：`tabular_profile | image_quality`，實作在 `trainer/trainer/analysis/`）；上傳只在 `DATA_ROOT/tools/<id>/`（無資料庫列），建任務時移進任務 input；前處理結果 `GET /jobs/{id}/download` 交付一次即刪
 - GPU 共用是**實測模式**：`services/gpu.py` 用 pynvml 實際用量 + 暖機期（`GPU_WARMUP_S`）的「申請 − 實測」；不要改回以申請量保留

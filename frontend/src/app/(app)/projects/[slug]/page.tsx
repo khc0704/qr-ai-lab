@@ -1,6 +1,6 @@
 import { Box, Cpu, HardDrive, MemoryStick, Plus } from "lucide-react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { FamilyText, KindChip } from "@/components/features/chips";
 import { ResourceMeter } from "@/components/features/resource-meter";
@@ -14,13 +14,14 @@ import { projectRoleLabel } from "@/i18n/zh-TW";
 import { getProject, listArtifacts, listJobs } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 import { formatBytes, formatMb, formatMetric } from "@/lib/format";
-import { canProject, projectRole } from "@/lib/roles";
+import { canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 
 async function Overview({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const [jobs, models] = await Promise.all([
     listJobs({ slug: project.slug, limit: 5 }),
     listArtifacts(project.slug, "model"),

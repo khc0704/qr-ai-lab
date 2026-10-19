@@ -9,12 +9,52 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import bad_request, conflict, forbidden
-from app.core.permissions import ROLE_RANK, highest_role
+from app.core.permissions import highest_role
 from app.core.security import hash_password, verify_password
 from app.db.base import utcnow
 from app.models import User
 from app.schemas.user import UserUpdate
 from app.services import audit
+
+SUPERADMIN_FIXED_MESSAGE = "superadmin 只有一位，由環境變數 SUPERADMIN_USERNAME 指定，不能在這裡指派、降級或停用"
+
+
+def configured_superadmin() -> str:
+    """The one username that holds role superadmin (SUPERADMIN_USERNAME); empty = nobody."""
+    return get_settings().superadmin_username
+
+
+def is_configured_superadmin(username: str) -> bool:
+    name = configured_superadmin()
+    return bool(name) and username == name
+
+
+def apply_superadmin_rule(user: User) -> bool:
+    """Exactly one superadmin: the configured username always carries the role, any other row that still has it is
+    demoted to admin. Applied at every login / upsert and at startup. Returns True when the row changed."""
+    if is_configured_superadmin(user.username):
+        expected = "superadmin"
+    elif user.role == "superadmin":
+        expected = "admin"
+    else:
+        return False
+    if user.role == expected:
+        return False
+    user.role = expected
+    return True
+
+
+async def ensure_single_superadmin(session: AsyncSession) -> dict[str, list[str]]:
+    """Startup / seed: reconcile every row at once (SUPERADMIN_USERNAME may have changed between restarts, or a row
+    may have been edited by hand). Returns the usernames promoted / demoted."""
+    name = configured_superadmin()
+    cond = or_(User.role == "superadmin", User.username == name) if name else User.role == "superadmin"
+    changed: dict[str, list[str]] = {"promoted": [], "demoted": []}
+    for u in (await session.execute(select(User).where(cond).order_by(User.id))).scalars():
+        if apply_superadmin_rule(u):
+            changed["promoted" if u.role == "superadmin" else "demoted"].append(u.username)
+    await session.commit()
+    return changed
 
 
 async def get_by_id(session: AsyncSession, user_id: int) -> User | None:
@@ -51,6 +91,35 @@ async def list_users(
     return list(rows), total
 
 
+LOOKUP_MIN_CHARS = 2
+LOOKUP_LIMIT = 10
+
+
+async def lookup_users(session: AsyncSession, q: str | None, limit: int = LOOKUP_LIMIT) -> list[User]:
+    """Autocomplete for pickers, callable by every logged-in user: case-insensitive contains-match on username /
+    display name / e-mail, active accounts only, at most `limit` rows ordered by username. Too short a query
+    (< LOOKUP_MIN_CHARS) returns nothing so the directory cannot be enumerated with "a", "b", …"""
+    term = (q or "").strip()
+    if len(term) < LOOKUP_MIN_CHARS:
+        return []
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{escaped}%"
+    stmt = (
+        select(User)
+        .where(
+            User.is_active.is_(True),
+            or_(
+                User.username.ilike(like, escape="\\"),
+                User.display_name.ilike(like, escape="\\"),
+                User.email.ilike(like, escape="\\"),
+            ),
+        )
+        .order_by(User.username)
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def authenticate(session: AsyncSession, username: str, password: str) -> User | None:
     user = await get_by_username(session, username)
     if user is None or not user.is_active or user.auth_provider != "local":
@@ -58,6 +127,7 @@ async def authenticate(session: AsyncSession, username: str, password: str) -> U
     if not await asyncio.to_thread(verify_password, password, user.password_hash):  # argon2 ~50 ms CPU
         return None
     user.last_login_at = utcnow()
+    apply_superadmin_rule(user)
     await session.commit()
     return user
 
@@ -78,29 +148,16 @@ async def create_local_user(
     return user
 
 
-async def count_superadmins(session: AsyncSession, *, active_only: bool = True) -> int:
-    stmt = select(func.count()).select_from(User).where(User.role == "superadmin")
-    if active_only:
-        stmt = stmt.where(User.is_active.is_(True))
-    return (await session.execute(stmt)).scalar_one()
-
-
 async def update_user(session: AsyncSession, actor: User, user: User, body: UserUpdate) -> User:
-    """Role / activation changes (superadmin only). Guards: never lock yourself out, never remove the last
-    active superadmin, bootstrap usernames from SUPERADMIN_USERNAMES stay superadmin."""
+    """Role / activation changes (superadmin only). The UI assigns at most admin: superadmin is exactly one account
+    fixed by SUPERADMIN_USERNAME, which can neither be granted here nor demoted / deactivated."""
     before = {"role": user.role, "is_active": user.is_active}
     if not actor.is_superadmin and (body.role is not None or body.is_active is not None):
         raise forbidden("PERMISSION_DENIED", "只有 superadmin 可以調整角色或停用帳號")
-    losing_superadmin = user.role == "superadmin" and (
-        (body.role is not None and body.role != "superadmin") or body.is_active is False
-    )
-    if losing_superadmin:
-        if user.id == actor.id:
-            raise bad_request("SELF_DEMOTE", "不能降級或停用自己的 superadmin 帳號")
-        if await count_superadmins(session) <= 1:
-            raise conflict("LAST_SUPERADMIN", "至少要保留一位啟用中的 superadmin")
-        if user.username in get_settings().superadmin_usernames:
-            raise bad_request("BOOTSTRAP_SUPERADMIN", "此帳號列在 SUPERADMIN_USERNAMES，請先從環境變數移除")
+    if body.role == "superadmin":
+        raise bad_request("SUPERADMIN_FIXED", SUPERADMIN_FIXED_MESSAGE)
+    if is_configured_superadmin(user.username) and (body.role is not None or body.is_active is False):
+        raise bad_request("SUPERADMIN_FIXED", SUPERADMIN_FIXED_MESSAGE)
     if body.is_active is False and user.id == actor.id:
         raise bad_request("SELF_DEACTIVATE", "不能停用自己的帳號")
     if body.role is not None:
@@ -130,12 +187,14 @@ def keycloak_roles(claims: dict[str, Any], client_id: str | None = None) -> list
 
 
 def role_from_claims(claims: dict[str, Any], username: str) -> str | None:
-    """System role implied by the token (None = nothing mapped → keep whatever the UI set)."""
+    """System role implied by the login: the configured superadmin, else the KEYCLOAK_ROLE_MAP match (opt-in, capped
+    at admin). None = nothing mapped → keep whatever /admin/users set; with the default empty map Keycloak only
+    supplies identity."""
     s = get_settings()
-    if username in s.superadmin_usernames:
+    if is_configured_superadmin(username):
         return "superadmin"
-    mapped = [s.role_map[r] for r in keycloak_roles(claims, s.keycloak_client_id) if r in s.role_map]
-    return highest_role(mapped)
+    mapped = highest_role([s.role_map[r] for r in keycloak_roles(claims, s.keycloak_client_id) if r in s.role_map])
+    return "admin" if mapped == "superadmin" else mapped
 
 
 async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) -> User:
@@ -151,8 +210,8 @@ async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) ->
             user.keycloak_sub = sub
             user.auth_provider = "keycloak"
             user.password_hash = None
-            # The matching name only proves the name: privileges must come from the token (KEYCLOAK_ROLE_MAP,
-            # SUPERADMIN_USERNAMES) or be granted again in /admin/users after this first login.
+            # The matching name only proves the name: privileges come from our own tables (granted again in
+            # /admin/users after this first login) or from SUPERADMIN_USERNAME, never from the Keycloak account.
             user.role = "user"
         else:
             user = User(
@@ -164,8 +223,9 @@ async def upsert_keycloak_user(session: AsyncSession, claims: dict[str, Any]) ->
             )
             session.add(user)
     mapped = role_from_claims(claims, username)
-    if mapped is not None and ROLE_RANK.get(mapped, -1) != ROLE_RANK.get(user.role, -1):
+    if mapped is not None and mapped != user.role:
         user.role = mapped
+    apply_superadmin_rule(user)  # a stray superadmin row (not the configured name) is demoted here
     user.email = claims.get("email") or user.email
     user.display_name = (claims.get("name") or user.display_name or "")[:100] or None
     user.last_login_at = utcnow()
@@ -192,7 +252,7 @@ async def seed_users(
         (
             "superadmin",
             superadmin_password or get_settings().seed_superadmin_password,
-            "superadmin",
+            "superadmin" if is_configured_superadmin("superadmin") else "admin",
             "系統管理員",
             "superadmin@example.com",
         ),

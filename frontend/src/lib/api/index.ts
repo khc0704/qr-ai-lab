@@ -17,10 +17,11 @@ import {
   toPool,
   toPreprocessOp,
   toProject,
-  toRequest,
-  toToolDefaults,
+  toToolPool,
+  toToolPoolStatus,
   toUsageHistory,
   toUser,
+  toUserLookup,
   toZooEntry,
   toZooTask,
 } from "@/lib/api/mappers";
@@ -41,12 +42,13 @@ import type {
   Page,
   PreprocessOp,
   Project,
-  ProjectRequest,
   ResourcePool,
-  ToolDefaults,
+  ToolPool,
+  ToolPoolStatus,
   UsageHistory,
   UsageRange,
   User,
+  UserLookup,
   ZooTask,
 } from "@/types/domain";
 
@@ -65,28 +67,27 @@ const q = (params: Record<string, string | number | boolean | undefined>) => {
 
 // --- projects --------------------------------------------------------------------------------------
 
+/** Projects the user is a member of (admins: all), pending applications included; omit `status` for everything
+ * except archived. `status: ["pending"]` covers pending + in_review. */
 export async function listProjects(opts?: {
-  includeArchived?: boolean;
-  includePersonal?: boolean;
+  status?: (Project["status"] | "pending")[];
+  q?: string;
 }): Promise<Project[]> {
-  const rows = await apiFetch<J[]>(
-    `/projects${q({ include_archived: opts?.includeArchived, include_personal: opts?.includePersonal })}`,
-  );
-  return rows.map(toProject);
+  return (await apiFetch<J[]>(`/projects${q({ status: opts?.status?.join(","), q: opts?.q })}`)).map(toProject);
 }
 
-// --- standalone tools (personal workspace) ---------------------------------------------------------
+// --- standalone tools (shared tool pool) -----------------------------------------------------------
 
-export async function getWorkspace(): Promise<Project> {
-  return toProject(await apiFetch<J>("/tools/workspace"));
+export async function getToolPoolStatus(): Promise<ToolPoolStatus> {
+  return toToolPoolStatus(await apiFetch<J>("/tools/pool"));
 }
 
 export async function listToolJobs(): Promise<Job[]> {
   return (await apiFetch<J[]>("/tools/jobs")).map(toJob);
 }
 
-export async function getToolDefaults(): Promise<ToolDefaults> {
-  return toToolDefaults(await apiFetch<J>("/admin/settings/tool-defaults"));
+export async function getToolPool(): Promise<ToolPool> {
+  return toToolPool(await apiFetch<J>("/admin/settings/tool-pool"));
 }
 
 export async function getProject(slug: string): Promise<Project | undefined> {
@@ -166,36 +167,6 @@ export async function getArtifact(id: number): Promise<Artifact | undefined> {
 
 // --- requests / issues / comments ------------------------------------------------------------------
 
-export async function listProjectRequests(opts?: {
-  applicantId?: number;
-  status?: ProjectRequest["status"][];
-}): Promise<ProjectRequest[]> {
-  const page = await apiFetch<J>(`/project-requests${q({ status: opts?.status?.join(","), page_size: 100 })}`);
-  const rows = toPage(page, toRequest).items;
-  return opts?.applicantId ? rows.filter((r) => r.applicant.id === opts.applicantId) : rows;
-}
-
-/** One page of project requests; the backend already limits non-admins to their own applications. */
-export async function listProjectRequestsPage(opts?: {
-  status?: ProjectRequest["status"][];
-  page?: number;
-  pageSize?: number;
-}): Promise<Page<ProjectRequest>> {
-  const raw = await apiFetch<J>(
-    `/project-requests${q({
-      status: opts?.status?.join(","),
-      page: clampPage(opts?.page),
-      page_size: opts?.pageSize ?? DEFAULT_PAGE_SIZE,
-    })}`,
-  );
-  return toPage(raw, toRequest);
-}
-
-export async function getProjectRequest(id: number): Promise<ProjectRequest | undefined> {
-  const r = await apiFetch<J | undefined>(`/project-requests/${id}`, { swallow: [403, 404] });
-  return r ? toRequest(r) : undefined;
-}
-
 export async function listIssues(opts?: { status?: Issue["status"]; type?: Issue["type"] }): Promise<Issue[]> {
   const page = await apiFetch<J>(`/issues${q({ status: opts?.status, type: opts?.type, page_size: 100 })}`);
   return toPage(page, toIssue).items;
@@ -223,9 +194,13 @@ export async function getIssue(id: number): Promise<Issue | undefined> {
   return i ? toIssue(i) : undefined;
 }
 
-export async function listComments(targetType: CommentTarget, targetId: number): Promise<Comment[]> {
-  const base = targetType === "issue" ? "/issues" : "/project-requests";
-  return (await apiFetch<J[]>(`${base}/${targetId}/comments`)).map(toComment);
+/** Comments on an issue (by id) or the review thread of a project's application (by slug). */
+export async function listComments(targetType: CommentTarget, target: number | string): Promise<Comment[]> {
+  const path =
+    targetType === "issue"
+      ? `/issues/${target}/comments`
+      : `/projects/${encodeURIComponent(String(target))}/application/comments`;
+  return (await apiFetch<J[]>(path)).map(toComment);
 }
 
 // --- users / admin ---------------------------------------------------------------------------------
@@ -239,6 +214,16 @@ export async function listUsersPage(opts?: { page?: number; pageSize?: number; q
     `/users${q({ q: opts?.q, page: clampPage(opts?.page), page_size: opts?.pageSize ?? 50 })}`,
   );
   return toPage(raw, toUser);
+}
+
+/**
+ * Autocomplete rows for pickers (any logged-in user; identity only). Client components go through the
+ * /api/users/lookup route handler instead (see components/features/user-picker.tsx).
+ */
+export async function lookupUsers(query: string): Promise<UserLookup[]> {
+  const term = query.trim();
+  if (term.length < 2) return [];
+  return (await apiFetch<J[]>(`/users/lookup${q({ q: term })}`)).map(toUserLookup);
 }
 
 /** Pool + current allocation; readable by every user (request form, home page). */

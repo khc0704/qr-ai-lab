@@ -28,6 +28,9 @@ RANGES: dict[str, tuple[timedelta, int]] = {  # range → (window, bucket second
 # psutil computes cpu_percent() as the delta since the previous call on the SAME Process object (a fresh object
 # always answers 0.0), so the objects are kept between samples.
 _procs: dict[int, psutil.Process] = {}
+# System-wide cpu_percent() is a delta since the previous call: prime it at import so the first sample after a
+# restart measures the interval since startup instead of reporting 0.
+psutil.cpu_percent(interval=None)
 
 
 def _process(pid: int) -> psutil.Process:

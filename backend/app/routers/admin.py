@@ -22,7 +22,8 @@ from app.schemas.admin import (
 )
 from app.schemas.common import Ok, Page
 from app.schemas.job import JobRead, MoveBody, OrderBody, StopBody
-from app.schemas.settings import JobDefaults, ResourcePool, ToolDefaults
+from app.schemas.project import PENDING_STATUSES
+from app.schemas.settings import JobDefaults, ResourcePool, ToolPool
 from app.services import (
     audit as audit_svc,
 )
@@ -39,7 +40,7 @@ from app.services import (
     node as node_svc,
 )
 from app.services import (
-    project_requests as requests_svc,
+    projects as projects_svc,
 )
 from app.services import (
     settings as settings_svc,
@@ -61,9 +62,7 @@ GpuResetter = Annotated[User, Depends(require_perm("gpu.reset"))]
 @router.get("/overview", response_model=AdminOverview)
 async def overview(session: DbSession, _: AdminUser) -> AdminOverview:
     running, queued = await jobs_svc.queue(session)
-    _, pending = await requests_svc.list_requests(
-        session, applicant_id=None, statuses=["submitted", "in_review"], page=1, page_size=1
-    )
+    pending = len(await projects_svc.list_for_user(session, _, statuses=list(PENDING_STATUSES)))
     pool = await settings_svc.get_resource_pool(session)
     alloc = await node_svc.allocated(session)
     total = len(pool.gpu_indices)
@@ -128,15 +127,16 @@ async def put_job_defaults(body: JobDefaults, session: DbSession, admin: PoolMan
     return await settings_svc.set_job_defaults(session, body, admin.id)
 
 
-@router.get("/settings/tool-defaults", response_model=ToolDefaults, summary="個人工作區（工具任務）的預設配額")
-async def get_tool_defaults(session: DbSession, _: AdminUser) -> ToolDefaults:
-    return await settings_svc.get_tool_defaults(session)
+@router.get("/settings/tool-pool", response_model=ToolPool, summary="工具池（前處理 / 分析任務）的配額")
+async def get_tool_pool(session: DbSession, _: AdminUser) -> ToolPool:
+    return await settings_svc.get_tool_pool(session)
 
 
-@router.put("/settings/tool-defaults", response_model=ToolDefaults, summary="個人工作區預設配額（superadmin）")
-async def put_tool_defaults(body: ToolDefaults, session: DbSession, admin: PoolManager) -> ToolDefaults:
+@router.put("/settings/tool-pool", response_model=ToolPool, summary="工具池配額（superadmin）")
+async def put_tool_pool(body: ToolPool, session: DbSession, admin: PoolManager) -> ToolPool:
+    await projects_svc.sync_shared_quota(session, body)
     """影響之後建立的個人工作區；已存在的工作區在專案配額頁個別調整。"""
-    return await settings_svc.set_tool_defaults(session, body, admin.id)
+    return await settings_svc.set_tool_pool(session, body, admin.id)
 
 
 @router.get("/queue", response_model=QueueRead, summary="執行中 + 等待中（含等待原因）")

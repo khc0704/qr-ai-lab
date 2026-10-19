@@ -45,8 +45,9 @@
 | `KEYCLOAK_ISSUER` | （空） | `https://sso/realms/<realm>`，必須和 token 的 `iss` 一致 |
 | `KEYCLOAK_AUDIENCE` | （空） | 設了才驗 `aud`（Keycloak 要加 audience mapper） |
 | `KEYCLOAK_CLIENT_ID` | （空） | 讀 `resource_access[<client>].roles`；沒設 `KEYCLOAK_AUDIENCE` 時 token 的 `azp`（或 `aud`）必須是這個 client，別的 client 的 token 不收 |
-| `KEYCLOAK_ROLE_MAP` | `superadmin:superadmin,admin:admin` | `<Keycloak role>:<系統角色>`；token 沒帶對應 role 時維持 UI 設的角色。第一次登入若接管同名的本地帳號，角色會重設為 `user`（名字相同不代表權限相同） |
-| `SUPERADMIN_USERNAMES` | （空） | 登入即為 superadmin 的帳號（引導第一位） |
+| `KEYCLOAK_ROLE_MAP` | （空） | 預設不對應：Keycloak 只提供身分，系統角色一律以 `users.role`（`/admin/users`）為準。未來要讓 Keycloak role 決定角色時才設 `<Keycloak role>:<系統角色>`（最多對應到 `admin`；token 沒帶對應 role 時維持 UI 設的角色）。第一次登入若接管同名的本地帳號，角色會重設為 `user`（名字相同不代表權限相同） |
+| `SUPERADMIN_USERNAME` | `superadmin` | 唯一的 superadmin（本地帳號名稱 / Keycloak `preferred_username`）：登入與啟動時即為 superadmin，其他任何帳號都不能是（UI 與 CLI 最多指派到 admin；仍帶 superadmin 的列會被降為 admin）。空字串 = 沒有 superadmin |
+| `SUPERADMIN_USERNAMES` | （空） | 已棄用的舊名（逗號清單）：仍會讀取但只取第一個，並發出 DeprecationWarning；請改用 `SUPERADMIN_USERNAME` |
 | `SEED_SUPERADMIN_PASSWORD` / `SEED_ADMIN_PASSWORD` / `SEED_USER_PASSWORD` | `superadmin1234` / `admin1234` / `user1234` | 只在 `AUTH_MODE=local` 時建立本地帳號（keycloak 模式不建立任何本地帳號）；prod 拒絕預設密碼 |
 | `DATASET_SECRET_KEY` | （空） | Fernet key，加密使用者資料來源憑證；prod 必設且啟動時驗證格式 |
 | `JOB_TOKEN_SECRET` | `dev-job-secret-change-me` | 任務子程序呼叫 `/internal/*` 的 token |

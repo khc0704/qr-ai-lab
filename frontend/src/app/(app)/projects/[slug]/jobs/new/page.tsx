@@ -1,6 +1,7 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
+import { isApproved } from "@/lib/roles";
 import { getCatalog, getJob, getProject, listArtifacts, listDataSources, listPreprocessOps } from "@/lib/api";
 import { NewJobWizard } from "./new-job-wizard";
 
@@ -14,6 +15,7 @@ async function Wizard({
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
   const project = await getProject(slug);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const [sources, models, catalog, ops, from] = await Promise.all([
     listDataSources(project.slug),
     listArtifacts(project.slug, "model"),

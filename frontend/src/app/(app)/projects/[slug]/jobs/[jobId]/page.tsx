@@ -128,7 +128,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
             ) : job.mode === "auto" ? (
               "AutoML 完成後回填最佳家族"
             ) : isTool ? (
-              "個人工作區工具任務；輸入檔於任務結束後刪除"
+              "工具池任務；輸入檔於任務結束後刪除"
             ) : undefined
           }
         />

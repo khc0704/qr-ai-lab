@@ -1,17 +1,17 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { CommentThread } from "@/components/features/comment-thread";
 import { IssueAdminActions } from "@/components/features/issue-admin-actions";
 import { RelativeTime } from "@/components/features/time";
 import { UserInline } from "@/components/features/member-avatars";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { issueTypeLabel } from "@/i18n/zh-TW";
 import { getIssue, listComments } from "@/lib/api";
 import { can, getCurrentUser, isAdmin } from "@/lib/session";
 import Link from "next/link";
+import { IssueThread } from "./issue-thread";
 
 async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,6 +19,8 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
   if (!issue) notFound();
   const [comments, user] = await Promise.all([listComments("issue", issue.id), getCurrentUser()]);
   const admin = isAdmin(user);
+  // The backend is the authority (PATCH /issues/{id} checks author-or-admin); this only decides whether to show the editor.
+  const canEdit = admin || issue.author.id === user.id;
 
   const rows: [string, React.ReactNode][] = [
     ["狀態", <StatusBadge key="s" status={issue.status} />],
@@ -61,19 +63,7 @@ async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
         }
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-6">
-          <Card>
-            <CardContent className="prose-sm max-w-prose text-sm whitespace-pre-wrap">
-              {issue.body || <span className="text-subtle-foreground">（沒有內文）</span>}
-            </CardContent>
-          </Card>
-          {issue.resolutionNote ? (
-            <Card className="border-success/30 bg-success/5">
-              <CardContent className="text-sm">處理結果：{issue.resolutionNote}</CardContent>
-            </Card>
-          ) : null}
-          <CommentThread comments={comments} currentUser={user} target="issue" targetId={issue.id} />
-        </div>
+        <IssueThread issue={issue} comments={comments} currentUser={user} canEdit={canEdit} />
         <aside className="space-y-4">
           <Card className="gap-0 p-0">
             <dl className="divide-y divide-border">

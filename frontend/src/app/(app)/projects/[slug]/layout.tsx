@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/features/status-badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { projectStatusHint } from "@/i18n/zh-TW";
 import { getProject } from "@/lib/api";
 import { canProject, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
@@ -17,7 +18,8 @@ async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) 
   const { slug } = await params;
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
-  const canSettings = canProject(projectRole(project, user), "settings");
+  const approved = project.status === "active" || project.status === "completed" || project.status === "archived";
+  const canSettings = approved && canProject(projectRole(project, user), "settings");
   return (
     <PageHeader
       eyebrow={<span className="font-mono normal-case">{project.slug}</span>}
@@ -27,10 +29,10 @@ async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) 
           <StatusBadge status={project.status} />
         </span>
       }
-      description={project.description}
+      description={approved ? project.description : projectStatusHint[project.status]}
       actions={
         <>
-          <MemberAvatars users={project.members.map((m) => m.user)} />
+          {approved ? <MemberAvatars users={project.members.map((m) => m.user)} /> : null}
           {canSettings ? (
             <Button variant="outline" size="sm" asChild>
               <Link href={`/projects/${project.slug}/settings`}>
@@ -46,7 +48,7 @@ async function ProjectHeader({ params }: { params: Promise<{ slug: string }> }) 
         <DataTypeChip dataType={project.dataType} />
         <TaskChip taskType={project.taskType} />
       </div>
-      <ProjectTabs slug={project.slug} />
+      <ProjectTabs slug={project.slug} status={project.status} hasApplication={Boolean(project.application)} />
     </PageHeader>
   );
 }

@@ -13,21 +13,24 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RelativeTime } from "@/components/features/time";
 import { formatBytes } from "@/lib/format";
-import { getAdminOverview, getCapacity, listJobs, listProjectRequests, listProjects } from "@/lib/api";
+import { getAdminOverview, getCapacity, listJobs, listProjects } from "@/lib/api";
 import { getCurrentUser, isAdmin } from "@/lib/session";
 
 async function Home() {
   const user = await getCurrentUser();
   const admin = isAdmin(user);
-  const [projects, jobs, runningJobs, requests, capacity, overview] = await Promise.all([
+  const [allProjects, jobs, runningJobs, capacity, overview] = await Promise.all([
     listProjects(),
     listJobs({ limit: 6 }),
     // counted separately: the six newest jobs are not a sample of what is running right now
     listJobs({ status: ["running"], limit: 100 }),
-    listProjectRequests({ applicantId: user.id }),
     getCapacity(),
     admin ? getAdminOverview() : null,
   ]);
+  const projects = allProjects.filter((p) => p.status === "active" || p.status === "completed");
+  const applications = allProjects.filter(
+    (p) => p.owner.id === user.id && (p.status === "pending" || p.status === "in_review" || p.status === "rejected"),
+  );
   const { pool, allocated } = capacity;
   const running = runningJobs.length;
   const storage = projects.reduce((s, p) => s + p.storageUsedBytes, 0);
@@ -41,7 +44,7 @@ async function Home() {
         description={`資源池 ${pool.gpuIndices.length} GPU 中 ${allocated.gpu} 張執行中${overview ? `；佇列中 ${overview.queued} 個任務` : ""}。`}
         actions={
           <Button asChild>
-            <Link href="/project-requests/new">
+            <Link href="/projects/new">
               <Plus />
               申請新專案
             </Link>
@@ -64,10 +67,14 @@ async function Home() {
         />
         <StatCard
           label="我的申請"
-          value={requests.filter((r) => r.status === "submitted" || r.status === "in_review").length}
+          value={applications.filter((p) => p.status !== "rejected").length}
           icon={ClipboardList}
           tone="warning"
-          hint={`共 ${requests.length} 件`}
+          hint={
+            applications.some((p) => p.status === "rejected")
+              ? `${applications.filter((p) => p.status === "rejected").length} 件被退回，可修改重送`
+              : "審核中的專案申請"
+          }
         />
         <StatCard label="儲存使用" value={formatBytes(storage)} icon={HardDrive} hint="本機專案資料夾合計" />
       </div>
@@ -116,7 +123,7 @@ async function Home() {
             dots
             action={
               <Button asChild>
-                <Link href="/project-requests/new">申請新專案</Link>
+                <Link href="/projects/new">申請新專案</Link>
               </Button>
             }
           />

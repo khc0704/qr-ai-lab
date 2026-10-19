@@ -19,9 +19,11 @@ export type InferenceMode =
   "predict" | "score" | "compare" | "embed" | "retrieve" | "detect" | "segment" | "measure" | "extend";
 export type SystemRole = "superadmin" | "admin" | "user";
 export type ProjectRole = "owner" | "maintainer" | "member" | "viewer";
-export type ProjectStatus = "active" | "archived";
+/** pending → in_review → active → completed; pending / in_review → rejected; active / completed → archived */
+export type ProjectStatus = "pending" | "in_review" | "active" | "rejected" | "completed" | "archived";
 export type JobKind = "train" | "inference" | "preprocess" | "analysis";
-export type ProjectKind = "standard" | "personal";
+/** shared = the tool pool that hosts preprocessing / analysis jobs; personal = legacy workspaces (archived) */
+export type ProjectKind = "standard" | "shared" | "personal";
 export type AnalysisKind = "tabular_profile" | "image_quality";
 export type JobStatus = "queued" | "scheduled" | "running" | "succeeded" | "failed" | "cancelled";
 export type JobMode = "manual" | "auto";
@@ -39,14 +41,13 @@ export type JobStage =
   | "failed"
   | "cancelled";
 export type InputKind = "upload" | "data_source" | "inline";
-export type RequestStatus = "submitted" | "in_review" | "approved" | "rejected" | "withdrawn";
 export type DataScale = "tiny" | "small" | "medium" | "large";
 export type IssueType = "question" | "bug" | "feature";
 export type IssueStatus = "open" | "closed";
 export type DataSourceKind = "minio" | "url";
 export type DataFormat = "csv" | "parquet" | "image_folder" | "coco" | "yolo" | "npy" | "jsonl" | "spectrum_csv";
 export type ArtifactKind = "model" | "weights" | "preprocessor" | "report" | "metrics";
-export type CommentTarget = "issue" | "project_request";
+export type CommentTarget = "issue" | "application";
 
 export interface User {
   id: number;
@@ -68,17 +69,26 @@ export interface ProjectMember {
   addedAt: string;
 }
 
+/** Row of GET /users/lookup (autocomplete pickers): identity only, never role / permissions. */
+export interface UserLookup {
+  id: number;
+  username: string;
+  displayName: string;
+  email: string;
+}
+
 export interface Project {
   id: number;
   slug: string;
   name: string;
   description: string;
-  /** personal = the user's workspace that hosts preprocessing / analysis tool jobs */
   kind: ProjectKind;
   dataType: DataType;
   taskType: TaskType;
   status: ProjectStatus;
   owner: User;
+  /** The application this project was created from (申請 tab); absent on the tool pool. */
+  application?: Application;
   gpuLimit: number;
   cpuLimit: number;
   memoryLimitMb: number;
@@ -88,6 +98,9 @@ export interface Project {
   defaultJobTimeoutMinutes?: number;
   members: ProjectMember[];
   createdAt: string;
+  approvedAt?: string;
+  completedAt?: string;
+  archivedAt?: string;
   /** Live usage, computed by the backend from running jobs. */
   usage: { gpu: number; cpu: number; memoryMb: number; runningJobs: number };
 }
@@ -196,28 +209,21 @@ export interface Artifact {
   createdAt: string;
 }
 
-export interface ProjectRequest {
+export interface Application {
   id: number;
-  applicant: User;
-  title: string;
   purpose: string;
-  dataType: DataType;
-  taskType: TaskType;
   dataScale: DataScale;
   dataDescription?: string;
   requestedGpu: number;
   requestedCpu: number;
   requestedMemoryMb: number;
   requestedStorageMb: number;
-  proposedSlug?: string;
   members: { email: string; role: ProjectRole }[];
-  status: RequestStatus;
   reviewer?: User;
   reviewNote?: string;
   reviewedAt?: string;
-  projectSlug?: string;
-  commentCount: number;
   submittedAt: string;
+  commentCount: number;
 }
 
 export interface Issue {
@@ -232,6 +238,8 @@ export interface Issue {
   resolutionNote?: string;
   commentCount: number;
   createdAt: string;
+  /** Last content edit (title / type / body / assignee); status changes and comments do not move it. */
+  updatedAt: string;
   closedAt?: string;
 }
 
@@ -243,6 +251,8 @@ export interface Comment {
   kind: "comment" | "system";
   body: string;
   createdAt: string;
+  /** Later than createdAt once the body was edited (issue comments only). */
+  updatedAt?: string;
 }
 
 export interface ResourcePool {
@@ -384,6 +394,8 @@ export interface NodeStatus {
   diskFreeGb: number;
   allocated: Allocated;
   runner?: RunnerInfo;
+  /** "wsl2" when the backend runs inside WSL (psutil then measures the WSL VM, not the Windows host). */
+  platform?: string;
 }
 
 export type ZooStatus = "present" | "missing" | "mismatch" | "importing" | "error";
@@ -572,13 +584,21 @@ export interface ToolUpload {
   createdAt: string;
 }
 
-export interface ToolDefaults {
+/** Admin setting: quota of the shared tool pool (preprocessing / analysis jobs) and the per-user limit. */
+export interface ToolPool {
   gpuLimit: number;
   cpuLimit: number;
   memoryLimitMb: number;
   storageQuotaMb: number;
   maxConcurrentJobs: number;
+  maxJobsPerUser: number;
   resultTtlHours: number;
+}
+
+/** GET /tools/pool: the pool quota plus the caller's own queued / running tool jobs. */
+export interface ToolPoolStatus extends ToolPool {
+  slug: string;
+  myActiveJobs: number;
 }
 
 export interface Capacity {

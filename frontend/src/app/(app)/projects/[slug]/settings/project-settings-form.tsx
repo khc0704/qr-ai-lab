@@ -85,7 +85,7 @@ export function ProjectSettingsForm({
       else toast.success("專案已封存");
     });
   return (
-    <div className="mx-auto w-full max-w-2xl space-y-6">
+    <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>基本</CardTitle>

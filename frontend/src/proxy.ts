@@ -18,7 +18,7 @@
 //     /login?reason=expired, /api/* gets 401. /login is only bounced back to "/" for plain visits (no ?reason /
 //     ?error), otherwise the stale cookie that is still in the browser would redirect in a loop.
 //   - The route handlers that forward the token to the backend (/api/upload, /api/stream, /api/download,
-//     /api/tools, /api/admin) pass through here as well, so they get a refreshed token too; /api/auth/* (Auth.js
+//     /api/tools, /api/admin, /api/users) pass through here as well, so they get a refreshed token too; /api/auth/* (Auth.js
 //     itself) never does. The proxy only decides and sets headers, so streamed responses stay streamed.
 // AUTH_MODE=local keeps its original behaviour: our own httpOnly `qr_token` cookie decides, and Auth.js is never
 // imported (the `@/auth` import is lazy so a local-mode deployment never initialises NextAuth).
@@ -110,5 +110,6 @@ export const config = {
     "/api/download/:path*",
     "/api/tools/:path*",
     "/api/admin/:path*",
+    "/api/users/:path*",
   ],
 };

@@ -1,6 +1,6 @@
 import { Box } from "lucide-react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { FamilyText } from "@/components/features/chips";
 import { EmptyState } from "@/components/features/empty-state";
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getProject, listArtifacts } from "@/lib/api";
 import { RelativeTime } from "@/components/features/time";
 import { formatBytes, formatMetric } from "@/lib/format";
-import { canProject, projectRole } from "@/lib/roles";
+import { canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 import { ModelRowActions } from "./model-row-actions";
 
@@ -17,6 +17,7 @@ async function Models({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [project, user] = await Promise.all([getProject(slug), getCurrentUser()]);
   if (!project) notFound();
+  if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const models = await listArtifacts(project.slug, "model");
   const role = projectRole(project, user);
   const canSetDefault = canProject(role, "edit");

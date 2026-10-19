@@ -23,8 +23,8 @@ async function Users({ searchParams }: { searchParams: Promise<{ page?: string |
         title="使用者"
         description={
           me.authMode === "keycloak"
-            ? "帳號由 Keycloak 首次登入時自動建立；這裡調整系統角色與啟用狀態（Keycloak 群組對應的角色會在登入時覆蓋）。"
-            : "開發環境為本地帳號；正式環境由 Keycloak 首次登入自動建立。這裡只調整系統角色與啟用狀態。"
+            ? "帳號由 Keycloak 首次登入時自動建立（Keycloak 只提供身分，不決定角色）；系統角色與啟用狀態只在這裡管理。"
+            : "開發環境為本地帳號；正式環境由 Keycloak 首次登入自動建立（只提供身分）。系統角色與啟用狀態只在這裡管理。"
         }
         eyebrow={<span className="font-mono normal-case">{users.total} 位使用者</span>}
       />
@@ -41,7 +41,11 @@ async function Users({ searchParams }: { searchParams: Promise<{ page?: string |
               </li>
             ))}
           </ul>
-          {!canManage ? <p className="mt-2 text-xs">只有 superadmin 可以變更角色或停用帳號；你目前只能檢視。</p> : null}
+          <p className="mt-2 text-xs">
+            超級管理員只有一位，由環境變數 <span className="font-mono">SUPERADMIN_USERNAME</span>{" "}
+            指定，不能在這裡指派、降級或停用；這裡最多只能把其他人指派為管理員。
+          </p>
+          {!canManage ? <p className="mt-1 text-xs">只有超級管理員可以變更角色或停用帳號；你目前只能檢視。</p> : null}
         </AlertDescription>
       </Alert>
       <UsersTable users={users.items} currentUserId={me.id} canManage={canManage} />

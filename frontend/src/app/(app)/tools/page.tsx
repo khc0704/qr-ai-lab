@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getWorkspace } from "@/lib/api";
+import { getToolPoolStatus } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { ToolJobs } from "./tool-jobs";
 
@@ -28,21 +28,26 @@ const TOOLS = [
   },
 ] as const;
 
-async function WorkspaceQuota() {
-  const ws = await getWorkspace();
+async function PoolQuota() {
+  const pool = await getToolPoolStatus();
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard
-        label="個人工作區"
-        value={<span className="font-mono text-base">{ws.slug}</span>}
-        hint="工具任務都在這裡排隊"
+        label="我的工具任務"
+        value={`${pool.myActiveJobs} / ${pool.maxJobsPerUser}`}
+        tone={pool.myActiveJobs >= pool.maxJobsPerUser ? "warning" : "default"}
+        hint="排隊 + 執行中 / 每人上限"
       />
-      <StatCard label="GPU / CPU 上限" value={`${ws.gpuLimit} / ${ws.cpuLimit}`} hint="由管理員的「工具預設」決定" />
-      <StatCard label="記憶體上限" value={formatBytes(ws.memoryLimitMb * 1024 * 1024)} />
       <StatCard
-        label="同時執行"
-        value={`${ws.maxConcurrentJobs} 個任務`}
-        hint={`儲存配額 ${formatBytes(ws.storageQuotaMb * 1024 * 1024)}`}
+        label="工具池 GPU / CPU"
+        value={`${pool.gpuLimit} / ${pool.cpuLimit}`}
+        hint="所有人共用，由管理員設定"
+      />
+      <StatCard label="記憶體上限" value={formatBytes(pool.memoryLimitMb * 1024 * 1024)} />
+      <StatCard
+        label="整池同時執行"
+        value={`${pool.maxConcurrentJobs} 個任務`}
+        hint={`結果保留 ${pool.resultTtlHours} 小時`}
       />
     </div>
   );
@@ -53,7 +58,7 @@ export default function ToolsPage() {
     <>
       <PageHeader
         title="工具"
-        description="不需要專案就能用的資料工具：以你的個人工作區建立任務執行，和其他任務一樣排隊、受資源限制、有 log；本服務不保存資料。"
+        description="不需要專案就能用的資料工具：任務在公共的工具池排隊執行，不佔用任何專案配額，和其他任務一樣受資源限制、有 log；本服務不保存資料。"
       />
       <div className="grid gap-4 md:grid-cols-2">
         {TOOLS.map((t) => (
@@ -74,7 +79,7 @@ export default function ToolsPage() {
         ))}
       </div>
       <Suspense fallback={<Skeleton className="h-24 w-full" />}>
-        <WorkspaceQuota />
+        <PoolQuota />
       </Suspense>
       <Suspense fallback={<Skeleton className="h-40 w-full" />}>
         <ToolJobs />

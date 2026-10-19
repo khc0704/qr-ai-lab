@@ -2,8 +2,8 @@
 
 init-db                 create all tables (dev/SQLite; production uses `alembic upgrade head`)
 seed                    seed `superadmin` / `admin` / `user` accounts and default settings (idempotent)
-create-user             --username --password --email [--role superadmin|admin|user] [--name ...]
-set-role                --username --role superadmin|admin|user   (bootstrap the first superadmin)
+create-user             --username --password --email [--role admin|user] [--name ...]
+set-role                --username --role admin|user   (superadmin is exactly one account: SUPERADMIN_USERNAME)
 set-password            --username --password
 model-zoo               list required pretrained weights and whether they are present
 """
@@ -40,10 +40,13 @@ async def _seed() -> None:
                 session, s.seed_admin_password, s.seed_user_password, s.seed_superadmin_password
             )
         else:
-            print("AUTH_MODE=keycloak: no local accounts seeded (use SUPERADMIN_USERNAMES / KEYCLOAK_ROLE_MAP)")
+            print("AUTH_MODE=keycloak: no local accounts seeded (SUPERADMIN_USERNAME is superadmin at first login)")
+        changed = await users_svc.ensure_single_superadmin(session)
         pool = await settings_svc.get_resource_pool(session)
         await settings_svc.get_job_defaults(session)
     print(f"created users: {created or 'none (already present)'}; resource pool: {pool.model_dump()}")
+    if changed["promoted"] or changed["demoted"]:
+        print(f"superadmin reconciled (SUPERADMIN_USERNAME={s.superadmin_username!r}): {changed}")
 
 
 async def _create_user(a: argparse.Namespace) -> None:
@@ -68,6 +71,12 @@ async def _set_role(a: argparse.Namespace) -> None:
         u = await users_svc.get_by_username(session, a.username)
         if u is None:
             print("no such user (Keycloak users exist after their first login)", file=sys.stderr)
+            sys.exit(1)
+        if a.role == "superadmin" or users_svc.is_configured_superadmin(u.username):
+            print(
+                "superadmin is the one account named by SUPERADMIN_USERNAME; set-role assigns admin|user",
+                file=sys.stderr,
+            )
             sys.exit(1)
         u.role = a.role
         await session.commit()
@@ -111,11 +120,11 @@ def main(argv: list[str] | None = None) -> None:
     cu.add_argument("--username", required=True)
     cu.add_argument("--password", required=True)
     cu.add_argument("--email", required=True)
-    cu.add_argument("--role", default="user", choices=["superadmin", "admin", "user"])
+    cu.add_argument("--role", default="user", choices=["admin", "user"])
     cu.add_argument("--name", default=None)
     sr = sub.add_parser("set-role")
     sr.add_argument("--username", required=True)
-    sr.add_argument("--role", required=True, choices=["superadmin", "admin", "user"])
+    sr.add_argument("--role", required=True, choices=["admin", "user"])
     sp = sub.add_parser("set-password")
     sp.add_argument("--username", required=True)
     sp.add_argument("--password", required=True)

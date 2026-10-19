@@ -1,5 +1,7 @@
 // Keycloak-mode walkthrough: run against a frontend + backend started with AUTH_MODE=keycloak (a fake or real
 // realm). Appends screenshots / captions to docs/screenshots/e2e like e2e-walkthrough.mjs.
+// Backend expectations: SUPERADMIN_USERNAME=superadmin (the one fixed superadmin) and, for the alice-as-admin shots,
+// the opt-in KEYCLOAK_ROLE_MAP=qr-admin:admin (the default is empty: Keycloak supplies identity only).
 //
 //   CHROMIUM_PATH=/opt/pw-browsers/chromium BASE_URL=http://127.0.0.1:3000 node scripts/e2e-keycloak.mjs
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -84,14 +86,14 @@ try {
   await shot(
     page,
     "kc-home-superadmin",
-    "回到首頁：Keycloak 的 superadmin realm role 經 KEYCLOAK_ROLE_MAP 對應成系統角色 superadmin；同名的本地帳號被接管（auth_provider=keycloak）",
+    "回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）",
   );
   await page.goto(`${BASE}/admin/users`);
   await settle(page, 1000);
   await shot(
     page,
     "kc-users",
-    "使用者頁：Keycloak 登入過的帳號標記 keycloak；角色仍可在這裡調整（token 沒帶對應 role 時以這裡為準）",
+    "使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單",
   );
   await page.getByRole("button", { name: /使用者選單/ }).click();
   await settle(page, 300);
@@ -120,7 +122,7 @@ try {
   await shot(
     p2,
     "kc-home-alice",
-    "第一次登入的新帳號 alice：users 表自動建立；她的 client role qr-admin 對應到 admin（KEYCLOAK_ROLE_MAP=…,qr-admin:admin），所以看得到「管理」選單",
+    "第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）",
   );
   await p2.goto(`${BASE}/admin`);
   await settle(p2, 1000);

@@ -187,10 +187,14 @@ try {
     await page.waitForURL((u) => u.href.replace(/\/$/, "") === BASE.replace(/\/$/, "")); // home (with or without a base path)
     await settle(page);
     await shot(page, "home-user-empty", "一般使用者首頁：尚無專案、任務與申請（總資源池來自 backend /capacity）");
-    await goto(page, "/project-requests");
-    await shot(page, "requests-empty", "專案申請列表（空狀態）");
-    await goto(page, "/project-requests/new");
-    await shot(page, "request-form-empty", "新申請表單（結構化：題目、資料類型、任務、資料規模、資源需求、成員）");
+    await goto(page, "/projects");
+    await shot(page, "requests-empty", "專案列表（空狀態）：申請與專案在同一頁，右上角「專案申請」");
+    await goto(page, "/projects/new");
+    await shot(
+      page,
+      "request-form-empty",
+      "專案申請表單（題目與目的支援 Markdown、資料類型 / 任務、資源需求、以自動完成挑選成員）",
+    );
     await page.fill("input[name=title]", "WAT 良率預測（Line A / B / C）");
     await page.fill(
       "textarea[name=purpose]",
@@ -211,10 +215,10 @@ try {
     await page.fill("input[name=proposedSlug]", "wat-yield-forecast");
     await shot(page, "request-form-filled", "填好的申請：表格 × 迴歸、0 GPU / 4 CPU / 8 GB、建議 slug");
     await page.getByRole("button", { name: "送出申請" }).click();
-    await page.waitForURL(/\/project-requests\/\d+$/, { timeout: 30_000 });
+    await page.waitForURL(/\/projects\/wat-yield-forecast\/application$/, { timeout: 30_000 });
     await settle(page);
-    state.requestId = Number(page.url().split("/").pop());
-    await shot(page, "request-submitted", "送出後的申請詳情（狀態 submitted，申請人可撤回或留言）");
+    state.slug = "wat-yield-forecast";
+    await shot(page, "request-submitted", "送出後專案立刻以「申請中」建立，只有「申請」分頁；申請人可修改、撤回或留言");
     await page.getByPlaceholder(/回覆管理員|留言/).fill("資料已從 MES 匯出，約 480 筆 lot，本週內可提供。");
     await page.getByRole("button", { name: "送出" }).click();
     await settle(page, 1200);
@@ -228,34 +232,29 @@ try {
     console.log("▶ approve");
     const page = await uiLogin(adminCtx, "admin", "admin1234");
     await shot(page, "home-admin", "管理員首頁：側欄顯示待審申請數、全站任務與資源池");
-    await goto(page, "/admin/requests");
-    await shot(page, "admin-requests", "管理員：申請審核列表");
-    if (!state.requestId) {
-      const list = await api(adminTok, "GET", "/project-requests?page_size=100");
-      state.requestId = list.items[0].id;
-    }
-    await goto(page, `/project-requests/${state.requestId}`);
-    await shot(page, "admin-request-detail", "管理員看申請詳情：右側審核面板");
+    await goto(page, "/projects?status=pending");
+    await shot(page, "admin-requests", "管理員：專案列表以「申請中 / 審核中」篩選，就是待審清單");
+    state.slug = state.slug || "wat-yield-forecast";
+    await goto(page, `/projects/${state.slug}/application`);
+    await shot(page, "admin-request-detail", "管理員看申請分頁：右側審核面板");
     await page.getByRole("button", { name: "開始審核" }).click();
     await settle(page, 1200);
     await shot(page, "admin-request-in-review", "狀態變為 in_review，出現核准 / 退回按鈕");
     await page.getByRole("button", { name: "核准", exact: true }).click();
     await page.getByRole("dialog").waitFor();
-    await page.fill("#slug", "wat-yield-forecast");
     await fillNumber(page, "#q-gpu", 0);
     await fillNumber(page, "#q-cpu", 4);
     await fillNumber(page, "#q-mem", 8192);
-    await fillNumber(page, "#q-sto", 10240);
+    await fillNumber(page, "#q-storage", 10240);
     await shot(
       page,
       "admin-approve-dialog",
-      "核准對話框：指定 slug 與配額（GPU / CPU / Memory / Storage），不得超過總資源池",
+      "核准對話框：設定配額（GPU / CPU / Memory / Storage / 同時任務數）與要加入的成員，不得超過總資源池",
       { fullPage: false },
     );
-    await page.getByRole("button", { name: "核准並建立" }).click();
+    await page.getByTestId("approve-confirm").click();
     await settle(page, 1500);
-    await shot(page, "admin-request-approved", "核准後：狀態 approved、專案已自動建立並連結");
-    state.slug = "wat-yield-forecast";
+    await shot(page, "admin-request-approved", "核准後：狀態「進行中」，其他分頁開放，申請分頁留作紀錄");
 
     // two more projects for the image-quality and spectrum walkthroughs (created through the same API)
     for (const [key, body, approve] of [
@@ -296,19 +295,17 @@ try {
     ]) {
       const existing = await api(adminTok, "GET", `/projects/${approve.slug}`).catch(() => null);
       if (existing) continue;
-      const req = await api(userTok, "POST", "/project-requests", body);
-      await api(adminTok, "POST", `/project-requests/${req.id}/review`);
-      await api(adminTok, "POST", `/project-requests/${req.id}/approve`, {
-        ...approve,
+      const created = await api(userTok, "POST", "/projects", body);
+      await api(adminTok, "POST", `/projects/${created.slug}/review`);
+      const quota = Object.fromEntries(Object.entries(approve).filter(([k]) => k !== "slug"));
+      await api(adminTok, "POST", `/projects/${created.slug}/approve`, {
+        ...quota,
         review_note: "CPU 即可，先用小資料驗證流程。",
       });
-      state[`${key}Request`] = req.id;
+      state[`${key}Slug`] = created.slug;
     }
-    await goto(page, "/admin/requests");
-    await shot(page, "admin-requests-after", "審核列表：三件申請都已核准");
-
-    await goto(page, "/admin/quotas");
-    await shot(page, "admin-quotas", "管理員：各專案配額一覽（合計超過資源池時提示；排程仍以資源池為準）");
+    await goto(page, "/projects");
+    await shot(page, "admin-requests-after", "專案列表：三件申請都已核准，變成進行中的專案");
     await page.close();
     // the total pool is superadmin territory (admin only reads it)
     const sa = await uiLogin(superCtx, "superadmin", "superadmin1234");
@@ -316,7 +313,13 @@ try {
     await shot(
       sa,
       "admin-dashboard-pool",
-      "superadmin 的 Dashboard：GPU 卡片、總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數、依顯存共用 GPU）、節點狀態、任務執行方式（runner）",
+      "superadmin 的 Dashboard：GPU 卡片、總資源池設定（所有專案合計可用的 GPU / CPU / Memory / 同時任務數、依顯存共用 GPU）、工具池配額、節點狀態、任務執行方式（runner）",
+    );
+    await goto(sa, `/projects/${state.slug}/settings`);
+    await shot(
+      sa,
+      "admin-quotas",
+      "superadmin 在專案「設定」分頁調整該專案的配額（合計超過資源池時提示；排程仍以資源池為準）",
     );
     await fillNumber(sa, "input[name=memoryMb]", 14336);
     await fillNumber(sa, "input[name=maxRunningJobs]", 2);
@@ -852,7 +855,7 @@ try {
       "superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）",
     );
     // a throwaway project so the delete can be shown end to end
-    const tmpReq = await api(userTok, "POST", "/project-requests", {
+    const tmpReq = await api(userTok, "POST", "/projects", {
       title: "暫時專案（示範刪除）",
       purpose: "示範 superadmin 刪除專案：任務、產物、資料來源與資料夾一併移除。",
       data_type: "TABULAR",
@@ -865,9 +868,8 @@ try {
       proposed_slug: "tmp-delete-demo",
       members: [],
     });
-    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/review`);
-    await api(adminTok, "POST", `/project-requests/${tmpReq.id}/approve`, {
-      slug: "tmp-delete-demo",
+    await api(adminTok, "POST", `/projects/${tmpReq.slug}/review`);
+    await api(adminTok, "POST", `/projects/${tmpReq.slug}/approve`, {
       gpu_limit: 0,
       cpu_limit: 1,
       memory_limit_mb: 1024,
@@ -892,11 +894,11 @@ try {
     await sa.close();
 
     const ad = await uiLogin(adminCtx, "admin", "admin1234");
-    await goto(ad, "/admin/quotas");
+    await goto(ad, `/projects/${state.slug}/settings`);
     await shot(
       ad,
       "roles-admin-quotas-readonly",
-      "admin 看專案配額：唯讀（PERMISSION_DENIED 由後端把關，前端只是不給改）",
+      "admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）",
     );
     await goto(ad, "/admin/model-zoo");
     await shot(ad, "roles-admin-zoo-readonly", "admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除");
@@ -958,13 +960,13 @@ try {
     await shot(
       page,
       "tool-hub",
-      "工具首頁：資料前處理與資料分析兩個不需專案的工具、個人工作區的配額（管理員「工具預設」）、我的工具任務",
+      "工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務",
     );
     await goto(page, "/tools/preprocess");
     await shot(
       page,
       "tool-empty",
-      "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在個人工作區排隊執行）；不保存資料",
+      "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料",
     );
     await page.fill("#tool-spec-target", "yield_pct");
     await page.fill("#tool-spec-id_column", "lot_id");
@@ -987,14 +989,14 @@ try {
     await shot(
       page,
       "tool-queued",
-      "建立後成為個人工作區（ws-user）裡的 preprocess 任務：進佇列、受工具預設的配額限制，列表每 5 秒自動更新",
+      "建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新",
     );
     const mine = await api(userTok, "GET", "/tools/jobs");
     const pre = mine.find((j) => j.kind === "preprocess");
     state.toolJob = pre.id;
     const done = await waitJob(userTok, pre.id);
     if (done.status !== "succeeded") throw new Error(`preprocess job failed: ${done.error_message}`);
-    await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1500);
+    await goto(page, `/tools/jobs/${pre.id}`, 1500);
     await shot(
       page,
       "tool-job-done",
@@ -1006,7 +1008,7 @@ try {
     ]);
     state.toolDownload = download.suggestedFilename();
     await settle(page, 2500);
-    await goto(page, `/projects/${pre.project_slug}/jobs/${pre.id}`, 1200);
+    await goto(page, `/tools/jobs/${pre.id}`, 1200);
     await shot(
       page,
       "tool-downloaded",
@@ -1024,7 +1026,7 @@ try {
     await shot(
       page,
       "analyze-empty",
-      "資料分析服務：表格資料探勘或影像品質分析，同樣以個人工作區的任務執行；只留報告不留資料",
+      "資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料",
     );
     await page.fill("#an-target", "yield_pct");
     await page.fill("#an-id", "lot_id");
@@ -1049,14 +1051,14 @@ try {
     await page.getByTestId("analysis-run").click();
     await page.getByText(/已建立分析任務 #(\d+)/).waitFor({ timeout: 30_000 });
     await settle(page, 1500);
-    await shot(page, "analyze-queued", "兩個分析任務排隊中（個人工作區同時只跑 1 個）");
+    await shot(page, "analyze-queued", "兩個分析任務排隊中（工具池每人同時最多 2 個）");
     const img = (await api(userTok, "GET", "/tools/jobs")).find(
       (j) => j.kind === "analysis" && j.config?.analysis === "image_quality",
     );
     state.analysisImage = img.id;
     const t = await waitJob(userTok, tab.id);
     if (t.status !== "succeeded") throw new Error(`tabular analysis failed: ${t.error_message}`);
-    await goto(page, `/projects/${tab.project_slug}/jobs/${tab.id}`, 1500);
+    await goto(page, `/tools/jobs/${tab.id}`, 1500);
     await shot(
       page,
       "analyze-tabular-report",
@@ -1064,7 +1066,7 @@ try {
     );
     const i = await waitJob(userTok, img.id);
     if (i.status !== "succeeded") throw new Error(`image analysis failed: ${i.error_message}`);
-    await goto(page, `/projects/${img.project_slug}/jobs/${img.id}`, 1500);
+    await goto(page, `/tools/jobs/${img.id}`, 1500);
     await shot(
       page,
       "analyze-image-report",
