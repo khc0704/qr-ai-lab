@@ -43,9 +43,9 @@ async function Jobs({
         {canRun ? (
           <div className="flex gap-2">
             <Button variant="outline" size="sm" asChild>
-              <Link href={`/projects/${project.slug}/jobs/new?kind=inference`}>
+              <Link href={`/projects/${project.slug}/infer`}>
                 <Sparkles />
-                新建推論
+                推論
               </Link>
             </Button>
             <Button size="sm" asChild>

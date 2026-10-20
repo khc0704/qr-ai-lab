@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { analysisKindLabel } from "@/i18n/zh-TW";
 import { analyzeToolAction, deleteToolUploadAction } from "@/lib/actions";
+import { aliasLocalFile, attachLocalFile, jobKey, uploadKey } from "@/lib/local-data";
 import { toToolUpload } from "@/lib/api/mappers";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -45,8 +46,12 @@ export function AnalyzeTool() {
   const [pending, startTransition] = useTransition();
   const [resetKey, setResetKey] = useState(0);
   const current = KINDS.find((k) => k.value === kind)!;
-  const onUploaded = (u: Upload | null, raw?: Record<string, unknown>) =>
-    setUpload(u && raw ? toToolUpload(raw) : null);
+  const onUploaded = (u: Upload | null, raw?: Record<string, unknown>, file?: File) => {
+    const tu = u && raw ? toToolUpload(raw) : null;
+    setUpload(tu);
+    // keep the browser's copy so the report can show the image behind a point (the server deletes the input)
+    if (tu && file) attachLocalFile(uploadKey("tool", tu.id), file);
+  };
   const submit = () =>
     startTransition(async () => {
       if (!upload) return;
@@ -57,6 +62,7 @@ export function AnalyzeTool() {
       const r = await analyzeToolAction(upload.id, kind, params);
       if (!r.ok) toast.error(r.error);
       else {
+        aliasLocalFile(uploadKey("tool", upload.id), jobKey(r.data.id));
         toast.success(`已建立分析任務 #${r.data.id}，排入佇列`);
         setUpload(null);
         setResetKey((k) => k + 1);

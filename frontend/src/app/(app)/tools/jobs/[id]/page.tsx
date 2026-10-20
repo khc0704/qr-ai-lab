@@ -76,7 +76,7 @@ async function ToolJobDetail({ params }: { params: Promise<{ id: string }> }) {
     job.kind === "preprocess" ? (
       <PreprocessJobResults job={job} />
     ) : job.result ? (
-      <AnalysisReport result={job.result} />
+      <AnalysisReport result={job.result} job={job} />
     ) : (
       <Card>
         <CardContent className="text-sm text-muted-foreground">任務完成後會在這裡顯示分析報告。</CardContent>

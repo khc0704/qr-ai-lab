@@ -248,7 +248,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
           </CardContent>
         </Card>
         {job.result ? (
-          <JobResults result={job.result} />
+          <JobResults result={job.result} job={job} />
         ) : (
           <Card>
             <CardContent className="text-sm text-muted-foreground">

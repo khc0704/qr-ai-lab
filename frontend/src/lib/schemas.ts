@@ -193,11 +193,13 @@ export const jobCreateBodySchema = z.object({
   model_family: z.string().max(100).optional(),
   config: jsonRecord.optional(),
   artifact_id: idSchema.nullable().optional(),
-  requested_gpu: z.number().int().min(0),
-  requested_cpu: z.number().positive(),
-  requested_memory_mb: z.number().int().positive(),
+  // a one-off inference sends none of the resource fields: the backend picks them
+  ephemeral: z.boolean().optional(),
+  requested_gpu: z.number().int().min(0).optional(),
+  requested_cpu: z.number().positive().optional(),
+  requested_memory_mb: z.number().int().positive().optional(),
   requested_gpu_memory_mb: z.number().int().positive().nullable().optional(),
-  timeout_minutes: z.number().int().positive(),
+  timeout_minutes: z.number().int().positive().optional(),
 });
 
 export const toolProcessSchema = z.object({

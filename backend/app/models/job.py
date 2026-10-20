@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, ForeignKey, Index, Integer, Numeric, SmallInteger, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, ForeignKey, Index, Integer, Numeric, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, BigInt, DateTime6, IdMixin, TimestampMixin
@@ -26,6 +26,9 @@ class Job(IdMixin, TimestampMixin, Base):
 
     project_id: Mapped[int] = mapped_column(BigInt, ForeignKey("projects.id"), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)  # train | inference | preprocess | analysis
+    # One-off inference: results are shown once, never registered as artifacts, hidden from the job lists and
+    # deleted together with the outputs after the tool pool's result_ttl_hours.
+    ephemeral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
     queue_rank: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

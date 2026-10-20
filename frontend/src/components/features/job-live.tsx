@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 // Live job views built on useJobStream (one EventSource per mounted view, proxied through /api/stream/jobs/{id}):
 //   - JobLive: the project job page (progress card + tabs: overview / log / results / config);
 //   - JobLogLive: just the live LogViewer, used by the admin queue drawer so both share the same stream path.
@@ -31,12 +33,20 @@ export function JobLive({
   defaultTab?: string;
 }) {
   const { lines, dropped, live, connection } = useJobStream(job, log);
+  // Controlled tabs: when the run finishes while the page is open, jump to the results (derived-state pattern:
+  // the status seen last is compared during render, no effect involved).
+  const [tab, setTab] = useState(defaultTab);
+  const [seenStatus, setSeenStatus] = useState(live.status);
+  if (seenStatus !== live.status) {
+    setSeenStatus(live.status);
+    if (live.status === "succeeded") setTab("results");
+  }
   const search = job.config?.search as { max_trials?: number } | undefined;
   const best = Object.entries(live.metrics).filter(([k]) => k.startsWith("best_"));
   const running = live.status === "running" || live.status === "scheduled";
 
   return (
-    <Tabs defaultValue={defaultTab}>
+    <Tabs value={tab} onValueChange={setTab}>
       <TabsList>
         <TabsTrigger value="overview">概況</TabsTrigger>
         <TabsTrigger value="log">Log</TabsTrigger>

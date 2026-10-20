@@ -24,9 +24,13 @@ async function Wizard({
     sp.from ? getJob(Number(sp.from)) : undefined,
   ]);
   const cloneKind = from?.kind;
+  const kind = sp.kind === "inference" || cloneKind === "inference" ? "inference" : "train";
+  // Keyed by kind: switching between ?kind=train and ?kind=inference re-renders this route without remounting,
+  // and a step index left over from the longer wizard would outrun the shorter one (blank page, no active step).
   return (
     <NewJobWizard
-      kind={sp.kind === "inference" || cloneKind === "inference" ? "inference" : "train"}
+      key={kind}
+      kind={kind}
       project={{
         slug: project.slug,
         dataType: project.dataType,

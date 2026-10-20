@@ -128,11 +128,14 @@ export async function listJobsPage(opts: {
   pageSize?: number;
   status?: Job["status"][];
   kind?: Job["kind"];
+  /** true = only one-off inference runs (the 推論 page); default lists the regular jobs. */
+  ephemeral?: boolean;
 }): Promise<Page<Job>> {
   const raw = await apiFetch<J>(
     `/projects/${encodeURIComponent(opts.slug)}/jobs${q({
       status: opts.status?.join(","),
       kind: opts.kind,
+      ephemeral: opts.ephemeral ? "true" : undefined,
       page: clampPage(opts.page),
       page_size: opts.pageSize ?? DEFAULT_PAGE_SIZE,
     })}`,

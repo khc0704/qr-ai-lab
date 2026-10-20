@@ -280,12 +280,19 @@ async def list_jobs(
     session: DbSession,
     status: str | None = None,
     kind: str | None = None,
+    ephemeral: bool = Query(False, description="true = 只列一次性推論（預設列出其他任務）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> Page[JobRead]:
     statuses = [s for s in status.split(",") if s] if status else None
     rows, total = await jobs_svc.list_jobs(
-        session, project_id=access.project.id, statuses=statuses, kind=kind, page=page, page_size=page_size
+        session,
+        project_id=access.project.id,
+        statuses=statuses,
+        kind=kind,
+        page=page,
+        page_size=page_size,
+        ephemeral=ephemeral,
     )
     return Page(items=await ser.jobs(session, rows), total=total, page=page, page_size=page_size)
 

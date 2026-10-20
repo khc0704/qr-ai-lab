@@ -56,6 +56,7 @@ async def job_spec(session: AsyncSession, job: Job) -> JobSpec:
     return JobSpec(
         job_id=job.id,
         kind=job.kind,
+        ephemeral=bool(job.ephemeral),
         project_slug=project.slug,
         data_type=(job.input or {}).get("data_type") or project.data_type,
         task_type=job.task_type,

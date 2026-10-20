@@ -863,7 +863,7 @@ export function NewJobWizard({
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">
-      <Stepper steps={steps} current={step} />
+      <Stepper steps={steps} current={step} onSelect={setStep} />
       {content}
       <div className="flex items-center justify-between">
         <Button type="button" variant="outline" onClick={step === 0 ? () => router.back() : back}>

@@ -11,6 +11,7 @@ const WORK_TABS = [
   { seg: "data-sources", label: "資料來源" },
   { seg: "jobs", label: "任務" },
   { seg: "models", label: "模型" },
+  { seg: "infer", label: "推論" },
   { seg: "members", label: "成員" },
   { seg: "settings", label: "設定" },
 ];

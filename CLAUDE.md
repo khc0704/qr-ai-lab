@@ -86,7 +86,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - 專案申請 = 建立 `pending` 的 project（`POST /projects`）；申請內容在 `project_requests`（`projects.request_id`），專案頁的「申請」分頁顯示與審核；沒有獨立的申請列表 / 審核頁 / 配額頁
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
 - Project `status`：`pending | in_review | active | rejected | completed | archived`（核准前只有「申請」分頁；`active` 才能建資料來源 / 任務 / 管成員；`completed` = 已結束可重開）；`kind`：`standard | shared`（shared = 唯一的工具池 `tools`，放所有前處理 / 分析任務，配額來自管理員「工具池」設定 `tool_pool` 含 `max_jobs_per_user`，且不得超過總資源池；`personal` 是已封存的舊個人工作區）
-- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是工具池的工具任務，頁面在 `/tools/jobs/{id}`，只有建立者與管理員看得到）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）
+- Job（`jobs` 表統一訓練與推論）`kind`：`train | inference | preprocess | analysis`（後兩者是工具池的工具任務，頁面在 `/tools/jobs/{id}`，只有建立者與管理員看得到）；`status`：`queued → scheduled → running → succeeded | failed | cancelled`；`queue_rank` 決定佇列順序（小的先跑，admin 可重排）；`ephemeral=true` 是專案「推論」頁的一次性推論：資源由後端決定、不登記產物、不列入任務列表、`result.preview` 最多 500 列、結果保留時間（工具池 `result_ttl_hours`）後連輸出與列一起刪除
 - Job `mode`（train）：`manual | auto`（auto = AutoML，候選模型 + Optuna 搜尋）
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
@@ -96,6 +96,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - 工具（不需專案）：`POST /tools/uploads` → `/preview`（即時抽樣）→ `/process`（preprocess 任務）或 `/analyze`（analysis 任務：`tabular_profile | image_quality`，實作在 `trainer/trainer/analysis/`）；上傳只在 `DATA_ROOT/tools/<id>/`（無資料庫列），建任務時移進任務 input；前處理結果 `GET /jobs/{id}/download` 交付一次即刪
 - GPU 共用是**實測模式**：`services/gpu.py` 用 pynvml 實際用量 + 暖機期（`GPU_WARMUP_S`）的「申請 − 實測」；不要改回以申請量保留
 - 正式網址 `https://qrit.tsmc.com/ai-lab`（前端，`NEXT_PUBLIC_BASE_PATH` 在 build 時編進去；手寫 URL 一律 `withBase()`）與 `https://qrit.tsmc.com/ai-lab-api`（backend，`ROOT_PATH`）；MariaDB / Redis 主機 port 3307 / 6380
+- 瀏覽器本地樣本：伺服器不留資料，但前端把 Dropzone 的 `File` 留在分頁記憶體（`src/lib/local-data.ts`，key `upload:<scope>:<id>` → 別名 `job:<id>`），結果頁的 `SampleViewer` 用它在本地讀 zip 項目 / CSV 列顯示樣本；重新整理後以大小 + sha256 比對重新附加。不要把這些檔案送回伺服器或寫進 localStorage
 - 所有環境變數檔與變數清單：`docs/ENVIRONMENT.md`
 
 ## 全域工作規則

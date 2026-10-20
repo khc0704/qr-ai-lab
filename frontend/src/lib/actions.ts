@@ -539,6 +539,7 @@ export async function createJobAction(slug: string, body: J): Promise<ActionResu
   });
   if (r.ok) {
     revalidatePath(`/projects/${slug}/jobs`);
+    revalidatePath(`/projects/${slug}/infer`);
     revalidatePath("/");
   }
   return r;

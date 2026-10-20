@@ -213,6 +213,7 @@ export const routeLabel: Record<string, string> = {
   "data-sources": "資料來源",
   jobs: "任務",
   models: "模型",
+  infer: "推論",
   members: "成員",
   settings: "設定",
   new: "新增",

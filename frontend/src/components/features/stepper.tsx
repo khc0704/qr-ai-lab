@@ -1,25 +1,53 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function Stepper({ steps, current }: { steps: string[]; current: number }) {
+/**
+ * Horizontal step indicator. `current` is clamped into range (a stale index after a step list shrinks shows
+ * the last step instead of nothing). With `onSelect`, completed steps become buttons that jump back.
+ */
+export function Stepper({
+  steps,
+  current,
+  onSelect,
+}: {
+  steps: string[];
+  current: number;
+  onSelect?: (index: number) => void;
+}) {
+  const cur = Math.min(Math.max(0, current), Math.max(0, steps.length - 1));
   return (
-    <ol className="flex items-center gap-2 overflow-x-auto">
+    <ol className="flex items-center gap-2 overflow-x-auto" aria-label="步驟">
       {steps.map((s, i) => {
-        const done = i < current;
-        const active = i === current;
+        const done = i < cur;
+        const active = i === cur;
+        const clickable = done && Boolean(onSelect);
+        const Tag = clickable ? "button" : "div";
         return (
-          <li key={s} className="flex shrink-0 items-center gap-2">
-            <span
+          <li key={`${i}-${s}`} className="flex shrink-0 items-center gap-2">
+            <Tag
+              type={clickable ? "button" : undefined}
+              onClick={clickable ? () => onSelect?.(i) : undefined}
+              aria-current={active ? "step" : undefined}
+              aria-label={clickable ? `回到步驟 ${i + 1}：${s}` : undefined}
               className={cn(
-                "flex size-6 items-center justify-center rounded-full border font-mono text-[11px] tabular-nums",
-                done && "border-primary bg-primary text-primary-foreground",
-                active && "border-primary text-brand-ink",
-                !done && !active && "border-border text-subtle-foreground",
+                "flex items-center gap-2 rounded-md outline-none",
+                clickable && "cursor-pointer hover:opacity-80 focus-visible:ring-[3px] focus-visible:ring-ring/50",
               )}
             >
-              {done ? <Check className="size-3.5" /> : i + 1}
-            </span>
-            <span className={cn("text-sm", active ? "font-medium text-foreground" : "text-muted-foreground")}>{s}</span>
+              <span
+                className={cn(
+                  "flex size-6 items-center justify-center rounded-full border font-mono text-[11px] tabular-nums",
+                  done && "border-primary bg-primary text-primary-foreground",
+                  active && "border-primary text-brand-ink",
+                  !done && !active && "border-border text-subtle-foreground",
+                )}
+              >
+                {done ? <Check className="size-3.5" /> : i + 1}
+              </span>
+              <span className={cn("text-sm", active ? "font-medium text-foreground" : "text-muted-foreground")}>
+                {s}
+              </span>
+            </Tag>
             {i < steps.length - 1 ? <span className={cn("mx-1 h-px w-8", done ? "bg-primary" : "bg-border")} /> : null}
           </li>
         );

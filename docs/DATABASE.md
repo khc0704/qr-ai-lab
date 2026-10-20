@@ -198,6 +198,7 @@ system_settings（key / value，資源池等）
 | project_id | BIGINT UNSIGNED NOT NULL FK projects | |
 | kind | VARCHAR(32) NOT NULL | `train \| inference \| preprocess \| analysis`（後兩者 = 工具池的工具任務，`input.tool = true`，只有 `created_by_id` 與管理員看得到） |
 | name | VARCHAR(120) NOT NULL | |
+| ephemeral | BOOLEAN NOT NULL DEFAULT 0 | 一次性推論（專案「推論」頁）：不登記產物、不列入任務列表、`result_ttl_hours` 後連輸出與本列一起刪除（0008） |
 | status | VARCHAR(32) NOT NULL DEFAULT 'queued' | `queued \| scheduled \| running \| succeeded \| failed \| cancelled` |
 | queue_rank | BIGINT NOT NULL | 佇列順序，小的先跑；新 Job = max + 1000；admin 重排會重新編號 |
 | requested_gpu | SMALLINT UNSIGNED NOT NULL DEFAULT 0 | |
@@ -288,7 +289,7 @@ system_settings（key / value，資源池等）
 
 ## 遷移注意事項
 
-`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）；0005 把 `uploads.claimed_by_job_id` 改成 ON DELETE SET NULL（SQLite 跳過，因為 0001 已是最新 schema）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
+`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）；0005 把 `uploads.claimed_by_job_id` 改成 ON DELETE SET NULL、0006 `projects.completed_at`、0007 申請併入專案（資料遷移）、0008 `jobs.ephemeral`（SQLite 跳過，因為 0001 已是最新 schema）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
 
 ## 初始化
 

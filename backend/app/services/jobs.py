@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import qrlab_preprocess
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,8 +47,8 @@ async def list_recent(
     kind: str | None = None,
     limit: int = 20,
 ) -> list[Job]:
-    """Newest jobs across projects (project_ids=None → all projects, admin only)."""
-    stmt = select(Job)
+    """Newest jobs across projects (project_ids=None → all projects, admin only); one-off inference is left out."""
+    stmt = select(Job).where(Job.ephemeral.is_(False))
     if project_ids is not None:
         if not project_ids:
             return []
@@ -69,8 +70,12 @@ async def list_jobs(
     kind: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    ephemeral: bool | None = False,
 ) -> tuple[list[Job], int]:
+    """``ephemeral``: False (default) = regular jobs only, True = one-off inference only, None = both."""
     stmt = select(Job)
+    if ephemeral is not None:
+        stmt = stmt.where(Job.ephemeral.is_(ephemeral))
     if project_id:
         stmt = stmt.where(Job.project_id == project_id)
     if created_by_id:
@@ -150,18 +155,49 @@ async def _next_rank(session: AsyncSession) -> int:
     return (mx or 0) + RANK_STEP
 
 
+EPHEMERAL_CPU = 2.0
+EPHEMERAL_MEMORY_MB = 4096
+EPHEMERAL_GPU_MEMORY_MB = 4096
+EPHEMERAL_TIMEOUT_MINUTES = 60
+
+
+def _check_quota(project: Project, gpu: int, cpu: float, memory_mb: int) -> None:
+    if gpu > project.gpu_limit or cpu > float(project.cpu_limit) or memory_mb > project.memory_limit_mb:
+        quota = f"{project.gpu_limit} GPU · {float(project.cpu_limit):g} CPU · {project.memory_limit_mb} MB"
+        raise bad_request("QUOTA_EXCEEDED", f"資源請求超過專案配額（{quota}）")
+
+
+def ephemeral_resources(project: Project, model_family: str) -> dict[str, Any]:
+    """A one-off inference asks nothing of the user: one GPU only when the family needs it (shared by VRAM),
+    a couple of cores and a few GB, all clipped to the project's quota."""
+    gpu = 1 if loader.needs_gpu(model_family) else 0
+    if gpu and project.gpu_limit < 1:
+        raise bad_request("GPU_REQUIRED", f"{model_family} 需要 GPU，但這個專案的配額沒有 GPU")
+    return {
+        "requested_gpu": gpu,
+        "requested_cpu": min(EPHEMERAL_CPU, float(project.cpu_limit)),
+        "requested_memory_mb": max(256, min(EPHEMERAL_MEMORY_MB, project.memory_limit_mb)),
+        "requested_gpu_memory_mb": EPHEMERAL_GPU_MEMORY_MB if gpu else None,
+    }
+
+
 async def create(session: AsyncSession, actor: User, project: Project, body: JobCreate) -> Job:
     if project.status != "active":
         raise conflict("PROJECT_ARCHIVED", "專案已封存")
-    if (
-        body.requested_gpu > project.gpu_limit
-        or float(body.requested_cpu) > float(project.cpu_limit)
-        or body.requested_memory_mb > project.memory_limit_mb
-    ):
-        quota = f"{project.gpu_limit} GPU · {float(project.cpu_limit):g} CPU · {project.memory_limit_mb} MB"
-        raise bad_request("QUOTA_EXCEEDED", f"資源請求超過專案配額（{quota}）")
+    if body.ephemeral and body.kind != "inference":
+        raise bad_request("EPHEMERAL_INFERENCE_ONLY", "只有推論可以是一次性任務")
+    resources = {
+        "requested_gpu": body.requested_gpu,
+        "requested_cpu": float(body.requested_cpu),
+        "requested_memory_mb": body.requested_memory_mb,
+        "requested_gpu_memory_mb": body.requested_gpu_memory_mb if body.requested_gpu > 0 else None,
+    }
+    if not body.ephemeral:
+        _check_quota(project, body.requested_gpu, float(body.requested_cpu), body.requested_memory_mb)
     defaults = await settings_svc.get_job_defaults(session)
     timeout = body.timeout_minutes or project.default_job_timeout_minutes or defaults.timeout_minutes
+    if body.ephemeral:
+        timeout = min(timeout, EPHEMERAL_TIMEOUT_MINUTES)
 
     task_type = body.task_type or project.task_type
     model_family = body.model_family
@@ -213,7 +249,12 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         model_family = artifact.model_family
         task_type = (artifact.metadata_ or {}).get("task_type") or task_type
         mode = None
-        if loader.needs_gpu(model_family) and body.requested_gpu == 0:
+        if body.ephemeral:
+            resources = ephemeral_resources(project, model_family)
+            _check_quota(
+                project, resources["requested_gpu"], resources["requested_cpu"], resources["requested_memory_mb"]
+            )
+        elif loader.needs_gpu(model_family) and body.requested_gpu == 0:
             raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
         if not zoo_svc.family_ready(model_family):
             raise bad_request("WEIGHTS_MISSING", f"{model_family} 推論需要的預訓練權重不在模型庫，請管理員先匯入")
@@ -255,10 +296,11 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         name=body.name,
         status="queued",
         queue_rank=await _next_rank(session),
-        requested_gpu=body.requested_gpu,
-        requested_cpu=body.requested_cpu,
-        requested_memory_mb=body.requested_memory_mb,
-        requested_gpu_memory_mb=body.requested_gpu_memory_mb if body.requested_gpu > 0 else None,
+        ephemeral=body.ephemeral,
+        requested_gpu=resources["requested_gpu"],
+        requested_cpu=resources["requested_cpu"],
+        requested_memory_mb=resources["requested_memory_mb"],
+        requested_gpu_memory_mb=resources["requested_gpu_memory_mb"],
         timeout_minutes=timeout,
         task_type=task_type,
         mode=mode,
@@ -392,6 +434,41 @@ async def mark_output_downloaded(job_id: int) -> None:
         job.result = {**(job.result or {}), "downloaded_at": utcnow().isoformat()}
         await projects_svc.recompute_storage(session, job.project)
         await session.commit()
+
+
+async def expire_ephemeral_jobs(session: AsyncSession, ttl_hours: int) -> int:
+    """One-off inference runs are gone after ttl_hours: outputs, logs and the job row (nothing was registered)."""
+    cutoff = utcnow() - timedelta(hours=ttl_hours)
+    rows = (
+        (
+            await session.execute(
+                select(Job).where(
+                    Job.ephemeral.is_(True),
+                    Job.status.in_(("succeeded", "failed", "cancelled")),
+                    Job.finished_at < cutoff,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    storage = get_storage()
+    projects: dict[int, Project] = {}
+    for job in rows:
+        await session.execute(sql_delete(Artifact).where(Artifact.job_id == job.id))
+        if job.output_path:
+            storage.remove_tree(job.output_path)
+        storage.remove_tree(f"jobs/{job.id}")
+        await session.execute(
+            sql_update(Upload).where(Upload.claimed_by_job_id == job.id).values(claimed_by_job_id=None)
+        )
+        projects[job.project_id] = job.project
+        await session.delete(job)
+    for project in projects.values():
+        await projects_svc.recompute_storage(session, project)
+    if rows:
+        await session.commit()
+    return len(rows)
 
 
 async def expire_tool_outputs(session: AsyncSession, ttl_hours: int) -> int:

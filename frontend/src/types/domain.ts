@@ -137,6 +137,8 @@ export interface JobInput {
   format: DataFormat | "json" | string;
   spec: Record<string, unknown> & { preprocess?: PreprocessStep[] };
   rows?: Record<string, unknown>[];
+  /** Upload jobs: what the deleted input looked like (lets the browser verify a re-attached file). */
+  fingerprint?: { sha256?: string; sizeBytes?: number; rowCount?: number; imageCount?: number };
 }
 
 export interface LeaderboardRow {
@@ -161,6 +163,8 @@ export interface Job {
   kind: JobKind;
   name: string;
   status: JobStatus;
+  /** One-off inference: shown on the 推論 page, never an artifact, hidden from job lists, expires with its outputs. */
+  ephemeral: boolean;
   queueRank: number;
   queuePosition?: number;
   requestedGpu: number;

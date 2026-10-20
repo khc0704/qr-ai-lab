@@ -43,3 +43,4 @@ paths:
 - 讀取只經過 `@/lib/api`（`server-only` fetch，snake_case → camelCase 在 `src/lib/api/mappers.ts`），寫入只經過 `@/lib/actions.ts`（Server Actions，回傳 `ActionResult`，成功後 `revalidatePath`）；瀏覽器不直接打 backend，上傳 / SSE / 下載走 `src/app/api/*` 的 Route Handler。新 API 欄位先改 `src/types/domain.ts` 與 mapper，再改頁面。
 - 相對時間 / 耗時用 `components/features/time.tsx` 的 `RelativeTime` / `Duration`（server 不可讀時鐘）；任務即時狀態用 `JobLive`。
 - 文件：本地啟動流程在 `docs/GETTING_STARTED.md`；端到端截圖用 `npm run screenshots`（需要整套服務在跑，輸出到 `docs/screenshots/e2e/`），報告用 `npm run screenshots:report`。
+- 看樣本只從瀏覽器本地讀：`lib/local-data.ts` 保存上傳時的 `File`（Dropzone `onUploaded` 的第三個參數），建任務時 `aliasLocalFile(uploadKey(...), jobKey(id))`；結果頁用 `SampleViewer` / `PreviewTable` 顯示，不新增任何把資料存回伺服器的端點。zip 用 `lib/zip-reader.ts` 隨機讀取、CSV / JSONL 用 `lib/line-index.ts`，都不把整個檔案載進記憶體。

@@ -186,6 +186,7 @@ export function toJob(j: J): Job {
     kind: asEnum<Job["kind"]>(j.kind, "train"),
     name: str(j.name),
     status: asEnum<Job["status"]>(j.status, "queued"),
+    ephemeral: Boolean(j.ephemeral),
     queueRank: num(j.queue_rank),
     queuePosition: opt<number>(j.queue_position),
     requestedGpu: num(j.requested_gpu),
@@ -210,6 +211,14 @@ export function toJob(j: J): Job {
       format: str(input.format, "csv"),
       spec: (input.spec as Job["input"]["spec"]) ?? {},
       rows: opt<Record<string, unknown>[]>(input.rows),
+      fingerprint: input.fingerprint
+        ? {
+            sha256: opt<string>((input.fingerprint as J).sha256),
+            sizeBytes: opt<number>((input.fingerprint as J).size_bytes),
+            rowCount: opt<number>((input.fingerprint as J).row_count),
+            imageCount: opt<number>((input.fingerprint as J).image_count),
+          }
+        : undefined,
     },
     config: opt<Record<string, unknown>>(j.config),
     metrics,

@@ -18,6 +18,7 @@ class ArtifactRef(BaseModel):
 class JobSpec(BaseModel):
     job_id: int
     kind: str
+    ephemeral: bool = False
     project_slug: str
     data_type: str
     task_type: str | None

@@ -523,7 +523,8 @@ class Scheduler:
         purged_tools = tools_svc.purge_expired()
         ttl = (await settings_svc.get_tool_pool(session)).result_ttl_hours
         expired_results = await jobs_svc.expire_tool_outputs(session, ttl)
-        if purged or removed or purged_samples or purged_tools or expired_results:
+        expired_ephemeral = await jobs_svc.expire_ephemeral_jobs(session, ttl)
+        if purged or removed or purged_samples or purged_tools or expired_results or expired_ephemeral:
             log.info(
                 "cleanup",
                 purged_uploads=purged,
@@ -531,4 +532,5 @@ class Scheduler:
                 purged_samples=purged_samples,
                 purged_tool_uploads=purged_tools,
                 expired_tool_results=expired_results,
+                expired_ephemeral_jobs=expired_ephemeral,
             )

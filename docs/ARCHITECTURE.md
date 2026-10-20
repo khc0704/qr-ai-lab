@@ -232,6 +232,8 @@ per-job token：HS256，payload `{sub: job_id, kind, exp: now + timeout}`，`/in
 - v1：批次推論。`POST /projects/{slug}/jobs` 帶 `kind = inference`、`artifact_id`、`input`（inline JSON、一次性上傳、data_source）→ 同一條佇列、同一個 trainer image（`trainer infer`）。
 - 輸出：小結果寫 `jobs.result`，大結果寫 `output_path`（`DATA_ROOT/projects/{slug}/jobs/{id}/output/`），`GET /jobs/{id}/download` 串流下載。
 - 推論 Job 預設 GPU=0、CPU 1、Memory 2 GB；vision / text 家族可申請 GPU。
+- **一次性推論**（專案「推論」頁，`jobs.ephemeral = true`）：使用者只選模型、推論模式與資料（拖檔或貼 JSON 列），資源由後端決定（家族需要 GPU 才要 1 張並以 4 GB 顯存共用、CPU 2、記憶體 4 GB、逾時 60 分鐘，皆夾在專案配額內；超出 → 400）；trainer 不登記任何產物，`result.preview` 最多 500 列；不出現在任務列表與首頁最近任務（`GET /projects/{slug}/jobs?ephemeral=true` 才列）；完成後經過工具池的 `result_ttl_hours` 由排程器連輸出、log 與 jobs 列一起刪除。只有 `kind = inference` 可以是一次性（400 `EPHEMERAL_INFERENCE_ONLY`）。
+- **看樣本不經伺服器**：伺服器刪掉輸入後，瀏覽器仍握有 Dropzone 的 `File`（`frontend/src/lib/local-data.ts`，分頁記憶體，不寫 localStorage、不回傳）。推論結果表、分析報告的 embedding 散點與離群清單點一下，`SampleViewer` 就在本地讀出那一筆：zip 項目（`lib/zip-reader.ts` 讀中央目錄後只解壓該項）、CSV / JSONL 列（`lib/line-index.ts` 以位元組位移索引，支援引號內換行與 `id_column`）、直接輸入的列則顯示送出的內容。重新整理後檔案不在記憶體，檢視器要求重新附加並用上傳時記錄的大小 + sha256（`jobs.input.fingerprint`）比對。資料來源（MinIO / URL）的任務沒有本地檔，不顯示。
 - 推論模式 `config.mode`（模型 metadata 的 `inference_modes` 第一個為預設）：`predict`、`score`、`embed`、`retrieve`、`detect`、`segment`、`measure`、`extend`；情境說明見 `docs/USE_CASES.md` §1。
 - 產物目錄的模型（`/job/model/<file>`）由 scheduler 唯讀掛載該產物所在的 Job 輸出目錄。
 - v2 候選：常駐推論服務（模型暖載、同步 API）。先不做。

@@ -269,6 +269,10 @@ def _register(
 # --- inference ----------------------------------------------------------------------------------
 
 
+PREVIEW_ROWS = 20
+EPHEMERAL_PREVIEW_ROWS = 500  # a one-off run shows its rows on the page instead of in a CSV artifact
+
+
 def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tuple[dict[str, Any], str | None]:
     reporter = Reporter(backend, INFER_PHASES)
     ctx.on_progress = reporter.within
@@ -311,26 +315,36 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     out_dir = env.output_dir / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     res = inferencer.predict(ds, mode, spec["config"], out_dir)
+    for n, row in enumerate(res.rows):  # lets the result page map a row back to the sample in the input file
+        if isinstance(row, dict):
+            row.setdefault("row_index", n)
     reporter.set_stage("exporting")
     csv_path = out_dir / "predictions.csv"
     _write_rows(res.rows, csv_path)
     (out_dir / "summary.json").write_text(jsonsafe.dumps(res.summary, indent=2, default=str), encoding="utf-8")
-    artifacts = [
-        ArtifactOut(
-            name=f"predictions-{spec['job_id']}",
-            kind="report",
-            path="output/predictions.csv",
-            framework=art.get("framework") or "unknown",
-        )
-    ]
-    artifacts += res.extra_artifacts
-    registered = _register(backend, artifacts, family=fid)
-    info(f"predictions: {len(res.rows)} rows → output/predictions.csv")
+    ephemeral = bool(spec.get("ephemeral"))
+    if ephemeral:
+        # a one-off run: the rows go into the result for the page to show, nothing becomes a project artifact
+        registered: list[dict[str, Any]] = []
+        info(f"predictions: {len(res.rows)} rows (one-off: not registered as artifacts)")
+    else:
+        artifacts = [
+            ArtifactOut(
+                name=f"predictions-{spec['job_id']}",
+                kind="report",
+                path="output/predictions.csv",
+                framework=art.get("framework") or "unknown",
+            )
+        ]
+        artifacts += res.extra_artifacts
+        registered = _register(backend, artifacts, family=fid)
+        info(f"predictions: {len(res.rows)} rows → output/predictions.csv")
     result = {
         "mode": mode,
         "model_artifact_id": art["id"],
         **res.summary,
-        "preview": res.rows[:20],
+        "preview": res.rows[: (EPHEMERAL_PREVIEW_ROWS if ephemeral else PREVIEW_ROWS)],
+        "preview_truncated": len(res.rows) > (EPHEMERAL_PREVIEW_ROWS if ephemeral else PREVIEW_ROWS),
         "artifacts": registered,
     }
     return result, "output/predictions.csv"

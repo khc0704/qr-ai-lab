@@ -47,8 +47,9 @@ export function Dropzone({
   endpoint?: string;
   /** Extra multipart fields sent next to the file (the tool upload needs `data_type`). */
   fields?: Record<string, string>;
-  /** `raw` is the backend's JSON as-is (the tool endpoint returns a string id the Upload type cannot hold). */
-  onUploaded: (upload: Upload | null, raw?: Record<string, unknown>) => void;
+  /** `raw` is the backend's JSON as-is (the tool endpoint returns a string id the Upload type cannot hold);
+   *  `file` is the File that was sent, for pages that keep it in the browser (lib/local-data.ts). */
+  onUploaded: (upload: Upload | null, raw?: Record<string, unknown>, file?: File) => void;
   accept?: string;
   hint?: string;
   /** Client-side size limit; files above it are rejected with a toast before uploading. */
@@ -84,7 +85,7 @@ export function Dropzone({
       }
       const up = toUpload(json);
       setUpload(up);
-      onUploaded(up, json);
+      onUploaded(up, json, f);
       toast.success(`已上傳 ${up.originalFilename}`);
     } catch (e) {
       setFile(null);

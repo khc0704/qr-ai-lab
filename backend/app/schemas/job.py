@@ -37,6 +37,9 @@ class JobCreate(BaseModel):
     # that much memory is free (and the trainer caps itself with set_per_process_memory_fraction). None → exclusive.
     requested_gpu_memory_mb: int | None = Field(default=None, ge=256, le=1024 * 1024)
     timeout_minutes: int | None = Field(default=None, ge=1, le=MAX_TIMEOUT_MINUTES)
+    # One-off inference (inference only): the server picks the resources, nothing is registered as an artifact,
+    # the job is hidden from the job lists and expires with its outputs after the result TTL.
+    ephemeral: bool = False
 
 
 class JobRead(ORMModel):
@@ -47,6 +50,7 @@ class JobRead(ORMModel):
     kind: str
     name: str
     status: str
+    ephemeral: bool = False
     queue_rank: int
     queue_position: int | None = None
     wait_reason: str | None = None

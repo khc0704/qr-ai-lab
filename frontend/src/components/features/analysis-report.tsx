@@ -7,7 +7,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { analysisCopy } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
+import { SampleViewer } from "@/components/features/sample-viewer";
+import { jobKey } from "@/lib/local-data";
 import { cn } from "@/lib/utils";
+import type { Job } from "@/types/domain";
 
 type J = Record<string, unknown>;
 type Rec = { level?: string; text?: string };
@@ -143,9 +146,12 @@ const GROUP_CLASSES = ["fill-primary", "fill-info", "fill-success", "fill-warnin
 function Scatter({
   points,
   labels,
+  onSelect,
 }: {
   points: { id: string; group: string; x: number; y: number; outlier: number }[];
   labels: string[];
+  /** Click a point to open its image (the file is read from this browser's copy of the upload). */
+  onSelect?: (id: string) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   if (!points.length) return null;
@@ -162,7 +168,9 @@ function Scatter({
   return (
     <figure className="space-y-2">
       <figcaption className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>embedding 的前兩個主成分（PCA）；顏色 = 群組，空心圈 = 偏離群組的影像</span>
+        <span>
+          embedding 的前兩個主成分（PCA）；顏色 = 群組，空心圈 = 偏離群組的影像{onSelect ? "；點一點看影像" : ""}
+        </span>
         <span className="flex flex-wrap gap-3">
           {labels.map((l) => (
             <span key={l} className="inline-flex items-center gap-1">
@@ -187,13 +195,14 @@ function Scatter({
             cx={sx(p.x)}
             cy={sy(p.y)}
             r={hover === i ? 6 : p.outlier > 3.5 ? 5 : 3.5}
-            className={cn(cls(p.group), p.outlier > 3.5 && "stroke-foreground")}
             style={{
               opacity: hover == null || hover === i ? 0.85 : 0.35,
               fill: p.outlier > 3.5 ? "transparent" : undefined,
             }}
             strokeWidth={p.outlier > 3.5 ? 1.5 : 0}
             onMouseEnter={() => setHover(i)}
+            onClick={onSelect ? () => onSelect(p.id) : undefined}
+            className={cn(cls(p.group), p.outlier > 3.5 && "stroke-foreground", onSelect && "cursor-pointer")}
           >
             <title>{`${p.id} (${p.group})`}</title>
           </circle>
@@ -392,7 +401,8 @@ export function TabularProfileReport({ result }: { result: J }) {
   );
 }
 
-export function ImageQualityReport({ result }: { result: J }) {
+export function ImageQualityReport({ result, job }: { result: J; job?: Job }) {
+  const [selected, setSelected] = useState<string | null>(null);
   const groups = arr<J>(result.groups);
   const drift = arr<J>(result.drift);
   // Metrics without enough images (< 3 per group) or zero within-group spread have no ratio: shown as
@@ -497,7 +507,7 @@ export function ImageQualityReport({ result }: { result: J }) {
             <CardTitle>embedding 分佈</CardTitle>
           </CardHeader>
           <CardContent>
-            <Scatter points={points} labels={labels} />
+            <Scatter points={points} labels={labels} onSelect={job ? setSelected : undefined} />
           </CardContent>
         </Card>
         <Card>
@@ -543,7 +553,17 @@ export function ImageQualityReport({ result }: { result: J }) {
                 <div className="text-label">偏離自己群組的影像</div>
                 {outliers.slice(0, 8).map((o) => (
                   <div key={String(o.id)} className="flex justify-between gap-2 font-mono">
-                    <span className="truncate">{String(o.id)}</span>
+                    {job ? (
+                      <button
+                        type="button"
+                        className="truncate text-left text-brand-ink hover:underline"
+                        onClick={() => setSelected(String(o.id))}
+                      >
+                        {String(o.id)}
+                      </button>
+                    ) : (
+                      <span className="truncate">{String(o.id)}</span>
+                    )}
                     <span className="text-muted-foreground">
                       {String(o.group)} · z={num(o.score).toFixed(1)}
                     </span>
@@ -554,11 +574,25 @@ export function ImageQualityReport({ result }: { result: J }) {
           </CardContent>
         </Card>
       </div>
+      {job ? (
+        <SampleViewer
+          open={selected !== null}
+          onOpenChange={(o) => (o ? undefined : setSelected(null))}
+          dataKey={jobKey(job.id)}
+          target={selected ? { ref: { id: selected } } : null}
+          fingerprint={{
+            name: job.input.originalFilename,
+            size: job.input.fingerprint?.sizeBytes ?? job.input.sizeBytes,
+            sha256: job.input.fingerprint?.sha256,
+          }}
+          accept=".zip"
+        />
+      ) : null}
     </div>
   );
 }
 
-export function AnalysisReport({ result }: { result: J }) {
-  if (result.analysis === "image_quality") return <ImageQualityReport result={result} />;
+export function AnalysisReport({ result, job }: { result: J; job?: Job }) {
+  if (result.analysis === "image_quality") return <ImageQualityReport result={result} job={job} />;
   return <TabularProfileReport result={result} />;
 }

@@ -1,15 +1,24 @@
 // Server-rendered inference results: summary stats, the IQA "compare" verdict table, and the first
 // rows of predictions. Everything else is in the downloadable CSV / JSONL.
-import { CheckCircle2, CircleAlert, CircleX } from "lucide-react";
+import { PreviewTable } from "@/components/features/preview-table";
+import { VerdictBadge } from "@/components/features/verdict-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { jobCopy } from "@/i18n/zh-TW";
 import { formatMetric } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import type { Job } from "@/types/domain";
 
 type Row = Record<string, unknown>;
 
-const HIDDEN = new Set(["mode", "model_artifact_id", "preview", "artifacts", "per_metric", "stopped"]);
+const HIDDEN = new Set([
+  "mode",
+  "model_artifact_id",
+  "preview",
+  "preview_truncated",
+  "artifacts",
+  "per_metric",
+  "stopped",
+]);
 
 function cell(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -19,35 +28,15 @@ function cell(v: unknown): string {
   return JSON.stringify(v);
 }
 
-const verdictTone: Record<string, { className: string; icon: typeof CheckCircle2; label: string }> = {
-  match: { className: "bg-success/10 text-success border-success/30", icon: CheckCircle2, label: "一致" },
-  pass: { className: "bg-success/10 text-success border-success/30", icon: CheckCircle2, label: "通過" },
-  drift: { className: "bg-warning/10 text-warning border-warning/30", icon: CircleAlert, label: "漂移" },
-  fail: { className: "bg-destructive/10 text-destructive border-destructive/30", icon: CircleX, label: "不一致" },
-  normal: { className: "bg-success/10 text-success border-success/30", icon: CheckCircle2, label: "正常" },
-  anomaly: { className: "bg-destructive/10 text-destructive border-destructive/30", icon: CircleX, label: "異常" },
-};
-
-export function VerdictBadge({ verdict }: { verdict: string }) {
-  const t = verdictTone[verdict];
-  if (!t) return <span className="font-mono text-xs">{verdict}</span>;
-  const Icon = t.icon;
-  return (
-    <span
-      className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", t.className)}
-    >
-      <Icon className="size-3.5" />
-      {t.label}
-      <span className="font-mono opacity-70">{verdict}</span>
-    </span>
-  );
-}
-
-export function JobResults({ result }: { result: Record<string, unknown> }) {
+export function JobResults({ result, job }: { result: Record<string, unknown>; job?: Job }) {
   const summary = Object.entries(result).filter(([k]) => !HIDDEN.has(k));
   const perMetric = Array.isArray(result.per_metric) ? (result.per_metric as Row[]) : [];
   const preview = Array.isArray(result.preview) ? (result.preview as Row[]) : [];
-  const columns = preview.length ? Array.from(new Set(preview.flatMap((r) => Object.keys(r)))).slice(0, 12) : [];
+  const columns = preview.length
+    ? Array.from(new Set(preview.flatMap((r) => Object.keys(r))))
+        .filter((c) => c !== "row_index")
+        .slice(0, 12)
+    : [];
   const verdict = typeof result.verdict === "string" ? result.verdict : undefined;
   const stoppedNote =
     result.stopped === "deadline"
@@ -130,43 +119,14 @@ export function JobResults({ result }: { result: Record<string, unknown> }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              預測結果預覽{" "}
-              <span className="font-mono text-xs font-normal text-muted-foreground">前 {preview.length} 筆</span>
+              預測結果{result.preview_truncated ? "預覽" : ""}{" "}
+              <span className="font-mono text-xs font-normal text-muted-foreground">
+                {result.preview_truncated ? `前 ${preview.length} 筆，完整結果在 CSV` : `${preview.length} 筆`}
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {columns.map((c) => (
-                      <TableHead key={c} className="font-mono text-xs whitespace-nowrap">
-                        {c}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {preview.map((r, i) => (
-                    <TableRow key={i}>
-                      {columns.map((c) => (
-                        <TableCell
-                          key={c}
-                          className="max-w-56 truncate font-mono text-xs tabular-nums"
-                          title={cell(r[c])}
-                        >
-                          {typeof r[c] === "string" && verdictTone[r[c] as string] ? (
-                            <VerdictBadge verdict={r[c] as string} />
-                          ) : (
-                            cell(r[c])
-                          )}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <PreviewTable rows={preview} columns={columns} job={job} />
           </CardContent>
         </Card>
       ) : null}
