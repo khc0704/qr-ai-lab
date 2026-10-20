@@ -115,7 +115,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 10. Commit 用 Conventional Commits + scope：`feat(frontend): …`、`fix(backend): …`、`docs: …`、`chore(infra): …`。
 11. 語言：程式碼、識別字、commit、API 欄位用英文；UI 文案與文件用繁體中文。
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
-13. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`。
+13. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`；DataLoader 一律用 `ctx.workers`（依 `JOB_MEMORY_MB` 縮減：GPU 任務 `(記憶體 − 3072) / 768`）。訓練任務的記憶體不得低於家族 `resources.memory_mb_min`（手動 400 `MEMORY_BELOW_MIN`；AutoML 跳過不夠的候選 `skipped_low_memory`）。
 14. 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`（節點 / 資源池 / 各專案配置與實測），管理員「使用率歷史」頁讀 `GET /admin/usage?range=`；取樣與清理都在 `app/scheduler/loop.py`，不要在 API 程序另外採樣。
 15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: hf_repo | hf_file | file`；**來源以 Hugging Face Hub 為主**，只有 Hugging Face 沒有的檔才用別的 URL（目前只有 YOLO 的 -seg / -cls 在 GitHub release）；`scripts/fetch_model_zoo.py` 以 `snapshot_download` / `hf_hub_download` / urllib 抓，gated 模型如 DINOv3 需要 `HF_TOKEN`，`--skip` 可略過），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 16. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。

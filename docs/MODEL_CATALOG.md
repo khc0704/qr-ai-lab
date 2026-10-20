@@ -156,7 +156,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 
 Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 400 `GPU_REQUIRED`）。
 
-**記憶體**：影像 / 深度學習任務的主程序光是 torch + CUDA context 就要約 2 GB，每個 DataLoader worker 再各約 0.5 GB；trainer 依任務的記憶體配額自動縮減 worker 數（`(記憶體 − 2048) / 512`，再受 CPU 數與 `MAX_DATALOADER_WORKERS` 限制，實際數字印在 log 的 `limits:` 行）。GPU 影像任務建議申請 ≥ 8 GB（目錄 `memory_mb_min`），4 GB 會只剩 4 個 worker、YOLO 多半會被 cgroup OOM kill（log 出現 `DataLoader worker … killed by signal: Killed` 與 `process exited (-9)` 就是這個）。
+**記憶體**：GPU 任務的主程序光是 torch + CUDA 函式庫 + cuDNN 就約 3 GB（CPU 任務約 1.5 GB），每個 DataLoader worker 再各約 0.75 GB（CPU 任務 0.5 GB）；trainer 依任務的記憶體配額自動縮減 worker 數（GPU：`(記憶體 − 3072) / 768`，CPU：`(記憶體 − 1536) / 512`，再受 CPU 數與 `MAX_DATALOADER_WORKERS` 限制，實際數字印在 log 的 `limits:` 行），AutoML 每個 trial 之間也會釋放上一個模型。但 4 GB 對 GPU 任務本來就不夠：手動模式給少於家族 `memory_mb_min`（DINO / YOLO 為 8192）會被拒絕（400 `MEMORY_BELOW_MIN`，精靈在資源步驟直接顯示最低需求並擋住送出），自動模式會把記憶體不夠的候選跳過（`search.skipped_low_memory`），全部不夠才拒絕。log 出現 `DataLoader worker … killed by signal: Killed` 或 `process exited (-9)` 就是 cgroup OOM kill。
 
 ## 6. AutoML 流程（trainer 實作）
 

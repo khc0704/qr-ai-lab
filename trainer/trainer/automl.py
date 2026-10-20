@@ -53,6 +53,21 @@ def available_choices(ctx: Context, fid: str, task: str | None, name: str, choic
     return kept or choices
 
 
+def _release_previous_trial() -> None:
+    """Free the previous trial's model (host and GPU memory) before the next one starts: the trainer objects
+    are dropped, but torch keeps cached blocks and Python keeps cycles until asked."""
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
 def _sample(
     trial, fid: str, space: dict[str, Any], task: str | None = None, ctx: Context | None = None
 ) -> dict[str, Any]:
@@ -139,6 +154,7 @@ def run(
                 **_sample(trial, fid, fam.get("search_space") or {}, task, ctx),
                 **user_overrides,
             }
+            _release_previous_trial()
             trainer = registry.create_trainer(fid, task, params, ctx)
             ctx.on_progress = _scoped_progress(outer_progress, i, max_trials)
             ctx.on_epoch = _pruning_hook(trial, metric)

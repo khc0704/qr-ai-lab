@@ -1015,11 +1015,14 @@ def parse_augment(value: Any) -> tuple[str, ...]:
     return ops
 
 
-def augment_image(im, ops: tuple[str, ...]):
+_AUG_RNG = np.random.default_rng()
+
+
+def augment_image(im, ops: tuple[str, ...], rng: np.random.Generator | None = None):
     """Random train-time augmentation on a PIL image (each op fires with p=0.5, crop keeps 80–100% of the frame)."""
     from PIL import ImageEnhance, ImageOps
 
-    rng = np.random
+    rng = rng or _AUG_RNG
     for op in ops:
         if rng.random() >= 0.5:
             continue

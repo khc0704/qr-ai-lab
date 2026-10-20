@@ -86,18 +86,19 @@ class Context:
     def workers(self) -> int:
         """DataLoader workers: bounded by the CPU grant, MAX_DATALOADER_WORKERS and the memory grant (each
         forked worker re-imports torch and holds a batch, so a 4 GB cgroup with 6 workers gets OOM-killed)."""
-        return dataloader_workers(self.cpu, os.environ)
+        return dataloader_workers(self.cpu, os.environ, gpu=self.gpu)
 
 
-WORKER_BASE_MB = 2048  # the main process: torch + CUDA context + the model
-WORKER_MB = 512  # per forked DataLoader worker
+WORKER_BASE_MB = {"cpu": 1536, "gpu": 3072}  # the main process: torch (+ CUDA libraries and context) + the model
+WORKER_MB = {"cpu": 512, "gpu": 768}  # per forked DataLoader worker (a fork of a CUDA-initialised parent is bigger)
 
 
-def dataloader_workers(cpu: int, env) -> int:
+def dataloader_workers(cpu: int, env, gpu: int = 0) -> int:
+    kind = "gpu" if gpu else "cpu"
     cap = int(env.get("MAX_DATALOADER_WORKERS", "8") or 8)
     mem = int(env.get("JOB_MEMORY_MB") or 0)
     if mem > 0:
-        cap = min(cap, max(0, (mem - WORKER_BASE_MB) // WORKER_MB))
+        cap = min(cap, max(0, (mem - WORKER_BASE_MB[kind]) // WORKER_MB[kind]))
     return max(0, min(int(cpu), cap))
 
 

@@ -47,7 +47,9 @@ def test_dataloader_workers_follow_the_memory_grant():
 
     assert dataloader_workers(6, {}) == 6
     assert dataloader_workers(6, {"MAX_DATALOADER_WORKERS": "2"}) == 2
-    assert dataloader_workers(6, {"JOB_MEMORY_MB": "4096"}) == 4  # (4096 − 2048) / 512
-    assert dataloader_workers(6, {"JOB_MEMORY_MB": "2048"}) == 0
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "4096"}) == 5  # cpu job: (4096 − 1536) / 512
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "4096"}, gpu=1) == 1  # gpu job: (4096 − 3072) / 768
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "8192"}, gpu=1) == 6
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "2048"}, gpu=1) == 0
     assert dataloader_workers(6, {"JOB_MEMORY_MB": "16384"}) == 6
     assert dataloader_workers(2, {"JOB_MEMORY_MB": "16384", "MAX_DATALOADER_WORKERS": "8"}) == 2

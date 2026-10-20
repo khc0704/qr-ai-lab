@@ -166,3 +166,17 @@ def test_chosen_weight_must_be_in_the_zoo(monkeypatch):
     with pytest.raises(HTTPException) as e:
         check("vision.dino_finetune", "classification", {"backbone": "resnet50"})
     assert e.value.detail["code"] == "WEIGHT_UNKNOWN"
+
+
+def test_training_memory_must_reach_the_catalog_minimum():
+    import pytest
+    from fastapi import HTTPException
+
+    from app.services import jobs as jobs_svc
+
+    assert jobs_svc.memory_min_mb("vision.yolo") == 8192 and jobs_svc.memory_min_mb("tabular.linear") == 1024
+    jobs_svc._check_memory_min("vision.yolo", 8192)
+    jobs_svc._check_memory_min("tabular.linear", 1024)
+    with pytest.raises(HTTPException) as e:
+        jobs_svc._check_memory_min("vision.dino_finetune", 4096)
+    assert e.value.detail["code"] == "MEMORY_BELOW_MIN" and "8192" in e.value.detail["message"]

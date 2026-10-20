@@ -199,7 +199,7 @@ const children = [
     "mode = auto，CPU 2、記憶體 4 GB、GPU 0。AutoML 會依序試 XGBoost、隨機森林、線性、SVM（> 5 萬列自動略過 SVM）。",
     "完成後看 leaderboard：每個 trial 的家族、參數、rmse；最佳模型自動匯出並登記，report/feature_importance.json 列出重要特徵。",
     "候選家族：XGBoost、CatBoost（另一個梯度提升樹，小資料與類別欄較穩）、TabPFN（預訓練好的表格 transformer，fit 只是把訓練列放進上下文、沒有超參數要調，幾十到幾千列常常直接最準；權重來自模型庫，> 1 萬列自動跳過）、隨機森林、線性、SVM。",
-    "記憶體怎麼填：表格任務 2–4 GB 夠；影像 / 深度學習任務主程序就要約 2 GB，每個資料載入 worker 再 0.5 GB，請給 8 GB 以上（配額不夠時平台會自動減少 worker，給 4 GB 跑 YOLO 多半會被記憶體上限中斷）。",
+    "記憶體怎麼填：表格任務 2–4 GB 夠；GPU 影像 / 深度學習任務主程序就要約 3 GB，每個資料載入 worker 再 0.75 GB，請給 8 GB 以上。精靈的資源步驟會顯示所選模型的最低需求，低於它不能送出；自動模式會跳過記憶體不夠的候選模型（結果摘要的 skipped_low_memory）。",
   ]),
   h2("4.4 推論"),
   ...ul([

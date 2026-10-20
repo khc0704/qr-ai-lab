@@ -99,7 +99,7 @@ def run(backend: Backend | None = None) -> int:
         lim = limits.apply_from_env(ctx.cpu)  # clamp BLAS / OpenMP / torch pools to the grant, cap shared-GPU memory
         info(
             f"limits: dataloader workers={ctx.workers} (cpu={ctx.cpu}, memory={os.environ.get('JOB_MEMORY_MB') or '?'} "
-            "MB; each worker ≈ 512 MB on top of ~2 GB for the main process)"
+            f"MB; gpu={ctx.gpu}; the main process needs ~{3 if ctx.gpu else 1.5} GB, each worker ~0.5–0.75 GB)"
         )
         ctx.gpu_memory_mb = lim.gpu_memory_mb
         ctx.zoo = zoo.resolver(env.zoo_root, spec.get("zoo_weights") or {})

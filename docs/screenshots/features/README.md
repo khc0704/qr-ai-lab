@@ -15,3 +15,4 @@
 | `07-apply-task-filter.png` | 專案申請：任務下拉只列出該資料類型有模型能做的（例：IMAGE 四種） |
 | `08-wizard-typed-params.png` | 建立任務精靈：`backbone` / `method` 是下拉（含 DINOv3），`augment` 是多選 |
 | `09-cell-expand.png` | 結果表格：被截斷的格子右側有「展開完整內容」切換，只展開那一格 |
+| `10-wizard-memory-min.png` | 建立任務精靈的資源步驟：顯示所選模型的最低記憶體需求，預選該值，低於它標紅並擋住送出 |

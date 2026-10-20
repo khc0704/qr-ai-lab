@@ -373,15 +373,24 @@ export function NewJobWizard({
       ? candidates.some(gpuOf)
       : gpuOf(family)
     : gpuOf(selectedModel?.family ?? "");
+  // the catalog minimum of the family (manual) or of every remaining candidate (auto): below it a deep-learning
+  // job is OOM-killed by its cgroup, and the backend refuses it (MEMORY_BELOW_MIN)
+  const memoryMin = Math.max(
+    0,
+    ...(isTrain
+      ? (mode === "auto" ? candidates : [family]).map((f) => catalog.families[f]?.resources.memory_mb_min ?? 0)
+      : [0]),
+  );
   const [res, setRes] = useState({
     gpu: cloneFrom?.requestedGpu ?? Math.min(needsGpu ? 1 : 0, project.gpuLimit),
     cpu: cloneFrom?.requestedCpu ?? Math.min(2, project.cpuLimit),
-    memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(4096, project.memoryLimitMb),
+    memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(Math.max(4096, memoryMin), project.memoryLimitMb),
     // VRAM-shared placement is the norm: a declared amount lets the scheduler pack jobs by measured free memory
     gpuMemoryMb: cloneFrom?.requestedGpuMemoryMb ?? 8192,
     timeout: cloneFrom?.timeoutMinutes ?? project.defaultTimeout,
   });
   const overQuota = res.gpu > project.gpuLimit || res.cpu > project.cpuLimit || res.memoryMb > project.memoryLimitMb;
+  const belowMemoryMin = isTrain && mode === "manual" && res.memoryMb < memoryMin;
   const last = step === steps.length - 1;
   const geometricBlocked = project.taskType === "detection" || project.taskType === "segmentation";
 
@@ -920,8 +929,18 @@ export function NewJobWizard({
             className="text-right font-mono"
             value={res.memoryMb}
             onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })}
-            aria-invalid={res.memoryMb > project.memoryLimitMb}
+            aria-invalid={res.memoryMb > project.memoryLimitMb || belowMemoryMin}
           />
+          {memoryMin > 0 ? (
+            <p
+              className={cn("text-xs", belowMemoryMin ? "text-destructive" : "text-muted-foreground")}
+              data-testid="memory-min-hint"
+            >
+              {mode === "auto" && isTrain
+                ? `候選模型最少需要 ${memoryMin} MB；給少於某個候選最低需求的話，該候選會被跳過`
+                : `${familyLabel(family)} 至少需要 ${memoryMin} MB（torch + CUDA 約 3 GB，每個資料載入 worker 再約 0.75 GB）`}
+            </p>
+          ) : null}
           <p
             className={cn(
               "text-xs",
@@ -1050,7 +1069,11 @@ export function NewJobWizard({
           {step === 0 ? "取消" : "上一步"}
         </Button>
         {last ? (
-          <Button type="button" onClick={submit} disabled={pending || overQuota || (needsGpu && res.gpu === 0)}>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={pending || overQuota || belowMemoryMin || (needsGpu && res.gpu === 0)}
+          >
             {pending ? <LoaderCircle className="animate-spin" /> : <Rocket />}
             建立任務
           </Button>
