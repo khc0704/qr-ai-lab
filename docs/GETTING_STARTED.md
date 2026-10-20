@@ -421,6 +421,296 @@ sudo nginx -t && sudo systemctl reload nginx
 - 以 `SUPERADMIN_USERNAME` 的帳號登入，Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；資源池勾選要開放的 GPU；模型庫把權重帶進來。
 - dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）、路徑前綴（無 / `/ai-lab`）。任務本身、權限判斷、資料不留存政策在兩邊完全一樣。
 
+### 7.3 手動逐步安裝（不用 install 腳本；Ubuntu 伺服器 / 桌機，WSL2 也適用）
+
+`infra/install-0x.sh` 做的事全部攤開在這裡，每一步都能自己執行、自己檢查。整套系統只有五個東西：
+
+| 元件 | 怎麼跑 | 連哪裡 |
+|---|---|---|
+| MariaDB 11、Redis 7 | docker compose（或 apt 原生套件） | 127.0.0.1:3307、127.0.0.1:6380 |
+| backend API | `qrlab` 使用者的 systemd 服務：`backend/.venv/bin/uvicorn app.main:app` | 127.0.0.1:8000 |
+| scheduler | `qrlab` 使用者的 systemd 服務：`backend/.venv/bin/python -m app.scheduler`（任務是它用 `systemd-run --user` 起的主機子程序，跑 `trainer/.venv`） | Redis、MariaDB、GPU |
+| frontend | `qrlab` 使用者的 systemd 服務：`node node_modules/next/dist/bin/next start` | 127.0.0.1:3000 → BACKEND_URL |
+| nginx | 主機原生 | `/ai-lab` → 3000、`/ai-lab-api` → 8000 |
+
+Keycloak 是外部服務（公司的，或 `scripts/fake_keycloak.py`）。開發用的「終端直接跑」版本在步驟 6，和 systemd 版本用同一套 venv 與設定檔。
+
+**步驟 0：主機準備（root）**
+
+```bash
+# 0.1 套件：python 3.12、git、curl、nginx（要模擬路徑前綴才需要）、Docker Engine + compose plugin（或原生 mariadb-server / redis-server）
+sudo apt update && sudo apt install -y python3.12 python3.12-venv git curl nginx-light
+# Docker：官方 apt repo 或公司鏡像；之後 sudo usermod -aG docker $USER 並重新登入
+# Node >= 20.9 要「系統層級」安裝，qrlab 使用者執行得到（nvm 裝的只有你自己看得到）：
+#   例：curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
+#   或已用 nvm：sudo ln -sf "$(which node)" /usr/local/bin/node && sudo ln -sf "$(which npm)" /usr/local/bin/npm
+node -v && sudo -u nobody /usr/local/bin/node -v     # 第二個指令要能印出版本，代表別的使用者也執行得到
+# NVIDIA：只要 driver（nvidia-smi 看得到 GPU 即可），不要裝 CUDA toolkit；WSL2 用 Windows 端的 driver
+
+# 0.2 服務使用者 qrlab：任務會以它的 systemd user manager 起 cgroup scope，所以要 linger
+sudo useradd --system --create-home --shell /bin/bash qrlab
+sudo loginctl enable-linger qrlab
+sleep 2 && systemctl status user@$(id -u qrlab).service --no-pager | head -3     # 要是 active (running)
+cat /sys/fs/cgroup/user.slice/user-$(id -u qrlab).slice/user@$(id -u qrlab).service/cgroup.subtree_control
+#   要看到 cpu cpuset memory pids；少了 cpuset（Ubuntu 22.04 預設）就加 drop-in：
+#   sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+#   sudo systemctl daemon-reload && sudo systemctl restart user@$(id -u qrlab).service
+
+# 0.3 資料夾：DATA_ROOT（產物 / log / 模型庫）、權重傳輸夾、設定檔夾
+sudo mkdir -p /srv/qr-ai-lab/data/model_zoo /srv/qr-ai-lab/transfer /etc/qr-ai-lab
+sudo chown -R qrlab:qrlab /srv/qr-ai-lab
+
+# 0.4 程式碼：放 /opt（WSL2 不要放 /mnt/c），整個交給 qrlab（venv、node_modules、.next 都寫在裡面）
+sudo git clone <repo> /opt/qr-ai-lab && sudo git -C /opt/qr-ai-lab checkout <分支>
+sudo chown -R qrlab:qrlab /opt/qr-ai-lab
+```
+
+**步驟 1：MariaDB + Redis**
+
+方式 A（docker compose，建議）：
+
+```bash
+cd /opt/qr-ai-lab
+sudo -u qrlab cp infra/.env.example infra/.env
+sudo -u qrlab nano infra/.env
+#   MARIADB_ROOT_PASSWORD、MARIADB_PASSWORD 換掉；DOCKER_REGISTRY 填公司鏡像（含結尾 /）或留空
+#   port 預設 3307 / 6380（3306 / 6379 常被別的服務占用）
+docker compose -f infra/docker-compose.yml --env-file infra/.env pull        # 內網先確認 image 拉得到
+docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
+docker compose -f infra/docker-compose.yml --env-file infra/.env ps          # mariadb 要 healthy（第一次約 20–40 秒）
+# 驗證
+docker compose -f infra/docker-compose.yml --env-file infra/.env exec mariadb mariadb -uqr -p<MARIADB_PASSWORD> qr_ai_lab -e "select @@character_set_database"
+#   → utf8mb4（infra/mariadb/init/01_init.sh 在第一次啟動時設定，並建好 qr_ai_lab_test 給測試用）
+docker compose -f infra/docker-compose.yml --env-file infra/.env exec redis redis-cli ping     # PONG
+```
+
+方式 B（原生套件，不想用 Docker）：
+
+```bash
+sudo apt install -y mariadb-server redis-server
+sudo mariadb <<'SQL'
+CREATE DATABASE qr_ai_lab CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'qr'@'127.0.0.1' IDENTIFIED BY '<密碼>';
+GRANT ALL PRIVILEGES ON qr_ai_lab.* TO 'qr'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
+# redis 預設 bind 127.0.0.1:6379；原生的 port 是 3306 / 6379，步驟 2 的 DATABASE_URL / REDIS_URL 要跟著改
+```
+
+**步驟 2：兩個環境變數檔**
+
+```bash
+sudo cp /opt/qr-ai-lab/infra/systemd/qrlab.env.example    /etc/qr-ai-lab/qrlab.env
+sudo cp /opt/qr-ai-lab/infra/systemd/frontend.env.example /etc/qr-ai-lab/frontend.env
+sudo chown root:qrlab /etc/qr-ai-lab/*.env && sudo chmod 640 /etc/qr-ai-lab/*.env
+# 產生 secret
+openssl rand -hex 32          # AUTH_SECRET（qrlab.env）
+openssl rand -hex 32          # JOB_TOKEN_SECRET
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"   # DATASET_SECRET_KEY（沒有 cryptography 就等步驟 4 用 backend/.venv/bin/python 跑）
+openssl rand -base64 32       # AUTH_SECRET（frontend.env）
+sudo nano /etc/qr-ai-lab/qrlab.env
+sudo nano /etc/qr-ai-lab/frontend.env
+```
+
+`qrlab.env` 一定要改的：
+
+| 變數 | 值 |
+|---|---|
+| `DATABASE_URL` | `mariadb+asyncmy://qr:<MARIADB_PASSWORD>@127.0.0.1:3307/qr_ai_lab` |
+| `REDIS_URL` | `redis://127.0.0.1:6380/0` |
+| `SCHEDULER_EMBEDDED` | `false`（排程器獨立程序；單機小部署可 `true`，那就不裝 qrlab-scheduler） |
+| `CORS_ORIGINS` | 對外網址的 origin，例 `https://qrit.tsmc.com`；本機 nginx 測試 `http://localhost` |
+| `ROOT_PATH` | `/ai-lab-api`（nginx 去掉的前綴；沒有 nginx 時留空） |
+| `AUTH_MODE` | `keycloak` 或 `local` |
+| `AUTH_SECRET`、`JOB_TOKEN_SECRET`、`DATASET_SECRET_KEY` | 上面產生的值（`APP_ENV=prod` 會拒絕預設值） |
+| `KEYCLOAK_ISSUER`、`KEYCLOAK_CLIENT_ID` | 公司 realm（要和 token 的 `iss` 一字不差）；假 Keycloak 是 `http://127.0.0.1:8089/realms/qr`、`qr-ai-lab` |
+| `SUPERADMIN_USERNAME` | 唯一的 superadmin（Keycloak 的 `preferred_username`；local 模式用 `superadmin`） |
+| `SEED_*_PASSWORD` | 只有 `AUTH_MODE=local` 才需要（seed 建三個本地帳號） |
+| `TRAINER_DIR` | `/opt/qr-ai-lab/trainer`（repo 不在 /opt 就改） |
+
+`frontend.env` 一定要改的：`NEXT_PUBLIC_BASE_PATH`（`/ai-lab`，沒有 nginx 前綴就留空）、`BACKEND_URL=http://127.0.0.1:8000`、`AUTH_MODE`（和 qrlab.env 一致）、`AUTH_SECRET`、`AUTH_URL`（對外網址含前綴，例 `https://qrit.tsmc.com/ai-lab`；本機 `http://localhost/ai-lab`）、`AUTH_KEYCLOAK_ID / SECRET / ISSUER`；沒有 TLS 時加 `COOKIE_SECURE=0`。
+
+規則：**註解只能獨立成行**。systemd 會把 `KEY=value # 說明` 的 `# 說明` 當成值。檢查（必須沒有輸出）：
+
+```bash
+grep -nE '^[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]]#' /etc/qr-ai-lab/*.env
+```
+
+**步驟 3：Keycloak（真的或假的）**
+
+真的：請 Keycloak 管理員建 confidential client `qr-ai-lab`（Standard flow、PKCE），Valid redirect URI = `<AUTH_URL>/api/auth/callback/keycloak`，Valid post logout redirect URI = `<AUTH_URL>/login`；不用在 Keycloak 設任何 role。把 client id / secret / issuer 填進兩個 env 檔。
+
+假的（開發 / 預演；`backend/.venv` 建好後才能跑，見步驟 4）：
+
+```bash
+sudo -u qrlab -H /opt/qr-ai-lab/backend/.venv/bin/python /opt/qr-ai-lab/scripts/fake_keycloak.py --host 127.0.0.1 --port 8089 --realm qr --client qr-ai-lab --secret dev-secret
+# 帳號 superadmin / admin / user / alice，密碼隨便。要常駐就寫一個 systemd 單元：
+sudo tee /etc/systemd/system/qrlab-fake-keycloak.service >/dev/null <<'UNIT'
+[Unit]
+Description=Fake Keycloak for QR AI Lab (dev only)
+After=network-online.target
+[Service]
+User=qrlab
+ExecStart=/opt/qr-ai-lab/backend/.venv/bin/python /opt/qr-ai-lab/scripts/fake_keycloak.py --host 127.0.0.1 --port 8089 --realm qr --client qr-ai-lab --secret dev-secret
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload && sudo systemctl enable --now qrlab-fake-keycloak
+curl -s http://127.0.0.1:8089/realms/qr/.well-known/openid-configuration | head -c 200
+```
+
+**步驟 4：backend venv 與 trainer venv（以 qrlab 執行）**
+
+```bash
+sudo -u qrlab -H bash          # 之後這一段都在 qrlab 的 shell 裡
+cd /opt/qr-ai-lab/backend
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt            # pip 從 /etc/pip.conf 的公司 PyPI proxy 抓；或 PIP_INDEX_URL=https://nexus…/simple
+cd /opt/qr-ai-lab/trainer
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+# torch 一定先裝：index 寫在檔案裡（cu126，wheel 自帶 CUDA 函式庫，只需主機 driver）
+.venv/bin/pip install -r requirements-torch.txt
+#   內網要走 Nexus 代理的 download.pytorch.org：複製一份把第一行 --index-url 換掉再裝
+#   sed 's#^--index-url .*#--index-url https://nexus.example.com/repository/pytorch-cu126/#' requirements-torch.txt > /tmp/torch.txt && .venv/bin/pip install -r /tmp/torch.txt
+#   沒有 GPU 的機器：.venv/bin/pip install -r requirements-torch-cpu.txt
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m trainer check                    # 每個模型家族 ok / 缺什麼套件；有 GPU 會列 cuda
+exit
+```
+
+**步驟 5：資料庫 schema 與帳號**
+
+```bash
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && .venv/bin/alembic upgrade head'
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && .venv/bin/alembic current'   # 要是最新的 revision (head)
+# AUTH_MODE=local：建 superadmin / admin / user（密碼來自 SEED_*_PASSWORD）
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && .venv/bin/python -m app.cli seed'
+# AUTH_MODE=keycloak：不用 seed。SUPERADMIN_USERNAME 的帳號第一次登入就是 superadmin，其他人登入後是 user，
+# 之後在 /admin/users 指派 admin，或：
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && .venv/bin/python -m app.cli set-role --username <帳號> --role admin'
+```
+
+**步驟 6：先用終端跑一遍（不裝 systemd，開發模式就停在這一步）**
+
+```bash
+# 終端 1：API
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000'
+# 終端 2：排程器（SCHEDULER_EMBEDDED=false 時）
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; export XDG_RUNTIME_DIR=/run/user/$(id -u); cd /opt/qr-ai-lab/backend && exec .venv/bin/python -m app.scheduler'
+#   log 第一行會說 runner=systemd 還是 subprocess：systemd 代表 cgroup 生效；subprocess 多半是 user@ 沒起來或 XDG_RUNTIME_DIR 不對
+curl -s http://127.0.0.1:8000/healthz      # {"status":"ok"}
+curl -s http://127.0.0.1:8000/readyz       # 檢查 DB / Redis 連線
+```
+
+**步驟 7：backend 與 scheduler 的 systemd 單元**
+
+範本在 `infra/systemd/`，裡面寫死 `/opt/qr-ai-lab` 與 uid `1001`；路徑不同或 uid 不同就改掉：
+
+```bash
+ROOT=/opt/qr-ai-lab                 # repo 放別處就改這裡
+UID_NUM=$(id -u qrlab)
+for u in qrlab-backend qrlab-scheduler; do
+  sed -e "s#/opt/qr-ai-lab#$ROOT#g" \
+      -e "s#/run/user/1001#/run/user/$UID_NUM#g" \
+      -e "s#user@1001.service#user@$UID_NUM.service#g" \
+      $ROOT/infra/systemd/$u.service | sudo tee /etc/systemd/system/$u.service >/dev/null
+done
+# 要注意的欄位（用 nano 看一次）：User/Group=qrlab、WorkingDirectory=…/backend、EnvironmentFile=/etc/qr-ai-lab/qrlab.env、
+#   Environment=XDG_RUNTIME_DIR=/run/user/<uid>（scheduler 靠它找到 qrlab 的 user manager）、
+#   backend 的 ReadWritePaths=/srv/qr-ai-lab（DATA_ROOT 不在這底下就加上去）、scheduler 的 KillMode=process（重啟排程器不殺任務）
+sudo systemctl daemon-reload
+sudo systemctl enable --now qrlab-backend
+sudo systemctl enable --now qrlab-scheduler          # SCHEDULER_EMBEDDED=true 就跳過這行
+systemctl status qrlab-backend qrlab-scheduler --no-pager
+journalctl -u qrlab-backend -n 30 --no-pager         # APP_ENV=prod 的設定檢查沒過會在這裡列出缺什麼
+journalctl -u qrlab-scheduler -n 30 --no-pager       # 要看到 runner=systemd
+curl -s http://127.0.0.1:8000/healthz
+```
+
+**步驟 8：frontend**
+
+```bash
+sudo -u qrlab -H bash
+cd /opt/qr-ai-lab/frontend
+npm ci --no-audit --no-fund                          # registry 從 /etc/npmrc；或 npm_config_registry=https://nexus…/npm-proxy/
+rm -rf .next
+NEXT_PUBLIC_BASE_PATH=/ai-lab NEXT_TELEMETRY_DISABLED=1 npm run build     # 值要和 frontend.env 的 NEXT_PUBLIC_BASE_PATH 一樣：前綴是編進去的，改了就要重 build
+# 先手動起一次確認
+set -a; . /etc/qr-ai-lab/frontend.env; set +a; node node_modules/next/dist/bin/next start      # Ctrl+C 結束
+exit
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/ai-lab/login      # 200
+# systemd 單元：ExecStart 的 node 路徑換成 which node 的結果（必須是系統層級的 node）
+ROOT=/opt/qr-ai-lab
+sed -e "s#/opt/qr-ai-lab#$ROOT#g" -e "s#/usr/local/bin/node#$(which node)#g" \
+    $ROOT/infra/systemd/qrlab-frontend.service | sudo tee /etc/systemd/system/qrlab-frontend.service >/dev/null
+sudo systemctl daemon-reload && sudo systemctl enable --now qrlab-frontend
+systemctl status qrlab-frontend --no-pager && journalctl -u qrlab-frontend -n 20 --no-pager
+```
+
+**步驟 9：nginx**
+
+```bash
+sudo cp /opt/qr-ai-lab/infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/
+# limit_req_zone 那一行要在 http {} 裡：
+echo 'limit_req_zone $binary_remote_addr zone=qrlab_login:1m rate=10r/m;' | sudo tee /etc/nginx/conf.d/qrlab-zone.conf
+# 把 infra/nginx/qr-ai-lab.conf 裡「inside server {}」以下的所有 location 區塊（含 large_client_header_buffers）貼進你的 server 區塊：
+#   正式：server { listen 443 ssl; server_name qrit.tsmc.com; … }
+#   本機 / WSL2 預演：/etc/nginx/sites-available/default 的 server { listen 80; … }（此時 frontend.env 要 COOKIE_SECURE=0，
+#   AUTH_URL=http://localhost/ai-lab，qrlab.env 的 CORS_ORIGINS=http://localhost）
+sudo nginx -t && sudo systemctl reload nginx
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/ai-lab/login        # 200
+curl -s http://localhost/ai-lab-api/healthz                                    # {"status":"ok"}
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/ai-lab-api/docs      # 200（Swagger，ROOT_PATH 正確才會載入）
+```
+
+對應關係：`/ai-lab/…` 原樣轉給 3000（Next.js 自己處理 basePath）；`/ai-lab-api/…` 去掉前綴轉給 8000；上傳路徑放大 body 上限、SSE 關閉 buffering。瀏覽器只需要 `/ai-lab`，`/ai-lab-api` 給腳本和 OpenAPI。
+
+**步驟 10：驗證**
+
+1. `http(s)://<網址>/ai-lab/login` → Keycloak（或本地帳號）→ 回首頁；以 `SUPERADMIN_USERNAME` 登入，`/admin/users` 看得到自己是超級管理員。
+2. Dashboard「任務執行方式」= `systemd`，記憶體 / CPU 都是 cgroup；GPU 卡片列出 `nvidia-smi` 看得到的卡；資源池勾選要開放的 GPU。
+3. 模型庫（`/admin/model-zoo`）把權重帶進 `/srv/qr-ai-lab/data/model_zoo`（上傳、`MODEL_ZOO_IMPORT_ROOT` 匯入或內網 URL）；`sudo -u qrlab … python -m app.cli model-zoo` 列出狀態。
+4. 申請一個專案 → 核准 → 上傳 CSV 訓練 `tabular.linear` → 任務頁有 log、產物；`systemd-cgls -u user-$(id -u qrlab).slice` 在任務執行中能看到 `qrlab-job-<id>.scope`。
+5. `journalctl -u qrlab-scheduler -f` 看排程與任務結束後的輸入刪除紀錄；`ls /srv/qr-ai-lab/data/projects/<slug>/jobs/<id>/` 只剩產物、log、metrics。
+
+**步驟 11：更新與日常操作**
+
+```bash
+# 更新程式碼（任務是 systemd scope，重啟 backend / scheduler 不會殺任務）
+sudo git -C /opt/qr-ai-lab pull
+sudo systemctl stop qrlab-scheduler qrlab-backend
+sudo -u qrlab -H bash -c 'cd /opt/qr-ai-lab/backend && .venv/bin/pip install -r requirements.txt'
+sudo -u qrlab -H bash -c 'cd /opt/qr-ai-lab/trainer && .venv/bin/pip install -r requirements.txt'      # torch 版本有變才重跑 requirements-torch.txt
+sudo -u qrlab -H bash -c 'set -a; . /etc/qr-ai-lab/qrlab.env; set +a; cd /opt/qr-ai-lab/backend && .venv/bin/alembic upgrade head'
+sudo systemctl start qrlab-backend qrlab-scheduler
+sudo systemctl stop qrlab-frontend
+sudo -u qrlab -H bash -c 'cd /opt/qr-ai-lab/frontend && npm ci --no-audit --no-fund && rm -rf .next && NEXT_PUBLIC_BASE_PATH=/ai-lab npm run build'
+sudo systemctl start qrlab-frontend
+# 日常
+systemctl status qrlab-backend qrlab-scheduler qrlab-frontend
+journalctl -u qrlab-scheduler -f
+docker compose -f /opt/qr-ai-lab/infra/docker-compose.yml --env-file /opt/qr-ai-lab/infra/.env ps
+# 備份：MariaDB dump + DATA_ROOT（產物、log、模型庫）
+docker compose -f /opt/qr-ai-lab/infra/docker-compose.yml --env-file /opt/qr-ai-lab/infra/.env exec mariadb mariadb-dump -uroot -p<root 密碼> qr_ai_lab > qr_ai_lab-$(date +%F).sql
+tar czf data-$(date +%F).tgz -C /srv/qr-ai-lab data
+# 全部停掉
+sudo systemctl stop qrlab-frontend qrlab-scheduler qrlab-backend
+docker compose -f /opt/qr-ai-lab/infra/docker-compose.yml --env-file /opt/qr-ai-lab/infra/.env down     # 加 -v 才會刪資料
+```
+
+**手動安裝常見錯誤**
+
+- 排程器 log 說 `runner=subprocess`：`loginctl enable-linger qrlab` 沒做、`user@<uid>.service` 沒起來、或單元檔的 `XDG_RUNTIME_DIR` / `user@…service` 的 uid 不是 qrlab 的。功能一樣（affinity + 記憶體 watchdog），只是沒有 cgroup 硬限制。
+- backend 起不來、journal 列出「APP_ENV=prod 設定檢查失敗」：secret 還是預設值、`DATASET_SECRET_KEY` 空、`REDIS_URL` 空但 `SCHEDULER_EMBEDDED=false`。
+- `qrlab.env` 的值後面有 `# 註解`：整段變成值（最常見的是 `DATABASE_URL`），用步驟 2 的 grep 檢查。
+- `qrlab-frontend` 立刻退出：`ExecStart` 的 node 路徑 qrlab 執行不到（nvm），或 `.next` 是用不同的 `NEXT_PUBLIC_BASE_PATH` build 的。
+- 登入後 Keycloak 回 `invalid redirect_uri`：client 的 redirect URI 要和 `AUTH_URL + /api/auth/callback/keycloak` 完全一樣（含 http/https 與前綴）。backend 回 401 `token issuer`：`KEYCLOAK_ISSUER` 和 token 的 `iss` 不一字不差（常見差在尾端斜線或 http/https）。
+- 連不上 MariaDB：`docker compose … ps` 看 mariadb 是否 healthy；port 是 3307 不是 3306；原生安裝時使用者要是 `'qr'@'127.0.0.1'`。
+- nginx 上傳 413：`client_max_body_size` 只貼到一個 location；上傳與模型庫的 location 要各自有 20g。
+
 ## 8. 常見問題
 
 - **`EADDRINUSE: 3000`**：有別的 dev server 在跑；`npm run dev -- -p 3001` 換 port，或關掉舊的。
