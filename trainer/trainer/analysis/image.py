@@ -1,5 +1,11 @@
 """Image quality exploration across machines / conditions: which IQA metrics drift between groups, how similar
-the groups are in embedding space, which images stand out."""
+the groups are in embedding space, which images stand out.
+
+With a DINO backbone (``embedding="dino"``) the report also reads every transformer layer once and adds:
+``label_check`` — a leave-one-out nearest-centroid prediction of each image's folder from the last-layer
+features and from the cross-layer features, flagging images both views would file elsewhere (likely
+mislabelled or atypical); ``layers`` — per layer, how separable the folders are and which image-quality
+aspect its main components track, with a suggested ``layers`` setting for the DINO families."""
 
 from __future__ import annotations
 
@@ -11,8 +17,8 @@ from typing import Any
 import numpy as np
 
 from trainer.jsonsafe import finite
-from trainer.log import warn
-from trainer.models.iqa import LABELS, METRICS, image_metrics
+from trainer.log import info, warn
+from trainer.models.iqa import ASPECTS, LABELS, METRICS, image_metrics
 
 MAX_IMAGES = 2000
 MAX_POINTS = 600
@@ -62,6 +68,174 @@ def _pca2(E: np.ndarray) -> np.ndarray:
     if coords.shape[1] < 2:
         coords = np.column_stack([coords, np.zeros(len(coords))])
     return coords
+
+
+# --- DINO feature views -----------------------------------------------------------------------------
+
+FLAG_MAX = 50
+FLAG_CONFIDENCE = 0.6  # a view has to be at least this sure of another folder before an image is flagged
+
+
+def dino_views(ctx, backbone: str, paths: list[Path], progress: Callable[[float], None] | None = None):
+    """Read every layer once → (per-layer blocks (N, n_layers, F), layer ids, last-layer vectors, cross-layer
+    vectors (the backbone's ``mid`` preset), backbone kind)."""
+    from trainer.models.dino_features import FeatureSpec, fuse_blocks, resolve_layers
+    from trainer.models.vision import _Dino
+
+    dino = _Dino(ctx, backbone, FeatureSpec(layers="all"))
+    blocks = dino.embed(paths, per_layer=True, progress=progress)
+    mid = resolve_layers("mid", dino.n_layers, dino.kind)
+    mid_idx = [dino.layers.index(layer) for layer in mid]
+    last = fuse_blocks(blocks[:, -1:, :])
+    cross = fuse_blocks(blocks[:, mid_idx, :])
+    return blocks, dino.layers, last, cross, dino.kind, mid
+
+
+def _aspect_values(M: np.ndarray) -> dict[str, np.ndarray]:
+    """Per image, one value per IQA aspect: the mean of its metrics' robust z-scores with the aspect's polarity."""
+    Z = _zscore(M)
+    col = {name: j for j, name in enumerate(METRICS)}
+    out = {}
+    for key, a in ASPECTS.items():
+        parts = [Z[:, col[m]] * float(pol) for m, pol in a["metrics"].items() if m in col]
+        if parts:
+            out[key] = np.mean(parts, axis=0)
+    return out
+
+
+def label_check(views: dict[str, np.ndarray], groups: np.ndarray, ids: list[str]) -> dict[str, Any] | None:
+    """Leave-one-out nearest-centroid prediction of every image's folder from each feature view; an image is
+    flagged when a view files it elsewhere with confidence, and "likely mislabelled" when both views agree on
+    the other folder."""
+    from trainer.models.dino_features import loo_nearest_centroid
+
+    labels = sorted(set(groups.tolist()))
+    counts = {lab: int((groups == lab).sum()) for lab in labels}
+    if len(labels) < 2 or min(counts.values()) < 2:
+        return None
+    preds: dict[str, tuple[np.ndarray, np.ndarray]] = {
+        name: loo_nearest_centroid(X, groups) for name, X in views.items()
+    }
+    accuracy = {name: round(float((p == groups).mean()), 4) for name, (p, _) in preds.items()}
+    flagged = []
+    elsewhere = {lab: 0 for lab in labels}
+    for i in range(len(groups)):
+        p_last, c_last = str(preds["last"][0][i]), float(preds["last"][1][i])
+        p_cross, c_cross = str(preds["cross"][0][i]), float(preds["cross"][1][i])
+        wrong_last, wrong_cross = p_last != groups[i], p_cross != groups[i]
+        if not (wrong_last or wrong_cross):
+            continue
+        confident = (wrong_last and c_last >= FLAG_CONFIDENCE) or (wrong_cross and c_cross >= FLAG_CONFIDENCE)
+        if wrong_last and wrong_cross and p_last == p_cross:
+            verdict = "likely_mislabeled"
+        elif confident:
+            verdict = "check"
+        else:
+            continue
+        if verdict == "likely_mislabeled":
+            elsewhere[str(groups[i])] += 1
+        flagged.append(
+            {
+                "id": ids[i],
+                "group": str(groups[i]),
+                "pred_last": p_last,
+                "conf_last": round(c_last, 3),
+                "pred_cross": p_cross,
+                "conf_cross": round(c_cross, 3),
+                "agree": p_last == p_cross,
+                "verdict": verdict,
+            }
+        )
+    order = {"likely_mislabeled": 0, "check": 1}
+    flagged.sort(key=lambda r: (order[r["verdict"]], -max(r["conf_last"], r["conf_cross"])))
+    return {
+        "accuracy": accuracy,
+        "n_flagged": len(flagged),
+        "n_likely_mislabeled": sum(1 for r in flagged if r["verdict"] == "likely_mislabeled"),
+        "flagged": flagged[:FLAG_MAX],
+        "per_group": [{"name": lab, "images": counts[lab], "likely_mislabeled": elsewhere[lab]} for lab in labels],
+    }
+
+
+def layer_report(
+    blocks: np.ndarray, layer_ids: tuple[int, ...], groups: np.ndarray, M: np.ndarray, kind: str, mid: tuple[int, ...]
+) -> dict[str, Any]:
+    """Per layer: folder separability (Fisher ratio + LOO accuracy when there are ≥ 2 folders with ≥ 2 images)
+    and the image-quality aspect its first principal components track (Spearman ρ), with a plain-language
+    reading and a suggested ``layers`` setting."""
+    from trainer.models.dino_features import fisher_ratio, l2n, loo_nearest_centroid
+
+    labels = sorted(set(groups.tolist()))
+    separable = len(labels) >= 2 and min(int((groups == lab).sum()) for lab in labels) >= 2
+    aspects = _aspect_values(M)
+    try:
+        from scipy.stats import spearmanr
+    except Exception:  # pragma: no cover
+        spearmanr = None
+    rows = []
+    for j, layer in enumerate(layer_ids):
+        X = l2n(blocks[:, j, :])
+        Xc = X - X.mean(axis=0)
+        n_pc = min(3, Xc.shape[0] - 1, Xc.shape[1])
+        pcs = np.zeros((len(X), 0))
+        if n_pc >= 1:
+            U, S, _ = np.linalg.svd(Xc, full_matrices=False)
+            pcs = U[:, :n_pc] * S[:n_pc]
+        correlates = []
+        if spearmanr is not None and pcs.shape[1] and len(X) >= 4:
+            for key, values in aspects.items():
+                if np.std(values) < 1e-9:
+                    continue
+                best = 0.0
+                for c in range(pcs.shape[1]):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        rho = spearmanr(pcs[:, c], values).correlation
+                    if np.isfinite(rho) and abs(rho) > abs(best):
+                        best = float(rho)
+                correlates.append({"aspect": key, "label": ASPECTS[key]["label"], "rho": round(best, 3)})
+            correlates.sort(key=lambda r: -abs(r["rho"]))
+        row: dict[str, Any] = {"layer": int(layer), "correlates": correlates[:3]}
+        if separable:
+            preds, _ = loo_nearest_centroid(X, groups)
+            row["fisher"] = round(fisher_ratio(X, groups), 4)
+            row["loo_accuracy"] = round(float((preds == groups).mean()), 4)
+        row["description"] = _describe_layer(row, len(layer_ids))
+        rows.append(row)
+    suggested: list[int] = []
+    if separable:
+        ranked = sorted(rows, key=lambda r: (-r["loo_accuracy"], -r["fisher"]))
+        suggested = sorted(r["layer"] for r in ranked[:3])
+    for r in rows:
+        r["suggested"] = r["layer"] in suggested
+    return {
+        "kind": kind,
+        "n_layers": len(layer_ids),
+        "mid_preset": list(mid),
+        "separability": separable,
+        "rows": rows,
+        "suggested": suggested,
+    }
+
+
+def _describe_layer(row: dict[str, Any], n_layers: int) -> str:
+    layer = row["layer"]
+    depth = "淺層" if layer <= n_layers / 3 else "中段" if layer <= 2 * n_layers / 3 else "深層"
+    parts = [depth]
+    top = row["correlates"][0] if row["correlates"] else None
+    if top and abs(top["rho"]) >= 0.5:
+        parts.append(f"主成分與「{top['label']}」強相關（ρ={top['rho']:+.2f}）：主要在編碼影像外觀 / 拍攝品質")
+    elif top and abs(top["rho"]) >= 0.3:
+        parts.append(f"主成分與「{top['label']}」中度相關（ρ={top['rho']:+.2f}）")
+    elif top:
+        parts.append("與 IQA 面向關聯弱：偏向結構 / 語意，而不是亮度、清晰度這類外觀")
+    if "loo_accuracy" in row:
+        acc = row["loo_accuracy"]
+        parts.append(
+            f"群組可分性 {acc:.0%}（留一法最近質心）"
+            + ("，很能分群組" if acc >= 0.9 else "，部分可分" if acc >= 0.6 else "，幾乎分不開群組")
+        )
+    return "；".join(parts)
 
 
 def quality_report(
@@ -174,16 +348,29 @@ def quality_report(
     # --- embeddings -----------------------------------------------------------------------------------
     emb_kind = "metrics"
     E = _zscore(M)
+    label_report: dict[str, Any] | None = None
+    layers_report: dict[str, Any] | None = None
     if embedding == "dino":
         try:
-            from trainer.models.vision import _Dino
-
             if ctx is None:
                 raise RuntimeError("no context")
-            E = _Dino(ctx, backbone).embed(paths, progress=lambda f: tick(0.7 + 0.15 * f))
+            blocks, layer_ids, last, cross, kind, mid = dino_views(
+                ctx, backbone, paths, progress=lambda f: tick(0.7 + 0.12 * f)
+            )
+            E = last
             emb_kind = f"dino:{backbone}"
+            rel_ids = [str(p.relative_to(root)) for p in paths]
+            label_report = label_check({"last": last, "cross": cross}, g, rel_ids)
+            layers_report = layer_report(blocks, layer_ids, g, M, kind, mid)
+            if label_report:
+                info(
+                    f"label check: LOO accuracy last={label_report['accuracy']['last']:.3f} "
+                    f"cross={label_report['accuracy']['cross']:.3f}, flagged={label_report['n_flagged']}"
+                )
+            info("layers: " + "; ".join(f"L{r['layer']} {r['description']}" for r in layers_report["rows"]))
         except Exception as e:
             warn(f"dino embedding unavailable ({type(e).__name__}: {e}); using the IQA metric vector instead")
+    tick(0.85)
     E = np.nan_to_num(np.asarray(E, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
     coords = _pca2(E)
     En = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
@@ -322,7 +509,37 @@ def quality_report(
         )
     if emb_kind == "metrics" and embedding == "dino":
         recs.append(
-            {"level": "info", "text": "DINOv2 權重或 GPU 不可用，這次的 embedding 是 17 個 IQA 指標的 z-score 向量。"}
+            {"level": "info", "text": "DINO 權重或 GPU 不可用，這次的 embedding 是 17 個 IQA 指標的 z-score 向量。"}
+        )
+    if label_report:
+        acc = label_report["accuracy"]
+        if label_report["n_likely_mislabeled"]:
+            names = ", ".join(r["id"] for r in label_report["flagged"] if r["verdict"] == "likely_mislabeled")[:300]
+            n_bad = label_report["n_likely_mislabeled"]
+            recs.append(
+                {
+                    "level": "warn",
+                    "text": f"標籤一致性：{n_bad} 張影像用最後一層與跨層特徵都會被歸到別的資料夾（{names}）；"
+                    "先確認這些是不是放錯資料夾或是不典型的樣本。",
+                }
+            )
+        else:
+            recs.append(
+                {
+                    "level": "info",
+                    "text": f"標籤一致性：沒有兩種特徵都認為放錯資料夾的影像（留一法準確率 最後一層 {acc['last']:.0%}、"
+                    f"跨層 {acc['cross']:.0%}）。",
+                }
+            )
+    if layers_report and layers_report.get("suggested"):
+        sug = ",".join(str(v) for v in layers_report["suggested"])
+        mid = ",".join(str(v) for v in layers_report["mid_preset"])
+        recs.append(
+            {
+                "level": "info",
+                "text": f"這份資料最能分群組的層：{sug}；few-shot / PatchCore 的 layers 參數可填 {sug}"
+                f"（骨幹 {backbone}，mid 預設 = {mid}）。",
+            }
         )
     tick(1.0)
     stride = max(1, len(paths) // MAX_POINTS)
@@ -348,6 +565,8 @@ def quality_report(
                 for i in range(0, len(paths), stride)
             ],
             "outliers": outliers,
+            "label_check": label_report,
+            "layers": layers_report,
             "recommendations": recs,
         }
     )

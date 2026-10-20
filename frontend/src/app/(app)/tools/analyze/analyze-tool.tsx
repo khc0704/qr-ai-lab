@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { analysisKindLabel } from "@/i18n/zh-TW";
+import { analysisKindLabel, dinoBackboneLabel } from "@/i18n/zh-TW";
 import { analyzeToolAction, deleteToolUploadAction } from "@/lib/actions";
 import { aliasLocalFile, attachLocalFile, jobKey, uploadKey } from "@/lib/local-data";
 import { toToolUpload } from "@/lib/api/mappers";
@@ -43,6 +44,7 @@ export function AnalyzeTool() {
   const [target, setTarget] = useState("");
   const [idColumn, setIdColumn] = useState("");
   const [dino, setDino] = useState(false);
+  const [backbone, setBackbone] = useState<string>("dinov2-small");
   const [pending, startTransition] = useTransition();
   const [resetKey, setResetKey] = useState(0);
   const current = KINDS.find((k) => k.value === kind)!;
@@ -58,7 +60,9 @@ export function AnalyzeTool() {
       const params =
         kind === "tabular_profile"
           ? { ...(target ? { target } : {}), ...(idColumn ? { id_column: idColumn } : {}) }
-          : { embedding: dino ? "dino" : "metrics" };
+          : dino
+            ? { embedding: "dino", backbone }
+            : { embedding: "metrics" };
       const r = await analyzeToolAction(upload.id, kind, params);
       if (!r.ok) toast.error(r.error);
       else {
@@ -153,14 +157,36 @@ export function AnalyzeTool() {
               </div>
             </div>
           ) : (
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-              <div className="space-y-0.5">
-                <Label htmlFor="an-dino">用 DINOv2 embedding 比較相似度</Label>
-                <p className="text-xs text-muted-foreground">
-                  需要模型庫有 dinov2-small 且個人工作區有 GPU 配額；否則自動改用 17 個 IQA 指標的向量。
-                </p>
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label htmlFor="an-dino">用 DINO embedding 比較相似度、檢查標籤、解讀各層特徵</Label>
+                  <p className="text-xs text-muted-foreground">
+                    需要模型庫有選定的骨幹且工具池有 GPU 配額；否則自動改用 17 個 IQA
+                    指標的向量。開啟後報告多兩節：標籤一致性檢查（最後一層 vs
+                    跨層特徵各自猜每張影像屬於哪個資料夾）與各層特徵代表什麼。
+                  </p>
+                </div>
+                <Switch id="an-dino" checked={dino} onCheckedChange={setDino} />
               </div>
-              <Switch id="an-dino" checked={dino} onCheckedChange={setDino} />
+              {dino ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="an-backbone">骨幹</Label>
+                  <Select value={backbone} onValueChange={setBackbone}>
+                    <SelectTrigger id="an-backbone" className="w-full font-mono" data-testid="analysis-backbone">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(dinoBackboneLabel).map(([id, label]) => (
+                        <SelectItem key={id} value={id}>
+                          <span className="font-mono">{id}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">{label}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-3">

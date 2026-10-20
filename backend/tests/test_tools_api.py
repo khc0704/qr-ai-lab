@@ -166,6 +166,14 @@ async def test_analysis_job_and_validation(client, user, superadmin):
     )
     assert r.status_code == 202, r.text
     assert r.json()["requested_gpu"] == 0 and r.json()["config"]["embedding"] == "metrics"
+    assert r.json()["config"]["backbone"] == "dinov2-small"
+    up = await _upload(client, user, name="imgs2.zip", data=buf.getvalue(), data_type="IMAGE")
+    r = await client.post(
+        f"/api/v1/tools/uploads/{up['id']}/analyze",
+        json={"analysis": "image_quality", "params": {"embedding": "dino", "backbone": "resnet50"}},
+        headers=user,
+    )
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "BAD_BACKBONE"
     # the tool pool quota is superadmin territory and flows into the shared project
     r = await client.put(
         "/api/v1/admin/settings/tool-pool",

@@ -82,6 +82,72 @@ export const augmentOpLabel: Record<string, string> = {
   contrast: "對比抖動",
 };
 
+/** DINO backbones the image analysis / vision families can use (weights in the model zoo). */
+export const dinoBackboneLabel: Record<string, string> = {
+  "dinov2-small": "DINOv2 ViT-S/14（最快）",
+  "dinov2-base": "DINOv2 ViT-B/14",
+  "dinov3-vits16": "DINOv3 ViT-S/16（含 register token）",
+  "dinov3-vitb16": "DINOv3 ViT-B/16",
+};
+
+/** Secondary label for a categorical hyper-parameter's choice (the wizard shows the raw value first). */
+export const paramChoiceLabel: Record<string, Record<string, string>> = {
+  layers: {
+    last: "最後一層",
+    last4: "最後 4 層拼接",
+    mid: "中後段跨層（DINOv2 6/8/10/12、DINOv3 8/10/12）",
+    spread: "淺中深跨層（3/6/9/12）",
+    auto: "自動：依支援集挑最可分的 1–3 層",
+    all: "全部層",
+  },
+  layer_fusion: { concat: "拼接（保留各層資訊）", mean: "平均（維度不變）" },
+  pool: {
+    "cls+mean": "CLS ⊕ patch 平均（預設）",
+    cls: "只用 CLS",
+    mean: "只用 patch 平均",
+    "cls+gem": "CLS ⊕ GeM pooling（強調顯著區塊）",
+    "cls+attn": "CLS ⊕ 注意力加權 patch（濾背景）",
+  },
+  center: { none: "不去中心化", support_mean: "減去支援集平均再正規化（SimpleShot）" },
+  background: { none: "不處理", project_out_cls: "patch 減去 CLS 方向的分量（濾掉整張共有的背景）" },
+  metric: { cosine: "cosine 相似度", hyperbolic: "雙曲（Poincaré）距離" },
+  head: {
+    prototype: "最近原型（類別平均向量）",
+    knn: "k 個最近鄰投票",
+    logistic: "邏輯迴歸頭",
+    svm: "線性 SVM 頭",
+    "prototype+logistic": "原型 + 邏輯迴歸平均（預設）",
+  },
+  normal_bank: { auto: "有 good / normal 資料夾就啟用", on: "強制啟用", off: "關閉" },
+  image_size: { "224": "預訓練解析度", "336": "2.25× patch 數", "448": "4× patch 數（小瑕疵）" },
+  augment: { default: "家族預設增強", none: "完全不增強" },
+  freeze: { "0": "不凍結", "10": "凍結骨幹（前 10 層）" },
+  score_method: { recon: "重建誤差", patch_bank: "正常 patch 庫最近鄰距離" },
+  embed_layers: { last: "最後一層", mid: "後半段拼接", all: "全部層拼接" },
+  embed_pool: { mean: "平均", max: "最大值", gem: "GeM", meanmax: "平均 ⊕ 最大值" },
+  method: { linear: "只訓練分類頭", lora: "LoRA 轉接器 + 分類頭", full: "全參數" },
+  patch_dim: { auto: "壓回骨幹寬度" },
+};
+
+/** One-line help under a hyper-parameter field. */
+export const paramHint: Record<string, string> = {
+  layers: "讀哪些 transformer 層：跨層對紋理 / 缺陷較穩，auto 會用支援集的留一法挑層",
+  pool: "一層的 token 怎麼變成一個向量；cls+attn 用最後一層 CLS→patch 的注意力加權",
+  center: "每類只有幾張時，去中心化通常讓相似度更有鑑別力",
+  background: "缺陷只佔一小塊、背景都一樣時試 project_out_cls",
+  metric: "雙曲距離對階層式類別（大類 → 細類）有時較好",
+  head: "特徵直接比對（prototype / knn）或接分類器（logistic / svm）；extend 新類別時都免重訓",
+  normal_bank: "兩階段：先用正常影像的 patch 庫判正常 / 異常，再只拿異常區塊分缺陷類別",
+  normal_class: "正常類別的資料夾名稱；留空 = 自動找 good / normal / ok / pass",
+  image_size: "拉高解析度 = 更多 patch、更慢；小瑕疵用 336 / 448",
+  augment: "全部不勾 = 完全不增強（YOLO 連內建的 mosaic / 色相也關）",
+  freeze: "YOLO：凍結前 N 層只訓練頸部與頭",
+  score_method: "patch_bank = 一維的 PatchCore，對局部波段異常較敏感",
+  embed_layers: "光譜 MAE：embedding 讀哪些編碼層",
+  embed_pool: "光譜 MAE：token 怎麼 pooling 成 embedding",
+  patch_dim: "PatchCore：多層拼接的 patch 特徵以固定隨機投影壓回的維度",
+};
+
 export const retrieveOrderLabel: Record<RetrieveOrder, string> = {
   both: "最相似與最不相似都列",
   similar: "只找最相似",
@@ -267,6 +333,15 @@ export const jobCopy = {
 export const analysisCopy = {
   insufficient: "樣本不足",
   permutationSkipped: "未計算",
+  labelCheckTitle: "標籤一致性檢查",
+  labelCheckHint:
+    "留一法：用其他影像的類別質心猜每張影像屬於哪個資料夾；「最後一層」= DINO 最後一層特徵，「跨層」= mid 預設的幾層拼接。兩種特徵都把它歸到別的資料夾 → 很可能放錯或不典型。",
+  likelyMislabeled: "疑似放錯",
+  check: "再確認",
+  layersTitle: "各層特徵代表什麼",
+  layersHint:
+    "每一層的 pooled 特徵：群組可分性（Fisher 比、留一法準確率）與主成分最相關的影像品質面向（Spearman ρ）。可分性高的層適合分類；跟亮度 / 清晰度強相關的層在編碼拍攝條件而不是結構。",
+  suggestedLayers: "建議的 layers",
 } as const;
 
 export const pagination = {

@@ -30,6 +30,7 @@ from app.models import Job, Project, User
 from app.schemas.settings import ToolPoolStatus
 from app.schemas.tools import PreviewRead, ToolUploadRead
 from app.services import jobs as jobs_svc
+from app.services import model_zoo as zoo_svc
 from app.services import projects as projects_svc
 from app.services import settings as settings_svc
 from app.services.uploads import EXT_FORMAT, detect_spec
@@ -46,6 +47,8 @@ FORMATS_BY_TYPE: dict[str, tuple[str, ...]] = {
 }
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 ANALYSES: dict[str, tuple[str, ...]] = {"tabular_profile": ("TABULAR",), "image_quality": ("IMAGE",)}
+# DINO backbones the image analysis may embed with (the few-shot family's weights; must be in the model zoo)
+IMAGE_ANALYSIS_BACKBONES = ("dinov2-small", "dinov2-base", "dinov3-vits16", "dinov3-vitb16")
 
 
 def _dir(upload_id: str) -> Path:
@@ -227,15 +230,24 @@ async def start_analysis_job(
         raise bad_request(
             "ANALYSIS_DATA_TYPE", f"{analysis} 只適用於 {', '.join(allowed)}，這個檔案是 {meta['data_type']}"
         )
+    backbone = str(params.get("backbone") or "dinov2-small")
+    if analysis == "image_quality" and backbone not in IMAGE_ANALYSIS_BACKBONES:
+        raise bad_request("BAD_BACKBONE", f"backbone 必須是 {', '.join(IMAGE_ANALYSIS_BACKBONES)}，不是 {backbone!r}")
     project = await _pool_for(session, user)
     config: dict[str, Any] = {"analysis": analysis, "data_type": meta["data_type"], **params}
     requested_gpu = 0
+    gpu_memory_mb: int | None = None
     if analysis == "image_quality" and params.get("embedding") == "dino":
-        if project.gpu_limit > 0:
-            requested_gpu = 1
-        else:
+        config["backbone"] = backbone
+        if project.gpu_limit <= 0:
             config["embedding"] = "metrics"
             config["note"] = "工具池沒有 GPU 配額，embedding 改用 IQA 指標向量"
+        elif not zoo_svc.weight_present(backbone):
+            config["embedding"] = "metrics"
+            config["note"] = f"模型庫沒有 {backbone}，embedding 改用 IQA 指標向量（請管理員在「模型庫」頁匯入）"
+        else:
+            requested_gpu = 1
+            gpu_memory_mb = 8192 if ("base" in backbone or "vitb" in backbone) else 4096
     job = await jobs_svc.create_tool_job(
         session,
         user,
@@ -252,7 +264,7 @@ async def start_analysis_job(
         },
         config=config,
         requested_gpu=requested_gpu,
-        requested_gpu_memory_mb=4096 if requested_gpu else None,
+        requested_gpu_memory_mb=gpu_memory_mb,
     )
     remove(upload_id)
     log.info("tool analysis job", job_id=job.id, analysis=analysis, user=user.username)

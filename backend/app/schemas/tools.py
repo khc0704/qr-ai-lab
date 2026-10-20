@@ -83,7 +83,9 @@ class PreviewRead(BaseModel):
 
 class ToolAnalyzeBody(BaseModel):
     """Start an analysis job on a tool upload. tabular_profile: correlations, collinearity (VIF), relevance to the
-    target, recommendations. image_quality: IQA metrics per image, drift across groups (folders), embeddings."""
+    target, recommendations. image_quality: IQA metrics per image, drift across groups (folders), embeddings;
+    with ``params.embedding = "dino"`` and ``params.backbone`` (dinov2-small / dinov2-base / dinov3-vits16 /
+    dinov3-vitb16) also a label-consistency check (last-layer vs. cross-layer features) and a per-layer reading."""
 
     analysis: Literal["tabular_profile", "image_quality"]
     params: dict[str, Any] = Field(default_factory=dict)

@@ -83,7 +83,12 @@ def _sample(
             choices = list(d["choices"])
             if ctx is not None:
                 choices = available_choices(ctx, fid, task, name, choices)
-            out[name] = trial.suggest_categorical(key, choices)
+            value = trial.suggest_categorical(key, choices)
+            if value == "default":  # "use the family default" (e.g. augment: [default, none]) → leave it unset
+                continue
+            if name == "augment" and value == "none":
+                value = []
+            out[name] = value
     return out
 
 

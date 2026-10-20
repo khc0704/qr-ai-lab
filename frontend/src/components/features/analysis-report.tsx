@@ -401,6 +401,177 @@ export function TabularProfileReport({ result }: { result: J }) {
   );
 }
 
+type FlagRow = {
+  id: string;
+  group: string;
+  pred_last: string;
+  conf_last: number;
+  pred_cross: string;
+  conf_cross: number;
+  agree: boolean;
+  verdict: "likely_mislabeled" | "check";
+};
+
+function LabelCheck({ check, onSelect }: { check: J; onSelect?: (id: string) => void }) {
+  const acc = (check.accuracy as J) ?? {};
+  const flagged = arr<FlagRow>(check.flagged);
+  const perGroup = arr<J>(check.per_group);
+  return (
+    <Card data-testid="analysis-label-check">
+      <CardHeader>
+        <CardTitle>{analysisCopy.labelCheckTitle}</CardTitle>
+        <CardDescription>{analysisCopy.labelCheckHint}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-4">
+          {[
+            ["留一法準確率・最後一層", `${(num(acc.last) * 100).toFixed(0)}%`],
+            ["留一法準確率・跨層", `${(num(acc.cross) * 100).toFixed(0)}%`],
+            [analysisCopy.likelyMislabeled, String(num(check.n_likely_mislabeled))],
+            ["需再確認", String(num(check.n_flagged) - num(check.n_likely_mislabeled))],
+          ].map(([k, v]) => (
+            <Card key={k} className="gap-1 p-4">
+              <div className="text-label">{k}</div>
+              <div className="font-mono text-sm tabular-nums">{v}</div>
+            </Card>
+          ))}
+        </div>
+        {perGroup.some((g) => num(g.likely_mislabeled) > 0) ? (
+          <p className="text-xs text-muted-foreground">
+            各資料夾疑似放錯：
+            {perGroup
+              .filter((g) => num(g.likely_mislabeled) > 0)
+              .map((g) => `${String(g.name)} ${num(g.likely_mislabeled)} / ${num(g.images)}`)
+              .join("、")}
+          </p>
+        ) : null}
+        {flagged.length ? (
+          <div className="overflow-auto rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>影像</TableHead>
+                  <TableHead>資料夾</TableHead>
+                  <TableHead>最後一層猜</TableHead>
+                  <TableHead>跨層猜</TableHead>
+                  <TableHead className="text-right">判定</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {flagged.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-mono text-xs">
+                      {onSelect ? (
+                        <button
+                          type="button"
+                          className="truncate text-left text-brand-ink hover:underline"
+                          onClick={() => onSelect(r.id)}
+                        >
+                          {r.id}
+                        </button>
+                      ) : (
+                        r.id
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs">{r.group}</TableCell>
+                    <TableCell className={cn("font-mono text-xs", r.pred_last !== r.group && "text-warning")}>
+                      {r.pred_last} <span className="text-subtle-foreground">{(r.conf_last * 100).toFixed(0)}%</span>
+                    </TableCell>
+                    <TableCell className={cn("font-mono text-xs", r.pred_cross !== r.group && "text-warning")}>
+                      {r.pred_cross} <span className="text-subtle-foreground">{(r.conf_cross * 100).toFixed(0)}%</span>
+                    </TableCell>
+                    <TableCell className="text-right text-xs">
+                      <span
+                        className={cn(
+                          "rounded-md border px-1.5 py-0.5",
+                          r.verdict === "likely_mislabeled"
+                            ? "border-warning/30 bg-warning/10 text-warning"
+                            : "border-border text-muted-foreground",
+                        )}
+                      >
+                        {r.verdict === "likely_mislabeled" ? analysisCopy.likelyMislabeled : analysisCopy.check}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">沒有影像被兩種特徵歸到別的資料夾。</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LayerReport({ layers }: { layers: J }) {
+  const rows = arr<J>(layers.rows);
+  const suggested = arr<number>(layers.suggested);
+  const separable = layers.separability === true;
+  return (
+    <Card data-testid="analysis-layers">
+      <CardHeader>
+        <CardTitle>{analysisCopy.layersTitle}</CardTitle>
+        <CardDescription>{analysisCopy.layersHint}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {suggested.length ? (
+          <p className="text-sm">
+            {analysisCopy.suggestedLayers}：<span className="font-mono">{suggested.join(",")}</span>
+            <span className="ml-2 text-xs text-muted-foreground">
+              （{String(layers.kind)} mid 預設 = {arr<number>(layers.mid_preset).join(",")}）
+            </span>
+          </p>
+        ) : null}
+        <div className="overflow-auto rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>層</TableHead>
+                {separable ? <TableHead className="text-right">留一法準確率</TableHead> : null}
+                {separable ? <TableHead className="text-right">Fisher 比</TableHead> : null}
+                <TableHead>最相關的品質面向</TableHead>
+                <TableHead>解讀</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={String(r.layer)} data-suggested={r.suggested === true ? "true" : undefined}>
+                  <TableCell
+                    className={cn("font-mono text-xs", r.suggested === true && "font-semibold text-brand-ink")}
+                  >
+                    L{String(r.layer)}
+                  </TableCell>
+                  {separable ? (
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {(num(r.loo_accuracy) * 100).toFixed(0)}%
+                    </TableCell>
+                  ) : null}
+                  {separable ? (
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {num(r.fisher).toFixed(2)}
+                    </TableCell>
+                  ) : null}
+                  <TableCell className="text-xs">
+                    {arr<J>(r.correlates)
+                      .slice(0, 2)
+                      .map((c) => `${String(c.label)} ρ=${num(c.rho).toFixed(2)}`)
+                      .join("、") || "—"}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground" expandLines={3}>
+                    {String(r.description ?? "")}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ImageQualityReport({ result, job }: { result: J; job?: Job }) {
   const [selected, setSelected] = useState<string | null>(null);
   const groups = arr<J>(result.groups);
@@ -414,6 +585,8 @@ export function ImageQualityReport({ result, job }: { result: J; job?: Job }) {
   const matrix = arr<number[]>(sim.matrix);
   const points = arr<{ id: string; group: string; x: number; y: number; outlier: number }>(result.points);
   const outliers = arr<J>(result.outliers);
+  const check = (result.label_check as J | null) ?? null;
+  const layers = (result.layers as J | null) ?? null;
   return (
     <div className="space-y-4" data-testid="analysis-image">
       <div className="grid gap-3 sm:grid-cols-4">
@@ -430,6 +603,8 @@ export function ImageQualityReport({ result, job }: { result: J; job?: Job }) {
         ))}
       </div>
       <Recommendations items={arr<Rec>(result.recommendations)} />
+      {check ? <LabelCheck check={check} onSelect={job ? setSelected : undefined} /> : null}
+      {layers ? <LayerReport layers={layers} /> : null}
       <Card>
         <CardHeader>
           <CardTitle>最會飄的指標</CardTitle>

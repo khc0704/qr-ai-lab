@@ -19,14 +19,20 @@ def test_heatmap_names_come_from_the_relative_path():
 
 
 def test_yolo_augment_kwargs_sets_every_knob_explicitly():
-    from trainer.models.vision import YOLO_AUGMENT, yolo_augment_kwargs
+    from trainer.models.vision import YOLO_AUGMENT, YOLO_NO_AUGMENT, yolo_augment_kwargs
 
     on = yolo_augment_kwargs(["hflip", "crop", "brightness"])
     assert on["fliplr"] == 0.5 and on["scale"] == 0.5 and on["translate"] == 0.1 and on["hsv_v"] == 0.4
     assert on["flipud"] == 0.0 and on["degrees"] == 0.0
+    # with at least one op ticked ultralytics' own defaults (mosaic, hue / saturation, RandAugment) stay untouched
+    assert "mosaic" not in on and "auto_augment" not in on
+    # "none" really means none: every shared knob off, plus ultralytics' built-in augmentations
     off = yolo_augment_kwargs([])
-    assert set(off) == {k for knobs in YOLO_AUGMENT.values() for k in knobs} and all(v == 0.0 for v in off.values())
+    knobs = {k for ks in YOLO_AUGMENT.values() for k in ks}
+    assert set(off) == knobs | set(YOLO_NO_AUGMENT) and all(off[k] == 0.0 for k in knobs)
+    assert off["mosaic"] == 0.0 and off["auto_augment"] is None and yolo_augment_kwargs("none") == off
     assert yolo_augment_kwargs("vflip,rotate90")["flipud"] == 0.5 and yolo_augment_kwargs(True)["fliplr"] == 0.5
+    assert yolo_augment_kwargs("default")["scale"] == 0.5 and yolo_augment_kwargs("default")["flipud"] == 0.0
     # an op YOLO has no knob for is ignored (warned), not an error
     assert yolo_augment_kwargs(["contrast", "hflip"])["fliplr"] == 0.5
     with pytest.raises(ValueError):

@@ -45,6 +45,7 @@
 6. **校正與門檻**：異常門檻用 P99 經驗值；可加依驗證集最佳化 F1 的門檻與 OOD 拒答（few-shot 的 `min_similarity` 已有雛形）。
 7. **模型解釋**：表格有特徵重要度、PLS 有 VIP；DINO 已有 patch 相似度 / Grad-CAM 疊圖、影像品質基準有偏離方格圖；光譜 MAE 可再加 patch 貢獻圖。
 8. **評估的可信度**：小資料下驗證集只有幾筆，指標波動大；建議顯示信賴區間或用 repeated CV（表格家族容易做）。
+9. **特徵選項的下一步**：`layers=auto` 目前只看留一法準確率（支援集很小時會過擬合層的選擇，可改 repeated split）；`cls+attn` 用的是最後一層的 CLS 注意力，DuoAD 式的多層 / 多 head 加權還沒做；雙曲度量只在推論時映射（沒有訓練雙曲原型）；正常 patch 庫的 coreset 仍是隨機抽樣；PatchCore / 正常庫在 448 px + 多層拼接時記憶體成長快，分塊已做但沒有估算上限。
 
 ## E. 這一輪串接測試發現並修掉的問題
 
@@ -100,4 +101,5 @@
 - ✅ **從別台機器連 dev server 頁面不互動**：Next 16 擋非 localhost 的 `/_next/hmr`，Turbopack client 不 hydrate；`next.config.ts` 的 `allowedDevOrigins` 改由 `NEXT_DEV_ALLOWED_ORIGINS` 設定（沙盒以 192.0.2.2 重現：設定前下拉 0 個選項、設定後 5 個）。
 - ✅ **模型升級批次**：DINOv3（`dinov3-vits16` / `dinov3-vitb16`，register token 正確跳過）加入 few-shot / 微調 / PatchCore；DINO 的 `predict` / `retrieve` 寫「模型關注的區塊」疊圖（few-shot：patch 與原型 / 鄰居的相似度；微調：Grad-CAM），`retrieve` 可選方向（`order = similar / dissimilar / both`）與 `k`，一次性推論頁與精靈有對應選項，結果頁點開樣本以可調透明度疊在瀏覽器本地的原圖上（新端點 `GET /jobs/{id}/output/{path}`）；影像品質基準加 17 指標 → 五個面向的調整建議、每張影像的偏離方格圖、`golden/` 配對時的全參考指標（相位相關對位 + PSNR / SSIM / MS-SSIM / GMSD）；新家族 `text.qwen_embedding`（Qwen3-Embedding-0.6B：分類 / 相似搜尋 / novelty）、`tabular.catboost`、`tabular.tabpfn`（v2.5 權重自模型庫）、`spectrum.pls`（PLS / PLS-DA + VIP）；權重來源改以 Hugging Face Hub 為主（YOLO 偵測版走 `Ultralytics/YOLOv8`，新 `kind: hf_file`；-seg / -cls 那裡沒有，留在 GitHub release），`fetch_model_zoo.py` 支援 gated 模型的 token、`--skip`，單一檔案失敗不中斷。
 - ✅ **第六批回饋**：精靈參數依型別呈現（下拉 / 布林 / `augment` 多選，DINOv3 終於看得到）、YOLO 也接 `augment`、申請表單的任務依資料類型過濾（後端 `TASK_NOT_SUPPORTED`）、建任務時檢查選到的 backbone / model 權重在模型庫、表格格子可個別展開（在欄寬內換行、最多 N 行後捲動）；AutoML 只抽模型庫有的 backbone / model、DataLoader worker 數依記憶體配額縮減（4 GB 配額跑影像 AutoML 被 OOM kill 的修正）；新增 `client-boundary` 靜態測試。
+- ✅ **第七批（特徵產生與分類方式）**：DINO 家族共用 `FeatureSpec`（`layers` 預設依骨幹換算：DINOv2 `mid` = 6/8/10/12、DINOv3 `mid` = 8/10/12，`auto` 以支援集留一法挑層；`pool` cls+mean / cls / mean / cls+gem / cls+attn；`center`、`background=project_out_cls`、`metric=hyperbolic`、`image_size`）；few-shot 的 `head`（prototype / knn / logistic / svm / prototype+logistic，`extend` 只重 fit 頭）與「正常 patch 庫」兩階段缺陷分類（good / normal 資料夾 → 先判異常、再只拿異常 patch 分缺陷類別）；PatchCore 多層拼接 + 隨機投影；微調預設增強 crop + hflip、AutoML 各試「預設 / 不增強」（YOLO 也是，並加 `freeze`）；光譜 MAE / Patch AE 的 `embed_layers` / `embed_pool` / `score_method=patch_bank` 與逐 patch 波段定位；Qwen 的 `pool` / `layers`；影像品質分析可選 DINOv3，並加標籤一致性檢查與各層特徵解讀。
 - 仍待做：SPC chart（`sequence.spc` 控制界限 + Western Electric / Nelson 規則；合成 pattern 預訓練的 1-D CNN few-shot 分類與相似搜尋）；資料來源任務的樣本顯示（需經後端暫時代理讀取）；工具池的 GPU 共用策略（目前與專案相同）；申請分頁的留言也支援編輯；前處理編輯器的欄位重新命名與型別轉換（datetime）；專案「已結束」後的產物保留期限；微調家族 `full` 的分層學習率；資料增強目前是固定機率 0.5、幅度固定（可改成可調）。

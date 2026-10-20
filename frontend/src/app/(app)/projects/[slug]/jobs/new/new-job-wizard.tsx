@@ -33,7 +33,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { augmentOpLabel, dataTypeLabel, familyLabel, inferenceModeLabel, jobCopy, taskTypeLabel } from "@/i18n/zh-TW";
+import {
+  augmentOpLabel,
+  dataTypeLabel,
+  familyLabel,
+  inferenceModeLabel,
+  jobCopy,
+  paramChoiceLabel,
+  paramHint,
+  taskTypeLabel,
+} from "@/i18n/zh-TW";
 import { createJobAction, previewPreprocessAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -212,6 +221,8 @@ function ParamField({
     );
   }
   const { kind } = paramKind(family, name);
+  const choiceLabel = (v: string) => paramChoiceLabel[name]?.[v];
+  const hint = paramHint[name];
   const options: { value: string; label: string }[] | null =
     space?.type === "categorical" && space.choices?.length
       ? space.choices.map((c) => ({ value: String(c), label: String(c) }))
@@ -232,17 +243,23 @@ function ParamField({
           <SelectContent>
             <SelectItem value={DEFAULT_SENTINEL}>
               <span className="font-mono">{def}</span>
-              <span className="ml-2 text-xs text-muted-foreground">預設</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                預設{choiceLabel(def) ? `・${choiceLabel(def)}` : ""}
+              </span>
             </SelectItem>
             {options
               .filter((o) => o.value !== def)
               .map((o) => (
                 <SelectItem key={o.value} value={o.value}>
                   <span className="font-mono">{o.label}</span>
+                  {choiceLabel(o.value) ? (
+                    <span className="ml-2 text-xs text-muted-foreground">{choiceLabel(o.value)}</span>
+                  ) : null}
                 </SelectItem>
               ))}
           </SelectContent>
         </Select>
+        {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
       </div>
     );
   }
@@ -257,6 +274,7 @@ function ParamField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
+      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }

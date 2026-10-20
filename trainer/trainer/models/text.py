@@ -218,14 +218,27 @@ QWEN_DEFAULT = "qwen3-embedding-0.6b"
 NOVELTY_PERCENTILE = 99
 
 
-class _QwenEncoder:
-    """Frozen Qwen3-Embedding from the zoo: last-token pooling, L2-normalised vectors. Documents are embedded
-    as-is; a query-side ``instruction`` ("Instruct: …\\nQuery: …") is only used when the user asks for it."""
+QWEN_POOLS = ("last_token", "mean")
+QWEN_LAYERS = ("last", "last4")
 
-    def __init__(self, ctx, model_id: str, max_len: int, batch: int) -> None:
+
+class _QwenEncoder:
+    """Frozen Qwen3-Embedding from the zoo, L2-normalised vectors. ``pool``: ``last_token`` (what the model was
+    trained for) or ``mean`` over the real tokens (more robust on long, list-like logs); ``layers``: ``last``
+    hidden state or the mean of the ``last4`` (slightly more lexical, helps near-duplicate retrieval).
+    Documents are embedded as-is; a query-side ``instruction`` ("Instruct: …\\nQuery: …") is only used when
+    the user asks for it."""
+
+    def __init__(
+        self, ctx, model_id: str, max_len: int, batch: int, pool: str = "last_token", layers: str = "last"
+    ) -> None:
         import torch
         from transformers import AutoModel, AutoTokenizer
 
+        if pool not in QWEN_POOLS:
+            raise ValueError(f"pool 必須是 {' / '.join(QWEN_POOLS)}，不是 {pool!r}")
+        if layers not in QWEN_LAYERS:
+            raise ValueError(f"layers 必須是 {' / '.join(QWEN_LAYERS)}，不是 {layers!r}")
         path = ctx.weight(model_id)
         self.ctx = ctx
         self.torch = torch
@@ -233,8 +246,13 @@ class _QwenEncoder:
         self.model = AutoModel.from_pretrained(str(path), local_files_only=True).to(ctx.device).eval()
         self.max_len = max_len
         self.batch = batch
+        self.pool = pool
+        self.layers = layers
         self.dim = int(self.model.config.hidden_size)
-        info(f"qwen: loaded {model_id} from {path} on {ctx.device} (dim={self.dim}, max_len={max_len})")
+        info(
+            f"qwen: loaded {model_id} from {path} on {ctx.device} (dim={self.dim}, max_len={max_len}, "
+            f"pool={pool}, layers={layers})"
+        )
 
     def encode(self, texts: list[str], instruction: str | None = None, progress=None) -> np.ndarray:
         torch = self.torch
@@ -250,9 +268,13 @@ class _QwenEncoder:
                     padding=True,
                     return_tensors="pt",
                 ).to(self.ctx.device)
-                h = self.model(**enc).last_hidden_state
+                res = self.model(**enc, output_hidden_states=self.layers != "last")
+                h = torch.stack(res.hidden_states[-4:]).mean(dim=0) if self.layers == "last4" else res.last_hidden_state
                 mask = enc["attention_mask"]
-                if bool((mask[:, -1] == 1).all()):  # left padding: the last position is the last real token
+                if self.pool == "mean":
+                    m = mask[:, :, None].to(h.dtype)
+                    pooled = (h * m).sum(dim=1) / m.sum(dim=1).clamp(min=1)
+                elif bool((mask[:, -1] == 1).all()):  # left padding: the last position is the last real token
                     pooled = h[:, -1]
                 else:
                     last = mask.sum(dim=1) - 1
@@ -294,7 +316,9 @@ class QwenEmbeddingTrainer(BaseTrainer):
         batch = int(self.params.get("batch", 16))
         texts = [str(t) for t in ds.X]
         ids = [str(i) for i in (ds.ids or range(len(texts)))]
-        self.encoder = _QwenEncoder(self.ctx, base_id, max_len, batch)
+        pool = str(self.params.get("pool") or "last_token")
+        layers = str(self.params.get("layers") or "last")
+        self.encoder = _QwenEncoder(self.ctx, base_id, max_len, batch, pool=pool, layers=layers)
         self.ctx.progress(0.05, "training")
         emb = self.encoder.encode(texts, progress=lambda f: self.ctx.progress(0.05 + 0.7 * f, "training"))
         self.instruction = str(self.params.get("instruction") or "")
@@ -318,7 +342,14 @@ class QwenEmbeddingTrainer(BaseTrainer):
             self.bank, self.bank_ids, self.bank_labels = emb, np.asarray(ids), labels
             self._emb, self._y = emb, y
         self.meta.update(
-            {"base": base_id, "max_len": max_len, "dim": int(emb.shape[1]), "instruction": self.instruction}
+            {
+                "base": base_id,
+                "max_len": max_len,
+                "dim": int(emb.shape[1]),
+                "instruction": self.instruction,
+                "pool": pool,
+                "layers": layers,
+            }
         )
         info(f"{self.family}: " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
         self.ctx.progress(0.9, "evaluating")
@@ -402,6 +433,8 @@ class QwenEmbeddingInferencer(BaseInferencer):
             str(self.meta.get("base", QWEN_DEFAULT)),
             int(self.meta.get("max_len") or 512),
             int(self.meta.get("batch") or 16),
+            pool=str(self.meta.get("pool") or "last_token"),
+            layers=str(self.meta.get("layers") or "last"),
         )
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:

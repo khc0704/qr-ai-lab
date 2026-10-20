@@ -141,13 +141,18 @@ def test_bert_classifier_tiny(tmp_path, ctx):
     assert len(res.rows[0]["embedding"]) == 32
 
 
-def _tiny_dino(zoo: Path) -> None:
+def _tiny_dino(zoo: Path, layers: int = 1) -> None:
     from transformers import BitImageProcessor, Dinov2Config, Dinov2Model
 
     d = zoo / "dinov2-small"
     d.mkdir(parents=True)
     cfg = Dinov2Config(
-        hidden_size=32, num_hidden_layers=1, num_attention_heads=2, intermediate_size=64, image_size=56, patch_size=14
+        hidden_size=32,
+        num_hidden_layers=layers,
+        num_attention_heads=2,
+        intermediate_size=64,
+        image_size=56,
+        patch_size=14,
     )
     Dinov2Model(cfg).save_pretrained(d)
     BitImageProcessor(size={"shortest_edge": 56}, crop_size={"height": 56, "width": 56}).save_pretrained(d)
@@ -310,7 +315,7 @@ def test_dino_finetune_roundtrip(tmp_path, ctx, method):
         assert inject_lora(m, 2, 4.0) == 3
 
 
-def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16") -> None:
+def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16", layers: int = 1) -> None:
     """A DINOv3-shaped backbone: 4 register tokens between CLS and the patches, patch size 16."""
     from transformers import BitImageProcessor, DINOv3ViTConfig, DINOv3ViTModel
 
@@ -318,7 +323,7 @@ def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16") -> None:
     d.mkdir(parents=True)
     cfg = DINOv3ViTConfig(
         hidden_size=32,
-        num_hidden_layers=1,
+        num_hidden_layers=layers,
         num_attention_heads=2,
         intermediate_size=64,
         image_size=64,
