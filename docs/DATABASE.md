@@ -289,7 +289,7 @@ system_settings（key / value，資源池等）
 
 ## 遷移注意事項
 
-`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`）；0005 把 `uploads.claimed_by_job_id` 改成 ON DELETE SET NULL、0006 `projects.completed_at`、0007 申請併入專案（資料遷移）、0008 `jobs.ephemeral`（SQLite 跳過，因為 0001 已是最新 schema）都要先用 `sa.inspect()` 檢查欄位 / 表是否存在再加，既能升級舊資料庫也能在新資料庫上跑到 head。新增遷移時沿用同一寫法。
+`0001_initial_schema` 以 `Base.metadata.create_all` 建表，所以**全新的資料庫（SQLite 或 MariaDB）在 0001 就已經是目前的 schema**；之後的每個遷移（0002 `assigned_cpus`、0003 `requested_gpu_memory_mb` + `resource_samples`、0004 `projects.kind`、0005 `uploads.claimed_by_job_id` 改成 ON DELETE SET NULL、0006 `projects.completed_at`、0007 申請併入專案（資料遷移，無資料時是 no-op）、0008 `jobs.ephemeral`）都**必須先用 `sa.inspect()` 檢查欄位 / 表 / 外鍵是否已存在再動手**，不能只靠「SQLite 跳過」：0006 / 0008 曾經只跳過 SQLite，在全新的 MariaDB 上 `alembic upgrade head` 會在 0005 → 0006 碰到 duplicate column（已改成 inspect 檢查，並在 MariaDB 10.11 上驗證過全新資料庫與舊資料庫兩條路）。新增遷移時沿用同一寫法。
 
 ## 初始化
 

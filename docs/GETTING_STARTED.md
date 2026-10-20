@@ -274,6 +274,8 @@ cd frontend && npm run dev
 
 切回本地帳號：兩邊 `AUTH_MODE=local`，backend `.venv/bin/python -m app.cli seed` 建 superadmin / admin / user。
 
+**只想要 MariaDB + Redis、暫時不碰 Keycloak**：完全可以，認證、資料庫、事件匯流排三件事互不相干。`AUTH_MODE` 兩邊都留 `local`，`backend/.env` 只改 `DATABASE_URL`、`REDIS_URL`、`SCHEDULER_EMBEDDED=false`，`alembic upgrade head` 之後跑一次 `.venv/bin/python -m app.cli seed`（SQLite 模式啟動時會自動建表 + seed，MariaDB 不會；seed 可重複執行），再開三個終端（API、`python -m app.scheduler`、`npm run dev`）。之後換 Keycloak 只改兩邊的 `AUTH_MODE` 與 Keycloak 變數，資料庫內容全部保留。
+
 **可選：加上 nginx 路徑前綴（`http://localhost/ai-lab`）**，和正式環境一樣的 URL 結構；服務仍是上面四個終端，只是前端改用 `/ai-lab` 的 basePath、後端改用 `/ai-lab-api` 的 ROOT_PATH。dev 用的 site 檔是一個完整、自給自足的檔案（`infra/nginx/qr-ai-lab-dev.conf`，含 Turbopack HMR 的 websocket 設定；正式環境才用 `qr-ai-lab.conf` + snippets）：
 
 ```bash

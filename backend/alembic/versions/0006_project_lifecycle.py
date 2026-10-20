@@ -18,15 +18,19 @@ branch_labels = None
 depends_on = None
 
 
+def _columns(table: str) -> set[str]:
+    return {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":  # dev / test databases are created from the models
-        return
-    op.add_column("projects", sa.Column("completed_at", sa.DateTime(timezone=False), nullable=True))
+    # 0001 is create_all from the current models: a database created today already has this column (MariaDB
+    # included), only one created before this revision needs it added.
+    if "completed_at" not in _columns("projects"):
+        op.add_column("projects", sa.Column("completed_at", sa.DateTime(timezone=False), nullable=True))
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":
+    if op.get_bind().dialect.name == "sqlite":
         return
-    op.drop_column("projects", "completed_at")
+    if "completed_at" in _columns("projects"):
+        op.drop_column("projects", "completed_at")

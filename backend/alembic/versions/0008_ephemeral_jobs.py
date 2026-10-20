@@ -17,15 +17,19 @@ branch_labels = None
 depends_on = None
 
 
+def _columns(table: str) -> set[str]:
+    return {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":  # dev / test databases are created from the models
-        return
-    op.add_column("jobs", sa.Column("ephemeral", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+    # 0001 is create_all from the current models: a database created today already has this column (MariaDB
+    # included), only one created before this revision needs it added.
+    if "ephemeral" not in _columns("jobs"):
+        op.add_column("jobs", sa.Column("ephemeral", sa.Boolean(), nullable=False, server_default=sa.text("0")))
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":
+    if op.get_bind().dialect.name == "sqlite":
         return
-    op.drop_column("jobs", "ephemeral")
+    if "ephemeral" in _columns("jobs"):
+        op.drop_column("jobs", "ephemeral")
