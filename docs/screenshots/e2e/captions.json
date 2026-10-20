@@ -601,399 +601,407 @@
   },
   {
     "n": 76,
-    "file": "76-admin-audit.png",
-    "caption": "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由",
+    "file": "76-admin-jobs.png",
+    "caption": "任務管理：所有專案的任務（含工具池與一次性推論）依狀態 / 種類 / 專案 / 名稱篩選；勾選已結束的任務整批刪除（連同 log、輸出與產物；模型仍被推論任務引用的會跳過並說明原因）",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 77,
-    "file": "77-admin-dashboard.png",
-    "caption": "admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」",
+    "file": "77-admin-audit.png",
+    "caption": "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 78,
-    "file": "78-admin-job-actions.png",
-    "caption": "管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行",
+    "file": "78-admin-dashboard.png",
+    "caption": "admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 79,
-    "file": "79-admin-job-restarted.png",
-    "caption": "重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留",
+    "file": "79-admin-job-actions.png",
+    "caption": "管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 80,
-    "file": "80-job-cancelled-by-admin.png",
-    "caption": "使用者看到的被中斷任務：誰中斷、理由；log 保留",
+    "file": "80-admin-job-restarted.png",
+    "caption": "重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 81,
-    "file": "81-jobs-list-final.png",
-    "caption": "任務列表：成功 / 已取消 / 推論任務一覽",
+    "file": "81-job-cancelled-by-admin.png",
+    "caption": "使用者看到的被中斷任務：誰中斷、理由；log 保留",
     "phase": "admin",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
     "n": 82,
-    "file": "82-roles-users.png",
+    "file": "82-jobs-list-final.png",
+    "caption": "任務列表：成功 / 已取消 / 推論任務一覽",
+    "phase": "admin",
+    "theme": "dark",
+    "viewport": "desktop"
+  },
+  {
+    "n": 83,
+    "file": "83-roles-users.png",
     "caption": "superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 83,
-    "file": "83-roles-promoted.png",
+    "n": 84,
+    "file": "84-roles-promoted.png",
     "caption": "把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 84,
-    "file": "84-roles-superadmin-dashboard.png",
+    "n": 85,
+    "file": "85-roles-superadmin-dashboard.png",
     "caption": "superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 85,
-    "file": "85-roles-delete-project.png",
+    "n": 86,
+    "file": "86-roles-delete-project.png",
     "caption": "superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 86,
-    "file": "86-roles-delete-confirm.png",
+    "n": 87,
+    "file": "87-roles-delete-confirm.png",
     "caption": "刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 87,
-    "file": "87-roles-deleted.png",
+    "n": 88,
+    "file": "88-roles-deleted.png",
     "caption": "刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 88,
-    "file": "88-roles-admin-quotas-readonly.png",
+    "n": 89,
+    "file": "89-roles-admin-quotas-readonly.png",
     "caption": "admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 89,
-    "file": "89-roles-admin-zoo-readonly.png",
+    "n": 90,
+    "file": "90-roles-admin-zoo-readonly.png",
     "caption": "admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 90,
-    "file": "90-roles-delete-issue.png",
+    "n": 91,
+    "file": "91-roles-delete-issue.png",
     "caption": "admin 刪除討論串（連同留言）需確認；寫入稽核紀錄",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 91,
-    "file": "91-roles-issue-deleted.png",
+    "n": 92,
+    "file": "92-roles-issue-deleted.png",
     "caption": "刪除後回到討論區列表",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 92,
-    "file": "92-roles-user-no-admin.png",
+    "n": 93,
+    "file": "93-roles-user-no-admin.png",
     "caption": "一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）",
     "phase": "roles",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 93,
-    "file": "93-usage-1h.png",
+    "n": 94,
+    "file": "94-usage-1h.png",
     "caption": "資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」",
     "phase": "usage",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 94,
-    "file": "94-usage-node-denominator.png",
+    "n": 95,
+    "file": "95-usage-node-denominator.png",
     "caption": "分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比",
     "phase": "usage",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 95,
-    "file": "95-usage-quota-denominator.png",
+    "n": 96,
+    "file": "96-usage-quota-denominator.png",
     "caption": "分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體",
     "phase": "usage",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 96,
-    "file": "96-tool-hub.png",
+    "n": 97,
+    "file": "97-tool-hub.png",
     "caption": "工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 97,
-    "file": "97-tool-empty.png",
+    "n": 98,
+    "file": "98-tool-empty.png",
     "caption": "資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 98,
-    "file": "98-tool-preview.png",
+    "n": 99,
+    "file": "99-tool-preview.png",
     "caption": "上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 99,
-    "file": "99-tool-steps.png",
+    "n": 100,
+    "file": "100-tool-steps.png",
     "caption": "關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 100,
-    "file": "100-tool-queued.png",
+    "n": 101,
+    "file": "101-tool-queued.png",
     "caption": "建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 101,
-    "file": "101-tool-job-done.png",
+    "n": 102,
+    "file": "102-tool-job-done.png",
     "caption": "前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 102,
-    "file": "102-tool-downloaded.png",
+    "n": 103,
+    "file": "103-tool-downloaded.png",
     "caption": "下載 wat_yield-preprocessed.zip（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留",
     "phase": "tool",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 103,
-    "file": "103-analyze-empty.png",
+    "n": 104,
+    "file": "104-analyze-empty.png",
     "caption": "資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料",
     "phase": "analyze",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 104,
-    "file": "104-analyze-image-form.png",
+    "n": 105,
+    "file": "105-analyze-image-form.png",
     "caption": "影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）",
     "phase": "analyze",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 105,
-    "file": "105-analyze-queued.png",
+    "n": 106,
+    "file": "106-analyze-queued.png",
     "caption": "兩個分析任務排隊中（工具池每人同時最多 2 個）",
     "phase": "analyze",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 106,
-    "file": "106-analyze-tabular-report.png",
+    "n": 107,
+    "file": "107-analyze-tabular-report.png",
     "caption": "表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況",
     "phase": "analyze",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 107,
-    "file": "107-analyze-image-report.png",
+    "n": 108,
+    "file": "108-analyze-image-report.png",
     "caption": "影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議",
     "phase": "analyze",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 108,
-    "file": "108-light-home.png",
+    "n": 109,
+    "file": "109-light-home.png",
     "caption": "Light mode：首頁",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 109,
-    "file": "109-light-project.png",
+    "n": 110,
+    "file": "110-light-project.png",
     "caption": "Light mode：專案總覽",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 110,
-    "file": "110-light-job.png",
+    "n": 111,
+    "file": "111-light-job.png",
     "caption": "Light mode：AutoML 任務詳情（leaderboard）",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 111,
-    "file": "111-light-wizard.png",
+    "n": 112,
+    "file": "112-light-wizard.png",
     "caption": "Light mode：建立任務精靈",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 112,
-    "file": "112-light-admin-queue.png",
+    "n": 113,
+    "file": "113-light-admin-queue.png",
     "caption": "Light mode：管理員佇列",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 113,
-    "file": "113-light-usage.png",
+    "n": 114,
+    "file": "114-light-usage.png",
     "caption": "Light mode：資源使用率歷史",
     "phase": "visual",
     "theme": "light",
     "viewport": "desktop"
   },
   {
-    "n": 114,
-    "file": "114-mobile-home.png",
+    "n": 115,
+    "file": "115-mobile-home.png",
     "caption": "手機版首頁（側欄收成抽屜）",
     "phase": "visual",
     "theme": "dark",
     "viewport": "mobile"
   },
   {
-    "n": 115,
-    "file": "115-mobile-sidebar.png",
+    "n": 116,
+    "file": "116-mobile-sidebar.png",
     "caption": "手機版側欄抽屜",
     "phase": "visual",
     "theme": "dark",
     "viewport": "mobile"
   },
   {
-    "n": 116,
-    "file": "116-mobile-job.png",
+    "n": 117,
+    "file": "117-mobile-job.png",
     "caption": "手機版任務詳情",
     "phase": "visual",
     "theme": "dark",
     "viewport": "mobile"
   },
   {
-    "n": 117,
-    "file": "117-user-menu.png",
+    "n": 118,
+    "file": "118-user-menu.png",
     "caption": "使用者選單：主題、登出",
     "phase": "logout",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 118,
-    "file": "118-logged-out.png",
+    "n": 119,
+    "file": "119-logged-out.png",
     "caption": "登出後回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=",
     "phase": "logout",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 119,
-    "file": "119-kc-login.png",
+    "n": 120,
+    "file": "120-kc-login.png",
     "caption": "AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 120,
-    "file": "120-kc-realm-login.png",
+    "n": 121,
+    "file": "121-kc-realm-login.png",
     "caption": "Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 121,
-    "file": "121-kc-home-superadmin.png",
+    "n": 122,
+    "file": "122-kc-home-superadmin.png",
     "caption": "回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 122,
-    "file": "122-kc-users.png",
+    "n": 123,
+    "file": "123-kc-users.png",
     "caption": "使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 123,
-    "file": "123-kc-logged-out.png",
+    "n": 124,
+    "file": "124-kc-logged-out.png",
     "caption": "登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 124,
-    "file": "124-kc-home-alice.png",
+    "n": 125,
+    "file": "125-kc-home-alice.png",
     "caption": "第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）",
     "phase": "keycloak",
     "theme": "dark",
     "viewport": "desktop"
   },
   {
-    "n": 125,
-    "file": "125-kc-alice-admin.png",
+    "n": 126,
+    "file": "126-kc-alice-admin.png",
     "caption": "alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕",
     "phase": "keycloak",
     "theme": "dark",

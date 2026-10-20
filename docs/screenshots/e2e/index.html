@@ -26,16 +26,16 @@
 <section class="cover">
   <div class="brand">QR AI Lab</div>
   <h1>前端 × 後端實際串接測試報告</h1>
-  <p class="lead">Next.js 16 前端 → FastAPI 後端 → 排程器（Redis 事件、subprocess runner）→ trainer，在單機沙盒以 SQLite 跑完整流程所得的 125 張截圖。</p>
+  <p class="lead">Next.js 16 前端 → FastAPI 後端 → 排程器（Redis 事件、subprocess runner）→ trainer，在單機沙盒以 SQLite 跑完整流程所得的 126 張截圖。</p>
   <table class="facts">
-    <tr><th>日期</th><td>2026年10月19日</td></tr>
+    <tr><th>日期</th><td>2026年10月20日</td></tr>
     <tr><th>帳號</th><td>admin / admin1234（管理員）、user / user1234（一般使用者）</td></tr>
     <tr><th>資料</th><td>全部為合成資料：WAT 良率表（480 lot）、SEM 風格影像（golden 40 張、調機機台 16 張）、OCD 光譜（264 片 wafer × 200 波長）</td></tr>
     <tr><th>環境</th><td>backend: SQLite、SCHEDULER_EMBEDDED=true（排程器與 API 同一程序，無 Redis）、JOB_RUNNER=auto → subprocess（沙盒沒有 systemd user manager；伺服器上會是 systemd cgroup）；frontend: next build + next start；瀏覽器: Chromium（Playwright）</td></tr>
     <tr><th>結果</th><td>所有流程完成；訓練 / 推論任務皆 succeeded；強制中斷流程正確</td></tr>
   </table>
   <h2>目錄</h2>
-  <ol class="toc"><li>1. 一般使用者：登入、專案申請<span>8 張</span></li><li>2. 管理員：審核、配額、總資源池<span>11 張</span></li><li>2b. 管理員：模型庫（伺服器不連外）<span>6 張</span></li><li>3. 專案：成員、資料來源、設定<span>8 張</span></li><li>4. 訓練任務：上傳 → 前處理預覽 → AutoML → 即時 log → 產物<span>17 張</span></li><li>5. 推論任務：直接輸入 → 結果預覽與下載<span>4 張</span></li><li>6. 影像品質基準（golden tool vs 調機機台）<span>7 張</span></li><li>7. 光譜鑑別器（Masked AutoEncoder）<span>4 張</span></li><li>8. 討論區（問題單）<span>6 張</span></li><li>9. 管理員：佇列、強制中斷、重新執行、稽核<span>10 張</span></li><li>10. 三種系統角色：superadmin / admin / user<span>11 張</span></li><li>11. 資源使用率歷史<span>3 張</span></li><li>12. 資料前處理服務（任務模式、不保存）<span>7 張</span></li><li>12b. 資料分析服務<span>5 張</span></li><li>13. Light mode 與手機版<span>9 張</span></li><li>14. 登出<span>2 張</span></li><li>15. Keycloak 登入（AUTH_MODE=keycloak）<span>7 張</span></li></ol>
+  <ol class="toc"><li>1. 一般使用者：登入、專案申請<span>8 張</span></li><li>2. 管理員：審核、配額、總資源池<span>11 張</span></li><li>2b. 管理員：模型庫（伺服器不連外）<span>6 張</span></li><li>3. 專案：成員、資料來源、設定<span>8 張</span></li><li>4. 訓練任務：上傳 → 前處理預覽 → AutoML → 即時 log → 產物<span>17 張</span></li><li>5. 推論任務：直接輸入 → 結果預覽與下載<span>4 張</span></li><li>6. 影像品質基準（golden tool vs 調機機台）<span>7 張</span></li><li>7. 光譜鑑別器（Masked AutoEncoder）<span>4 張</span></li><li>8. 討論區（問題單）<span>6 張</span></li><li>9. 管理員：佇列、強制中斷、重新執行、稽核<span>11 張</span></li><li>10. 三種系統角色：superadmin / admin / user<span>11 張</span></li><li>11. 資源使用率歷史<span>3 張</span></li><li>12. 資料前處理服務（任務模式、不保存）<span>7 張</span></li><li>12b. 資料分析服務<span>5 張</span></li><li>13. Light mode 與手機版<span>9 張</span></li><li>14. 登出<span>2 張</span></li><li>15. Keycloak 登入（AUTH_MODE=keycloak）<span>7 張</span></li></ol>
 </section><section class="phase"><h2>1. 一般使用者：登入、專案申請</h2><p class="desc">AUTH_MODE=local 的登入頁（superadmin / admin / user 三個本地帳號）→ user 填寫結構化申請（題目、資料類型 × 任務、資源需求）→ 送出 → 在討論串留言。</p><figure class="shot ">
       <figcaption><span class="num">01</span> 登入頁（AUTH_MODE=local）：開發環境用後端建立的本地帳號 superadmin / admin / user；正式環境改為 Keycloak 按鈕<span class="tag">dark</span></figcaption>
       <img src="01-login.png" alt="登入頁（AUTH_MODE=local）：開發環境用後端建立的本地帳號 superadmin / admin / user；正式環境改為 Keycloak 按鈕" />
@@ -262,153 +262,156 @@
       <figcaption><span class="num">75</span> 中斷後：等待中的任務立刻取得資源開始執行<span class="tag">dark</span></figcaption>
       <img src="75-admin-queue-after.png" alt="中斷後：等待中的任務立刻取得資源開始執行" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">76</span> 稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由<span class="tag">dark</span></figcaption>
-      <img src="76-admin-audit.png" alt="稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由" />
+      <figcaption><span class="num">76</span> 任務管理：所有專案的任務（含工具池與一次性推論）依狀態 / 種類 / 專案 / 名稱篩選；勾選已結束的任務整批刪除（連同 log、輸出與產物；模型仍被推論任務引用的會跳過並說明原因）<span class="tag">dark</span></figcaption>
+      <img src="76-admin-jobs.png" alt="任務管理：所有專案的任務（含工具池與一次性推論）依狀態 / 種類 / 專案 / 名稱篩選；勾選已結束的任務整批刪除（連同 log、輸出與產物；模型仍被推論任務引用的會跳過並說明原因）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">77</span> admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」<span class="tag">dark</span></figcaption>
-      <img src="77-admin-dashboard.png" alt="admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」" />
+      <figcaption><span class="num">77</span> 稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由<span class="tag">dark</span></figcaption>
+      <img src="77-admin-audit.png" alt="稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">78</span> 管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行<span class="tag">dark</span></figcaption>
-      <img src="78-admin-job-actions.png" alt="管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行" />
+      <figcaption><span class="num">78</span> admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」<span class="tag">dark</span></figcaption>
+      <img src="78-admin-dashboard.png" alt="admin 的儀表板：GPU 卡片、資源池（唯讀，只有 superadmin 能改）、節點狀態與「任務執行方式」" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">79</span> 重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留<span class="tag">dark</span></figcaption>
-      <img src="79-admin-job-restarted.png" alt="重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留" />
+      <figcaption><span class="num">79</span> 管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行<span class="tag">dark</span></figcaption>
+      <img src="79-admin-job-actions.png" alt="管理員在任務頁多了「重新執行」「刪除」（執行中則是「強制中斷」）；一次性上傳的任務不能重新執行" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">80</span> 使用者看到的被中斷任務：誰中斷、理由；log 保留<span class="tag">dark</span></figcaption>
-      <img src="80-job-cancelled-by-admin.png" alt="使用者看到的被中斷任務：誰中斷、理由；log 保留" />
+      <figcaption><span class="num">80</span> 重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留<span class="tag">dark</span></figcaption>
+      <img src="80-admin-job-restarted.png" alt="重新執行 = 新任務（config.restarted_from 指向原任務），原任務與 log 保留" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">81</span> 任務列表：成功 / 已取消 / 推論任務一覽<span class="tag">dark</span></figcaption>
-      <img src="81-jobs-list-final.png" alt="任務列表：成功 / 已取消 / 推論任務一覽" />
+      <figcaption><span class="num">81</span> 使用者看到的被中斷任務：誰中斷、理由；log 保留<span class="tag">dark</span></figcaption>
+      <img src="81-job-cancelled-by-admin.png" alt="使用者看到的被中斷任務：誰中斷、理由；log 保留" />
+    </figure><figure class="shot ">
+      <figcaption><span class="num">82</span> 任務列表：成功 / 已取消 / 推論任務一覽<span class="tag">dark</span></figcaption>
+      <img src="82-jobs-list-final.png" alt="任務列表：成功 / 已取消 / 推論任務一覽" />
     </figure></section><section class="phase"><h2>10. 三種系統角色：superadmin / admin / user</h2><p class="desc">superadmin 在使用者頁改角色（升 / 降、稽核）、刪除專案（輸入 slug 確認）；admin 看配額與模型庫是唯讀、可刪討論串；user 沒有管理選單，/admin 是 404。後端以 require_perm 判斷，前端只隱藏。</p><figure class="shot ">
-      <figcaption><span class="num">82</span> superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用<span class="tag">dark</span></figcaption>
-      <img src="82-roles-users.png" alt="superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用" />
+      <figcaption><span class="num">83</span> superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用<span class="tag">dark</span></figcaption>
+      <img src="83-roles-users.png" alt="superadmin 的使用者頁：三種系統角色（superadmin / admin / user）的權限說明，可直接改角色與啟用" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">83</span> 把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄<span class="tag">dark</span></figcaption>
-      <img src="83-roles-promoted.png" alt="把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄" />
+      <figcaption><span class="num">84</span> 把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄<span class="tag">dark</span></figcaption>
+      <img src="84-roles-promoted.png" alt="把 user 升為 admin：下一個請求就生效（後端每次都從 users 表讀角色），並寫入稽核紀錄" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">84</span> superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）<span class="tag">dark</span></figcaption>
-      <img src="84-roles-superadmin-dashboard.png" alt="superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）" />
+      <figcaption><span class="num">85</span> superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）<span class="tag">dark</span></figcaption>
+      <img src="85-roles-superadmin-dashboard.png" alt="superadmin 的儀表板：GPU 卡片有「重置」、資源池可編輯（含「依顯存共用 GPU」開關）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">85</span> superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）<span class="tag">dark</span></figcaption>
-      <img src="85-roles-delete-project.png" alt="superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）" />
+      <figcaption><span class="num">86</span> superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）<span class="tag">dark</span></figcaption>
+      <img src="86-roles-delete-project.png" alt="superadmin 的專案設定頁多了「刪除專案」（admin 只能封存）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">86</span> 刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）<span class="tag">dark</span></figcaption>
-      <img src="86-roles-delete-confirm.png" alt="刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）" />
+      <figcaption><span class="num">87</span> 刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）<span class="tag">dark</span></figcaption>
+      <img src="87-roles-delete-confirm.png" alt="刪除要輸入 slug 確認；還有未結束任務時後端會拒絕（PROJECT_HAS_ACTIVE_JOBS）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">87</span> 刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數<span class="tag">dark</span></figcaption>
-      <img src="87-roles-deleted.png" alt="刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數" />
+      <figcaption><span class="num">88</span> 刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數<span class="tag">dark</span></figcaption>
+      <img src="88-roles-deleted.png" alt="刪除後回到專案列表；稽核紀錄記下 slug 與刪掉的任務 / 產物數" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">88</span> admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）<span class="tag">dark</span></figcaption>
-      <img src="88-roles-admin-quotas-readonly.png" alt="admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）" />
+      <figcaption><span class="num">89</span> admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）<span class="tag">dark</span></figcaption>
+      <img src="89-roles-admin-quotas-readonly.png" alt="admin 看專案設定：沒有配額表單（quota.manage 由後端把關，前端只是不顯示）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">89</span> admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除<span class="tag">dark</span></figcaption>
-      <img src="89-roles-admin-zoo-readonly.png" alt="admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除" />
+      <figcaption><span class="num">90</span> admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除<span class="tag">dark</span></figcaption>
+      <img src="90-roles-admin-zoo-readonly.png" alt="admin 看模型庫：只有狀態，沒有上傳 / 匯入 / 移除" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">90</span> admin 刪除討論串（連同留言）需確認；寫入稽核紀錄<span class="tag">dark</span></figcaption>
-      <img src="90-roles-delete-issue.png" alt="admin 刪除討論串（連同留言）需確認；寫入稽核紀錄" />
+      <figcaption><span class="num">91</span> admin 刪除討論串（連同留言）需確認；寫入稽核紀錄<span class="tag">dark</span></figcaption>
+      <img src="91-roles-delete-issue.png" alt="admin 刪除討論串（連同留言）需確認；寫入稽核紀錄" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">91</span> 刪除後回到討論區列表<span class="tag">dark</span></figcaption>
-      <img src="91-roles-issue-deleted.png" alt="刪除後回到討論區列表" />
+      <figcaption><span class="num">92</span> 刪除後回到討論區列表<span class="tag">dark</span></figcaption>
+      <img src="92-roles-issue-deleted.png" alt="刪除後回到討論區列表" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">92</span> 一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）<span class="tag">dark</span></figcaption>
-      <img src="92-roles-user-no-admin.png" alt="一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）" />
+      <figcaption><span class="num">93</span> 一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）<span class="tag">dark</span></figcaption>
+      <img src="93-roles-user-no-admin.png" alt="一般使用者沒有「管理」選單；直接打 /admin 得到 404（後端 API 也回 403）" />
     </figure></section><section class="phase"><h2>11. 資源使用率歷史</h2><p class="desc">排程器每 30 秒取樣節點 / 資源池 / 各專案；1 小時到 30 天分桶；分母可切專案配額 / 資源池 / 系統總量；各專案的時間加權占用與實測 CPU / 記憶體。</p><figure class="shot ">
-      <figcaption><span class="num">93</span> 資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」<span class="tag">dark</span></figcaption>
-      <img src="93-usage-1h.png" alt="資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」" />
+      <figcaption><span class="num">94</span> 資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」<span class="tag">dark</span></figcaption>
+      <img src="94-usage-1h.png" alt="資源使用率歷史（1 小時）：節點實際 CPU / 記憶體、配置給任務的量、GPU 使用率與顯存、執行中任務數；分母預設「資源池」" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">94</span> 分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比<span class="tag">dark</span></figcaption>
-      <img src="94-usage-node-denominator.png" alt="分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比" />
+      <figcaption><span class="num">95</span> 分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比<span class="tag">dark</span></figcaption>
+      <img src="95-usage-node-denominator.png" alt="分母切成「系統總量」：虛線上限改為伺服器實際核數 / 記憶體；各專案占用也改以系統總量計算百分比" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">95</span> 分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體<span class="tag">dark</span></figcaption>
-      <img src="95-usage-quota-denominator.png" alt="分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體" />
+      <figcaption><span class="num">96</span> 分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體<span class="tag">dark</span></figcaption>
+      <img src="96-usage-quota-denominator.png" alt="分母「專案配額」：各專案的時間加權平均配置相對自己配額的百分比，以及實際量到的 CPU / 記憶體" />
     </figure></section><section class="phase"><h2>12. 資料前處理服務（任務模式、不保存）</h2><p class="desc">選資料類型 → 上傳 → 指定不處理的欄位 → 加步驟並即時抽樣預覽 → 建立 preprocess 任務（個人工作區、全域佇列、配額、log）→ 任務頁下載 zip（processed.csv + pipeline.json + summary.json）一次即刪。</p><figure class="shot ">
-      <figcaption><span class="num">96</span> 工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務<span class="tag">dark</span></figcaption>
-      <img src="96-tool-hub.png" alt="工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務" />
+      <figcaption><span class="num">97</span> 工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務<span class="tag">dark</span></figcaption>
+      <img src="97-tool-hub.png" alt="工具首頁：資料前處理與資料分析兩個不需專案的工具、公共工具池的配額與我目前的任務數、我的工具任務" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">97</span> 資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料<span class="tag">dark</span></figcaption>
-      <img src="97-tool-empty.png" alt="資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料" />
+      <figcaption><span class="num">98</span> 資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料<span class="tag">dark</span></figcaption>
+      <img src="98-tool-empty.png" alt="資料前處理服務：不需專案，上傳 → 選類型 → 挑步驟 → 即時抽樣預覽 → 建立任務（整檔處理在公共工具池排隊執行）；不保存資料" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">98</span> 上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色<span class="tag">dark</span></figcaption>
-      <img src="98-tool-preview.png" alt="上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色" />
+      <figcaption><span class="num">99</span> 上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色<span class="tag">dark</span></figcaption>
+      <img src="99-tool-preview.png" alt="上傳 WAT CSV、指定目標 / ID 欄位（受保護）、在試算表式編輯器加入補值與標準化：即時抽樣預覽、輸入 → 輸出列數、變動的格子標色" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">99</span> 關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟<span class="tag">dark</span></figcaption>
-      <img src="99-tool-steps.png" alt="關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟" />
+      <figcaption><span class="num">100</span> 關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟<span class="tag">dark</span></figcaption>
+      <img src="100-tool-steps.png" alt="關閉編輯器後的摘要卡：步驟串、預覽的列數 / 欄數與警告數，隨時可再開啟" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">100</span> 建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新<span class="tag">dark</span></figcaption>
-      <img src="100-tool-queued.png" alt="建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新" />
+      <figcaption><span class="num">101</span> 建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新<span class="tag">dark</span></figcaption>
+      <img src="101-tool-queued.png" alt="建立後成為工具池裡的 preprocess 任務：進佇列、受工具池配額與每人上限限制，列表每 5 秒自動更新" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">101</span> 前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕<span class="tag">dark</span></figcaption>
-      <img src="101-tool-job-done.png" alt="前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕" />
+      <figcaption><span class="num">102</span> 前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕<span class="tag">dark</span></figcaption>
+      <img src="102-tool-job-done.png" alt="前處理任務頁：和其他任務一樣有 log（含 limits: 實際核心 / 執行緒）、步驟、檔案與一次性的下載按鈕" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">102</span> 下載 wat_yield-preprocessed.zip（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留<span class="tag">dark</span></figcaption>
-      <img src="102-tool-downloaded.png" alt="下載 wat_yield-preprocessed.zip（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留" />
+      <figcaption><span class="num">103</span> 下載 wat_yield-preprocessed.zip（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留<span class="tag">dark</span></figcaption>
+      <img src="103-tool-downloaded.png" alt="下載 wat_yield-preprocessed.zip（processed.csv + pipeline.json + summary.json）後，結果檔立即從伺服器刪除；任務與 log 保留" />
     </figure></section><section class="phase"><h2>12b. 資料分析服務</h2><p class="desc">表格資料探勘（相關性、VIF 共線性、對目標的解釋力與建議）與影像品質分析（三台機台的 IQA 指標飄移、embedding 散佈與相似度、離群影像），都是個人工作區的 analysis 任務，報告在任務頁。</p><figure class="shot ">
-      <figcaption><span class="num">103</span> 資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料<span class="tag">dark</span></figcaption>
-      <img src="103-analyze-empty.png" alt="資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料" />
+      <figcaption><span class="num">104</span> 資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料<span class="tag">dark</span></figcaption>
+      <img src="104-analyze-empty.png" alt="資料分析服務：表格資料探勘或影像品質分析，同樣以工具池的任務執行；只留報告不留資料" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">104</span> 影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）<span class="tag">dark</span></figcaption>
-      <img src="104-analyze-image-form.png" alt="影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）" />
+      <figcaption><span class="num">105</span> 影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）<span class="tag">dark</span></figcaption>
+      <img src="105-analyze-image-form.png" alt="影像品質分析：zip 的子資料夾（golden / tuned / bad 三台機台）就是群組；可選 DINOv2 embedding（沒有 GPU 配額時自動改用 IQA 指標向量）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">105</span> 兩個分析任務排隊中（工具池每人同時最多 2 個）<span class="tag">dark</span></figcaption>
-      <img src="105-analyze-queued.png" alt="兩個分析任務排隊中（工具池每人同時最多 2 個）" />
+      <figcaption><span class="num">106</span> 兩個分析任務排隊中（工具池每人同時最多 2 個）<span class="tag">dark</span></figcaption>
+      <img src="106-analyze-queued.png" alt="兩個分析任務排隊中（工具池每人同時最多 2 個）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">106</span> 表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況<span class="tag">dark</span></figcaption>
-      <img src="106-analyze-tabular-report.png" alt="表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況" />
+      <figcaption><span class="num">107</span> 表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況<span class="tag">dark</span></figcaption>
+      <img src="107-analyze-tabular-report.png" alt="表格資料探勘報告：建議（共線、缺值、解釋力、模型選擇）、對目標的解釋力（互資訊 + 相關性 + 置換重要度）、相關矩陣與 VIF、欄位概況" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">107</span> 影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議<span class="tag">dark</span></figcaption>
-      <img src="107-analyze-image-report.png" alt="影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議" />
+      <figcaption><span class="num">108</span> 影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議<span class="tag">dark</span></figcaption>
+      <img src="108-analyze-image-report.png" alt="影像品質分析報告：三台機台最會飄的 IQA 指標（飄移比、p 值、各群組中位數）、embedding PCA 散佈與群組相似度、偏離群組的影像、建議" />
     </figure></section><section class="phase"><h2>13. Light mode 與手機版</h2><p class="desc">同一套語意 token 的淺色主題（含使用率歷史）；手機寬度側欄收成抽屜。</p><figure class="shot ">
-      <figcaption><span class="num">108</span> Light mode：首頁<span class="tag">light</span></figcaption>
-      <img src="108-light-home.png" alt="Light mode：首頁" />
+      <figcaption><span class="num">109</span> Light mode：首頁<span class="tag">light</span></figcaption>
+      <img src="109-light-home.png" alt="Light mode：首頁" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">109</span> Light mode：專案總覽<span class="tag">light</span></figcaption>
-      <img src="109-light-project.png" alt="Light mode：專案總覽" />
+      <figcaption><span class="num">110</span> Light mode：專案總覽<span class="tag">light</span></figcaption>
+      <img src="110-light-project.png" alt="Light mode：專案總覽" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">110</span> Light mode：AutoML 任務詳情（leaderboard）<span class="tag">light</span></figcaption>
-      <img src="110-light-job.png" alt="Light mode：AutoML 任務詳情（leaderboard）" />
+      <figcaption><span class="num">111</span> Light mode：AutoML 任務詳情（leaderboard）<span class="tag">light</span></figcaption>
+      <img src="111-light-job.png" alt="Light mode：AutoML 任務詳情（leaderboard）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">111</span> Light mode：建立任務精靈<span class="tag">light</span></figcaption>
-      <img src="111-light-wizard.png" alt="Light mode：建立任務精靈" />
+      <figcaption><span class="num">112</span> Light mode：建立任務精靈<span class="tag">light</span></figcaption>
+      <img src="112-light-wizard.png" alt="Light mode：建立任務精靈" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">112</span> Light mode：管理員佇列<span class="tag">light</span></figcaption>
-      <img src="112-light-admin-queue.png" alt="Light mode：管理員佇列" />
+      <figcaption><span class="num">113</span> Light mode：管理員佇列<span class="tag">light</span></figcaption>
+      <img src="113-light-admin-queue.png" alt="Light mode：管理員佇列" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">113</span> Light mode：資源使用率歷史<span class="tag">light</span></figcaption>
-      <img src="113-light-usage.png" alt="Light mode：資源使用率歷史" />
+      <figcaption><span class="num">114</span> Light mode：資源使用率歷史<span class="tag">light</span></figcaption>
+      <img src="114-light-usage.png" alt="Light mode：資源使用率歷史" />
     </figure><figure class="shot mobile">
-      <figcaption><span class="num">114</span> 手機版首頁（側欄收成抽屜）<span class="tag">dark · 390px</span></figcaption>
-      <img src="114-mobile-home.png" alt="手機版首頁（側欄收成抽屜）" />
+      <figcaption><span class="num">115</span> 手機版首頁（側欄收成抽屜）<span class="tag">dark · 390px</span></figcaption>
+      <img src="115-mobile-home.png" alt="手機版首頁（側欄收成抽屜）" />
     </figure><figure class="shot mobile">
-      <figcaption><span class="num">115</span> 手機版側欄抽屜<span class="tag">dark · 390px</span></figcaption>
-      <img src="115-mobile-sidebar.png" alt="手機版側欄抽屜" />
+      <figcaption><span class="num">116</span> 手機版側欄抽屜<span class="tag">dark · 390px</span></figcaption>
+      <img src="116-mobile-sidebar.png" alt="手機版側欄抽屜" />
     </figure><figure class="shot mobile">
-      <figcaption><span class="num">116</span> 手機版任務詳情<span class="tag">dark · 390px</span></figcaption>
-      <img src="116-mobile-job.png" alt="手機版任務詳情" />
+      <figcaption><span class="num">117</span> 手機版任務詳情<span class="tag">dark · 390px</span></figcaption>
+      <img src="117-mobile-job.png" alt="手機版任務詳情" />
     </figure></section><section class="phase"><h2>14. 登出</h2><p class="desc">使用者選單登出 → 回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=。</p><figure class="shot ">
-      <figcaption><span class="num">117</span> 使用者選單：主題、登出<span class="tag">dark</span></figcaption>
-      <img src="117-user-menu.png" alt="使用者選單：主題、登出" />
+      <figcaption><span class="num">118</span> 使用者選單：主題、登出<span class="tag">dark</span></figcaption>
+      <img src="118-user-menu.png" alt="使用者選單：主題、登出" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">118</span> 登出後回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=<span class="tag">dark</span></figcaption>
-      <img src="118-logged-out.png" alt="登出後回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=" />
+      <figcaption><span class="num">119</span> 登出後回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=<span class="tag">dark</span></figcaption>
+      <img src="119-logged-out.png" alt="登出後回到登入頁；受保護頁面由 proxy.ts 導向 /login?next=" />
     </figure></section><section class="phase"><h2>15. Keycloak 登入（AUTH_MODE=keycloak）</h2><p class="desc">前後端切到 keycloak 模式並指向一個模擬的 realm（scripts/fake_keycloak.py）：登入頁只剩公司帳號按鈕 → Authorization Code + PKCE → realm 登入頁 → 回到首頁並依 KEYCLOAK_ROLE_MAP 取得角色 → 使用者頁標記 keycloak → 登出走 end-session；新帳號第一次登入自動建立。</p><figure class="shot ">
-      <figcaption><span class="num">119</span> AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）<span class="tag">dark</span></figcaption>
-      <img src="119-kc-login.png" alt="AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）" />
+      <figcaption><span class="num">120</span> AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）<span class="tag">dark</span></figcaption>
+      <img src="120-kc-login.png" alt="AUTH_MODE=keycloak 的登入頁：只有「使用公司帳號登入（Keycloak）」按鈕（AUTH_LOCAL_FALLBACK=1 時多一個摺疊的本地表單）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">120</span> Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）<span class="tag">dark</span></figcaption>
-      <img src="120-kc-realm-login.png" alt="Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）" />
+      <figcaption><span class="num">121</span> Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）<span class="tag">dark</span></figcaption>
+      <img src="121-kc-realm-login.png" alt="Auth.js 帶著 PKCE + state 把瀏覽器導到 realm 的登入頁（這裡是模擬的 Keycloak；正式環境是公司 SSO）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">121</span> 回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）<span class="tag">dark</span></figcaption>
-      <img src="121-kc-home-superadmin.png" alt="回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）" />
+      <figcaption><span class="num">122</span> 回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）<span class="tag">dark</span></figcaption>
+      <img src="122-kc-home-superadmin.png" alt="回到首頁：preferred_username 等於 SUPERADMIN_USERNAME，登入即為唯一的 superadmin（token 裡的 realm role 不看）；同名的本地帳號被接管（auth_provider=keycloak）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">122</span> 使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單<span class="tag">dark</span></figcaption>
-      <img src="122-kc-users.png" alt="使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單" />
+      <figcaption><span class="num">123</span> 使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單<span class="tag">dark</span></figcaption>
+      <img src="123-kc-users.png" alt="使用者頁：Keycloak 登入過的帳號標記 keycloak；角色只在這裡管理（最多指派到管理員），超級管理員那一列固定、沒有下拉選單" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">123</span> 登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login<span class="tag">dark</span></figcaption>
-      <img src="123-kc-logged-out.png" alt="登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login" />
+      <figcaption><span class="num">124</span> 登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login<span class="tag">dark</span></figcaption>
+      <img src="124-kc-logged-out.png" alt="登出：清掉 Auth.js session cookie，並導到 Keycloak 的 end-session（id_token_hint）結束 SSO，再回到 /login" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">124</span> 第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）<span class="tag">dark</span></figcaption>
-      <img src="124-kc-home-alice.png" alt="第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）" />
+      <figcaption><span class="num">125</span> 第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）<span class="tag">dark</span></figcaption>
+      <img src="125-kc-home-alice.png" alt="第一次登入的新帳號 alice：users 表自動建立；這次 backend 以 opt-in 的 KEYCLOAK_ROLE_MAP=qr-admin:admin 啟動，她的 client role qr-admin 才對應到 admin 並看得到「管理」選單（預設不對應，第一次登入是 user）" />
     </figure><figure class="shot ">
-      <figcaption><span class="num">125</span> alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕<span class="tag">dark</span></figcaption>
-      <img src="125-kc-alice-admin.png" alt="alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕" />
+      <figcaption><span class="num">126</span> alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕<span class="tag">dark</span></figcaption>
+      <img src="126-kc-alice-admin.png" alt="alice（admin）的儀表板：資源池唯讀、GPU 卡片沒有重置按鈕" />
     </figure></section></body></html>
