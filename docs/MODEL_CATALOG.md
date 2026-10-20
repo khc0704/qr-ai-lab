@@ -57,6 +57,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.isolation_forest` | TABULAR × anomaly | score | 多參數離群 | CPU | 無 | `.joblib`（含門檻） |
 | `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLOv8（ultralytics 8.1），微調或從頭 | GPU | `yolov8n/s/m[-seg|-cls].pt` | `model/best.pt` + `report/training_curve.csv` |
 | `vision.dino_fewshot` | IMAGE × classification | predict / embed / retrieve / extend | 凍結 DINOv2 + 原型庫；新類別免重訓 | GPU | `dinov2-small/`、`dinov2-base/` | `model/prototypes.npz` |
+| `vision.dino_finetune` | IMAGE × classification | predict / embed / retrieve | 真的訓練 DINOv2：`linear`（只訓練分類頭）/ `lora`（注意力層低秩轉接器 + 分類頭）/ `full`（全參數） | GPU | `dinov2-small/`、`dinov2-base/` | `model/head.pt` + `lora.pt`（lora）或 `backbone/`（full）+ `reference.npz` |
 | `vision.dino_patchcore` | IMAGE × anomaly | score（熱圖）/ embed | 正常影像 patch 記憶庫 | GPU | `dinov2-small/` | `model/memory_bank.npz` |
 | `vision.image_quality` | IMAGE × anomaly | compare / score / embed | 17 個無參考影像品質指標的黃金機台基準與浮動範圍；compare 產出機台比對報告 | CPU | 無 | `model/baseline.json` + `report/baseline_ranges.csv` |
 | `sequence.patch_autoencoder` | SEQUENCE / SPECTRUM × anomaly | score / embed / retrieve | patch 嵌入 + 位置編碼 + 視窗 latent | CPU / GPU | 無 | `model/model.pt` + `reference.npz` |
@@ -74,6 +75,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
 | `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
 | `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base`；`k: 1 … 20` |
+| `vision.dino_finetune` | `backbone=dinov2-small, method=lora, epochs=15, lr=1e-3, rank=8, lora_alpha=16, batch=16, backbone_lr=1e-5, augment=true` | `method: linear / lora`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`；`epochs: 5 … 30`（`full` 只在手動模式） |
 | `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
 | `vision.image_quality` | `z_threshold=3.0, distance_percentile=99` | （無；compare 的 `effect_warn / effect_fail / alpha` 在推論 config 指定） |
 | `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2` |
@@ -105,7 +107,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 |---|---|---|---|---|
 | TABULAR | classification / regression | `tabular.xgboost`、`tabular.random_forest`、`tabular.linear`、`tabular.svm` | `row_count > 50000` 剔除 svm；`row_count < 1000` 優先 random_forest | 20 trials / 60 min |
 | TABULAR | anomaly_detection | `tabular.isolation_forest` | | 10 / 20 |
-| IMAGE | classification | `vision.dino_fewshot`、`vision.yolo` | `row_count < 100` 剔除 yolo | 8 / 120 |
+| IMAGE | classification | `vision.dino_fewshot`、`vision.dino_finetune`、`vision.yolo` | `row_count < 20` 剔除 dino_finetune；`row_count < 100` 剔除 yolo | 8 / 120 |
 | IMAGE | detection / segmentation | `vision.yolo` | | 8 / 120 |
 | IMAGE | anomaly_detection | `vision.dino_patchcore`、`vision.image_quality` | 沒申請 GPU 時只剩 image_quality | 6 / 60 |
 | SEQUENCE | anomaly_detection | `sequence.patch_autoencoder` | | 10 / 60 |
@@ -134,7 +136,7 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
 
 1. **你的資料長什麼樣？** 表格 → `TABULAR`；圖片 → `IMAGE`；感測器曲線 → `SEQUENCE`；光譜 → `SPECTRUM`；文字 → `TEXT`。
 2. **你想得到什麼答案？** 類別 → `classification`；數值 → `regression`；圖裡東西在哪 → `detection`；哪些像素 → `segmentation`；有沒有怪怪的（多半只有正常樣本）→ `anomaly_detection`。
-3. **推論時要做什麼？** 看 §4 的推論模式；例如光譜要「找最像的黃金樣本」就是 `retrieve`，影像類別會一直增加就選 `vision.dino_fewshot`（之後用 `extend` 加類別）。
+3. **推論時要做什麼？** 看 §4 的推論模式；例如光譜要「找最像的黃金樣本」就是 `retrieve`，影像類別會一直增加就選 `vision.dino_fewshot`（之後用 `extend` 加類別）；類別固定、每類有幾十張以上、few-shot 不夠準就選 `vision.dino_finetune`（`method=linear` 最快，`lora` 讓特徵適應你的影像，`full` 資料多時才用）。
 4. **資料有多少？有沒有標籤？** 沒標籤 → 只能做異常偵測；很少 → 自動模式會偏向小資料友善的模型（線性、隨機森林、DINO few-shot、TF-IDF）。
 5. **第一次就選自動模式**：看 leaderboard 第一名的家族與指標，再用「手動模式」微調。
 6. **看指標怎麼讀**：`f1_macro > 0.8` 通常可用；`rmse` 要跟目標範圍比；`map50 > 0.5` 可試用；`auroc > 0.9` 才算可靠。
@@ -148,6 +150,7 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
   Job 子程序以 `MODEL_ZOO_ROOT` 直接讀取，runner 設定 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`。
 - `GET /api/v1/admin/model-zoo`、`.venv/bin/python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在；`GET /api/v1/catalog` 的 `weights_ready` 讓精靈標示缺權重的家族，建立任務時缺權重會被拒絕（`WEIGHTS_MISSING`）。
 - 新增需要權重的家族：先在 yaml 的 `weights` 登記，再實作 trainer（透過 `ctx.weight(id)` 取路徑，絕不自行下載）。
+- 微調家族（`vision.dino_finetune`）的產物不含骨幹：`linear` / `lora` 只存分類頭與轉接器（幾 MB），推論時再從模型庫載入同一個骨幹；只有 `full` 會把整個骨幹存進產物。
 
 ## 10. `model_catalog.yaml` 結構（version 2）
 

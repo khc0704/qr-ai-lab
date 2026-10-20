@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/features/empty-state";
 import { FamilyText, InputKindChip, KindChip } from "@/components/features/chips";
+import { JobDeleteButton } from "@/components/features/job-delete-button";
 import { UserInline } from "@/components/features/member-avatars";
 import { pageFromParam, pageHref, Pagination } from "@/components/features/pagination";
 import { TableSkeleton } from "@/components/features/skeletons";
@@ -14,7 +15,7 @@ import { jobModeLabel } from "@/i18n/zh-TW";
 import { Duration, RelativeTime } from "@/components/features/time";
 import { getProject, listJobsPage } from "@/lib/api";
 import { formatMb } from "@/lib/format";
-import { canProject, isApproved, projectRole } from "@/lib/roles";
+import { canDeleteJob, canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
 
 const PAGE_SIZE = 20;
@@ -32,7 +33,8 @@ async function Jobs({
   if (!project) notFound();
   if (!isApproved(project)) redirect(`/projects/${project.slug}/application`);
   const jobs = await listJobsPage({ slug: project.slug, page, pageSize: PAGE_SIZE });
-  const canRun = canProject(projectRole(project, user), "run") && project.status === "active";
+  const role = projectRole(project, user);
+  const canRun = canProject(role, "run") && project.status === "active";
   const href = (p: number) => pageHref(`/projects/${project.slug}/jobs`, {}, p);
   return (
     <>
@@ -94,6 +96,7 @@ async function Jobs({
                 <TableHead>資源</TableHead>
                 <TableHead>建立者</TableHead>
                 <TableHead className="text-right">時間</TableHead>
+                <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -154,6 +157,9 @@ async function Jobs({
                     ) : (
                       <RelativeTime iso={j.createdAt} />
                     )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {canDeleteJob(role, user, j.createdBy.id) ? <JobDeleteButton job={j} iconOnly /> : null}
                   </TableCell>
                 </TableRow>
               ))}

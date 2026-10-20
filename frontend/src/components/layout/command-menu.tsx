@@ -1,6 +1,15 @@
 "use client";
 
-import { ClipboardList, FolderKanban, Gauge, House, ListOrdered, MessagesSquare, Search } from "lucide-react";
+import {
+  ClipboardList,
+  FolderKanban,
+  Gauge,
+  House,
+  ListChecks,
+  ListOrdered,
+  MessagesSquare,
+  Search,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -95,6 +104,10 @@ export function CommandMenu({ projects, isAdmin }: { projects: CommandEntry[]; i
                 <CommandItem onSelect={() => go("/admin/queue")}>
                   <ListOrdered />
                   {nav.adminQueue}
+                </CommandItem>
+                <CommandItem onSelect={() => go("/admin/jobs")}>
+                  <ListChecks />
+                  {nav.adminJobs}
                 </CommandItem>
               </>
             ) : null}

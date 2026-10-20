@@ -10,6 +10,7 @@ export type ModelFamily =
   | "tabular.isolation_forest"
   | "vision.yolo"
   | "vision.dino_fewshot"
+  | "vision.dino_finetune"
   | "vision.dino_patchcore"
   | "vision.image_quality"
   | "sequence.patch_autoencoder"

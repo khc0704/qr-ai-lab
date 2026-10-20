@@ -15,6 +15,7 @@ from app.events.bus import get_bus
 from app.models import Job
 from app.routers import _serialize as ser
 from app.schemas.artifact import ArtifactRead
+from app.schemas.common import Ok
 from app.schemas.job import JobRead, LogLinesRead
 from app.services import artifacts as artifacts_svc
 from app.services import jobs as jobs_svc
@@ -73,6 +74,17 @@ async def cancel_job(job_id: int, session: DbSession, user: CurrentUser) -> JobR
     if access.role == "member" and job.created_by_id != user.id:
         raise forbidden("JOB_NOT_OWNER", "成員只能取消自己的任務")
     return await ser.job(session, await jobs_svc.cancel(session, user, job))
+
+
+@router.delete("/{job_id}", response_model=Ok, summary="刪除已結束的任務（成員刪自己的；maintainer 以上刪任何）")
+async def delete_job(job_id: int, session: DbSession, user: CurrentUser) -> Ok:
+    """任務紀錄、log、輸出資料夾與它產生的產物一併刪除；還有推論任務在用的模型要先刪除那些任務（409
+    ``ARTIFACT_IN_USE``），執行中的任務要先取消（409 ``JOB_ACTIVE``）。工具池任務只有建立者與管理員能刪。"""
+    job, access = await _job_access("member")(job_id, session, user)
+    if access.role == "member" and job.created_by_id != user.id:
+        raise forbidden("JOB_NOT_OWNER", "成員只能刪除自己的任務")
+    await jobs_svc.delete(session, user, job)
+    return Ok()
 
 
 @router.get("/{job_id}/artifacts", response_model=list[ArtifactRead])

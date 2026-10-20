@@ -45,6 +45,7 @@ export const modelFamilyLabel: Record<ModelFamily, string> = {
   "tabular.isolation_forest": "Isolation Forest",
   "vision.yolo": "YOLO",
   "vision.dino_fewshot": "DINOv2 few-shot",
+  "vision.dino_finetune": "DINOv2 微調",
   "vision.dino_patchcore": "DINOv2 PatchCore",
   "vision.image_quality": "影像品質基準",
   "sequence.patch_autoencoder": "Patch Autoencoder",
@@ -184,13 +185,14 @@ export const artifactKindLabel: Record<ArtifactKind, string> = {
 export const nav = {
   home: "首頁",
   discussions: "討論區",
-  projects: "專案",
+  projects: "專案管理",
   pendingProjects: "待審申請",
   tools: "資料前處理",
   analyze: "資料分析",
   admin: "管理",
   adminDashboard: "Dashboard",
   adminQueue: "佇列",
+  adminJobs: "任務管理",
   adminUsers: "使用者",
   adminModelZoo: "模型庫",
   adminUsage: "使用率歷史",
@@ -226,6 +228,9 @@ export const jobCopy = {
   cancelRunningDescription: "執行中的程序會被停止，已產生的指標會保留在 log，但不會產生產物。",
   cancelQueuedDescription: "任務會從佇列移除，可以之後重新建立。",
   forceStopDescription: "程序會在 10 秒寬限後停止，任務標記為「已取消」，理由會寫入 log 與稽核紀錄並顯示給任務建立者。",
+  deleteDescription: "任務紀錄、log 與輸出資料夾會一併刪除，無法復原。",
+  deleteTrainDescription:
+    "任務紀錄、log、輸出資料夾與這次訓練產生的模型 / 報告會一併刪除，無法復原；還有推論任務在使用的模型要先刪除那些推論任務。",
   wizardInputNotice: "一次性上傳的檔案只存在於這個任務執行期間；資料來源則由任務程序直接抓取。",
   dataSourceNotice:
     "本服務不保存資料，只記錄連線資訊；任務執行時由任務程序直接向你的 MinIO / URL 抓取，結束即刪除副本。一次性上傳請在「新建訓練」中進行。",

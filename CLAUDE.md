@@ -11,7 +11,7 @@
 - 「討論區」是獨立的問答 / 問題單區（question / bug / feature），管理員回覆與關閉；與專案申請分開。
 - 專案頁：指定資料來源（一次性上傳、或使用者自己的 MinIO / URL + 憑證）→ 選模型或 AutoML → 建立 Job → 產物存到本機專案資料夾 → 用產物做推論。
 - 本服務不保存使用者的資料集：上傳檔與從使用者 MinIO / URL 抓下的副本只存在於該 Job 執行期間，Job 結束即刪。保存的只有訓練產物、log 與指標。
-- 管理員後台：設定所有專案合計可用的總資源池、檢視並重排佇列、強制中斷執行中的 Job；每個 Job 都有 log，專案頁與管理員頁都能看。
+- 管理員後台：設定所有專案合計可用的總資源池、檢視並重排佇列、強制中斷執行中的 Job、「任務管理」頁跨專案整批刪除已結束的任務；每個 Job 都有 log，專案頁與管理員頁都能看。
 - 內建 SOP 讓不懂程式的人也能依資料類型選模型；AutoML 模式自動挑多個候選模型並搜尋超參數。
 
 ## 技術棧（固定，不要擅自替換）
@@ -80,7 +80,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 
 - `data_type`：`TABULAR | IMAGE | SEQUENCE | TEXT | SPECTRUM`
 - `task_type`：`classification | regression | detection | segmentation | anomaly_detection`
-- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
+- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_finetune | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
 - 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
 - 專案申請 = 建立 `pending` 的 project（`POST /projects`）；申請內容在 `project_requests`（`projects.request_id`），專案頁的「申請」分頁顯示與審核；沒有獨立的申請列表 / 審核頁 / 配額頁
@@ -91,7 +91,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 - Job `input.kind`：`upload`（一次性上傳，Job 結束即刪）| `data_source`（使用者的 MinIO / URL）| `inline`（推論的小量 JSON）
 - DataSource `kind`：`minio | url`；只存連線參考與加密憑證，不存資料
 - Artifact `kind`：`model | weights | preprocessor | report | metrics`；存 `DATA_ROOT/projects/{slug}/jobs/{job_id}/`
-- 角色：系統角色 `superadmin | admin | user`（`users.role`，只在 `/admin/users` 管理；Keycloak 只提供身分、不決定角色；superadmin 只有一位、由 `SUPERADMIN_USERNAME` 指定，UI / CLI 最多指派到 admin）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`
+- 角色：系統角色 `superadmin | admin | user`（`users.role`，只在 `/admin/users` 管理；Keycloak 只提供身分、不決定角色；superadmin 只有一位、由 `SUPERADMIN_USERNAME` 指定，UI / CLI 最多指派到 admin）；權限名稱 `admin.view | requests.review | jobs.control | issues.moderate | users.view | audit.view | usage.view`（admin 以上）與 `pool.manage | quota.manage | projects.delete | users.manage | model_zoo.manage | gpu.reset`（superadmin），`/me` 回傳 `permissions`，前端用 `can(user, perm)` 只做隱藏；專案角色 `owner | maintainer | member | viewer`；刪除已結束的任務（`DELETE /jobs/{id}`，連同 log / 輸出 / 它產生的產物）與取消同規則：member 刪自己的、maintainer 以上刪專案內任何、admin 到處都行（`/admin/jobs` 可整批），還被推論任務引用的模型要先刪那些推論任務
 - Job 的 `requested_gpu_memory_mb`：有值 = 可與其他任務依剩餘顯存共用一張 GPU（資源池 `gpu_share`，trainer 以 `set_per_process_memory_fraction` 自限）；`null` = 獨占整張
 - 工具（不需專案）：`POST /tools/uploads` → `/preview`（即時抽樣）→ `/process`（preprocess 任務）或 `/analyze`（analysis 任務：`tabular_profile | image_quality`，實作在 `trainer/trainer/analysis/`）；上傳只在 `DATA_ROOT/tools/<id>/`（無資料庫列），建任務時移進任務 input；前處理結果 `GET /jobs/{id}/download` 交付一次即刪
 - GPU 共用是**實測模式**：`services/gpu.py` 用 pynvml 實際用量 + 暖機期（`GPU_WARMUP_S`）的「申請 − 實測」；不要改回以申請量保留

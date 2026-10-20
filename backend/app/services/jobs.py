@@ -16,7 +16,7 @@ from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import loader
-from app.core.errors import bad_request, conflict, not_found
+from app.core.errors import ApiError, bad_request, conflict, not_found
 from app.db.base import utcnow
 from app.events.bus import get_bus
 from app.models import Artifact, DataSource, Job, Project, Upload, User
@@ -65,19 +65,27 @@ async def list_jobs(
     session: AsyncSession,
     *,
     project_id: int | None = None,
+    project_slug: str | None = None,
     created_by_id: int | None = None,
     statuses: list[str] | None = None,
     kind: str | None = None,
+    q: str | None = None,
     page: int = 1,
     page_size: int = 20,
     ephemeral: bool | None = False,
 ) -> tuple[list[Job], int]:
-    """``ephemeral``: False (default) = regular jobs only, True = one-off inference only, None = both."""
+    """``ephemeral``: False (default) = regular jobs only, True = one-off inference only, None = both.
+    ``q`` matches the job name (contains) or an exact job id."""
     stmt = select(Job)
     if ephemeral is not None:
         stmt = stmt.where(Job.ephemeral.is_(ephemeral))
     if project_id:
         stmt = stmt.where(Job.project_id == project_id)
+    if project_slug:
+        stmt = stmt.where(Job.project_id.in_(select(Project.id).where(Project.slug == project_slug)))
+    if q:
+        q = q.strip()
+        stmt = stmt.where(Job.id == int(q)) if q.isdigit() else stmt.where(Job.name.ilike(f"%{q}%"))
     if created_by_id:
         stmt = stmt.where(Job.created_by_id == created_by_id)
     if statuses:
@@ -605,24 +613,74 @@ async def move(session: AsyncSession, admin: User, job: Job, position: str) -> l
     return await set_order(session, admin, ids)
 
 
-async def delete(session: AsyncSession, admin: User, job: Job) -> None:
+async def _artifact_blockers(session: AsyncSession, job: Job) -> tuple[list[Artifact], int]:
+    """The artifacts this job produced and how many *other* jobs still use one of them as their model."""
+    arts = list((await session.execute(select(Artifact).where(Artifact.job_id == job.id))).scalars())
+    if not arts:
+        return arts, 0
+    used = (
+        await session.execute(
+            select(func.count()).select_from(Job).where(Job.artifact_id.in_([a.id for a in arts]), Job.id != job.id)
+        )
+    ).scalar_one()
+    return arts, used
+
+
+async def delete(session: AsyncSession, actor: User, job: Job) -> None:
+    """Remove a finished job together with its log / output folder and the artifacts it produced (audit:
+    job.delete). Refused while the job is active, and while another job (an inference run) still uses one of
+    its models: those runs go first, so a result never points at a model that no longer exists."""
     if job.is_active:
         raise conflict("JOB_ACTIVE", "請先取消或中斷任務")
-    n_art = (
-        await session.execute(select(func.count()).select_from(Artifact).where(Artifact.job_id == job.id))
-    ).scalar_one()
-    if n_art:
-        raise conflict("JOB_HAS_ARTIFACTS", "請先刪除此任務的產物")
+    arts, used = await _artifact_blockers(session, job)
+    if used:
+        raise conflict("ARTIFACT_IN_USE", f"此任務產生的模型還有 {used} 個推論任務在使用，請先刪除那些任務")
     storage = get_storage()
+    for a in arts:
+        p = storage.abs(a.path)
+        if p.is_dir():
+            storage.remove_tree(a.path)
+        elif p.exists():
+            p.unlink()
     if job.output_path:
         storage.remove_tree(job.output_path)
     storage.remove_tree(f"jobs/{job.id}")
-    await audit.record(session, admin.id, "job.delete", "job", job.id, {"project_id": job.project_id})
+    await audit.record(
+        session,
+        actor.id,
+        "job.delete",
+        "job",
+        job.id,
+        {"project_id": job.project_id, "kind": job.kind, "name": job.name, "artifacts": len(arts)},
+    )
     project = job.project
+    # FK order: the job may reference a model (jobs.artifact_id) and own artifacts (artifacts.job_id), both RESTRICT
+    job.artifact_id = None
+    await session.flush()
+    await session.execute(sql_delete(Artifact).where(Artifact.job_id == job.id))
     await session.execute(sql_update(Upload).where(Upload.claimed_by_job_id == job.id).values(claimed_by_job_id=None))
     await session.delete(job)
     await projects_svc.recompute_storage(session, project)
     await session.commit()
+
+
+async def delete_many(session: AsyncSession, actor: User, job_ids: list[int]) -> tuple[list[int], list[dict[str, Any]]]:
+    """Admin bulk delete: every job that can go goes; the rest come back with the reason (active, model in use…)."""
+    deleted: list[int] = []
+    skipped: list[dict[str, Any]] = []
+    for jid in dict.fromkeys(job_ids):
+        job = await session.get(Job, jid)
+        if job is None:
+            skipped.append({"id": jid, "code": "JOB_NOT_FOUND", "message": "找不到任務"})
+            continue
+        try:
+            await delete(session, actor, job)
+        except ApiError as e:
+            await session.rollback()
+            skipped.append({"id": jid, "code": e.code, "message": str(e.detail["message"])})
+            continue
+        deleted.append(jid)
+    return deleted, skipped
 
 
 # --- state transitions (scheduler) ----------------------------------------------------------

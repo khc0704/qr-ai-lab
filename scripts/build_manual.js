@@ -226,21 +226,27 @@ const children = [
     "推論 predict：回最近的類別與相似度；config.min_similarity 可讓低相似度的回 unknown。retrieve：看最像的範例影像，方便人工覆核。",
     "新增 bin code 不用重訓：建立推論任務，config.mode = extend，輸入新類別的資料夾 zip，平台產生新版本模型並設為預設。",
   ]),
-  h2("5.3 分類：類別固定、資料多 → YOLO 分類"),
+  h2("5.3 分類：類別固定、每類幾十張以上 → DINOv2 微調"),
+  ...ul([
+    "家族 vision.dino_finetune：真的訓練 DINOv2 做分類。config.method = linear 只訓練分類頭（最快）；lora 在注意力層加低秩轉接器一起訓練（SEM / TEM 這類和自然影像差很多的資料用這個，產物只有幾 MB）；full 全參數微調（每類上百張、顯示卡記憶體夠時）。",
+    "其他參數：epochs、lr、rank（LoRA 秩）、batch；自動模式會在 linear / lora 之間搜尋。推論 predict 回 prediction、confidence、top3（config.min_confidence 可讓低信心的回 unknown）；retrieve 找最像的訓練影像；embed 輸出特徵向量。",
+    "few-shot 與微調怎麼選：類別會一直增加、每類只有幾張 → few-shot；類別固定、每類幾十張以上、要更準 → 微調。",
+  ]),
+  h2("5.4 分類：類別固定、資料多 → YOLO 分類"),
   ...ul([
     "家族 vision.yolo，task classification；config.model = yolov8n / s / m、imgsz、epochs；pretrained = true 從模型庫的 yolov8s-cls.pt 微調，false 從頭訓練。",
     "指標 accuracy、f1_macro；推論 predict 回 prediction、confidence、top5。",
   ]),
-  h2("5.4 偵測與分割量測"),
+  h2("5.5 偵測與分割量測"),
   ...ul([
     "YOLO 偵測：推論 detect，每個物件一列（class、confidence、x1 y1 x2 y2）；output/images/ 有標註圖。",
     "YOLO 分割：推論 segment 或 measure；measure 多給 area_px、width_px、height_px、equiv_diameter_px，config.pixel_size（每像素的實際長度，例如 2.5 nm）會再給 *_phys 欄。",
   ]),
-  h2("5.5 只有良品影像 → PatchCore 異常偵測"),
+  h2("5.6 只有良品影像 → PatchCore 異常偵測"),
   ...ul([
     "家族 vision.dino_patchcore（GPU）：正常影像的 patch 特徵建記憶庫；推論 score 回 anomaly_score、is_anomaly、hot_patch_row / col，並輸出 heatmaps/*.png。",
   ]),
-  h2("5.6 影像品質基準與機台比對（tool matching）"),
+  h2("5.7 影像品質基準與機台比對（tool matching）"),
   p("場景：用黃金機台的一批影像建立「影像品質」基準與浮動範圍，其他機台調機後拍同類樣品，檢視每個品質指標是否落在基準範圍內。不需要標註、不需要 GPU、不需要預訓練權重。"),
   ...ul([
     "家族 vision.image_quality，task anomaly_detection。訓練資料：黃金機台影像放 good/（或整包都是正常）。",

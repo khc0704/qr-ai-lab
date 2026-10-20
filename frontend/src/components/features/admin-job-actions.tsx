@@ -1,8 +1,8 @@
 "use client";
 
-// Admin controls on a job page (jobs.control): force-stop a running job, re-queue a finished one, delete it.
-// Members keep their own "取消" in JobStatusBar; this never replaces it.
-import { OctagonX, RotateCcw, Trash2 } from "lucide-react";
+// Admin controls on a job page (jobs.control): force-stop a running job, re-queue a finished one. Members keep
+// their own "取消" in JobStatusBar; deleting is JobDeleteButton (creators, maintainers and admins alike).
+import { OctagonX, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -20,12 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { jobCopy } from "@/i18n/zh-TW";
-import { deleteJobAction, restartJobAction, stopJobAction } from "@/lib/actions";
+import { restartJobAction, stopJobAction } from "@/lib/actions";
 import type { Job } from "@/types/domain";
 
 export function AdminJobActions({ job }: { job: Job }) {
   const router = useRouter();
-  const [dialog, setDialog] = useState<"stop" | "restart" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"stop" | "restart" | null>(null);
   const [reason, setReason] = useState("");
   const [pending, startTransition] = useTransition();
   const active = job.status === "queued" || job.status === "scheduled" || job.status === "running";
@@ -51,16 +51,6 @@ export function AdminJobActions({ job }: { job: Job }) {
       }
       close();
     });
-  const remove = () =>
-    startTransition(async () => {
-      const r = await deleteJobAction(job.id, job.projectSlug);
-      if (!r.ok) toast.error(r.error);
-      else {
-        toast.success(`已刪除任務 #${job.id}`);
-        router.push(`/projects/${job.projectSlug}/jobs`);
-      }
-      close();
-    });
   return (
     <>
       {active ? (
@@ -80,16 +70,6 @@ export function AdminJobActions({ job }: { job: Job }) {
           >
             <RotateCcw />
             重新執行
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => setDialog("delete")}
-            data-testid="admin-delete-job"
-          >
-            <Trash2 />
-            刪除
           </Button>
         </>
       )}
@@ -134,26 +114,6 @@ export function AdminJobActions({ job }: { job: Job }) {
             <AlertDialogCancel>返回</AlertDialogCancel>
             <AlertDialogAction disabled={pending} onClick={restart}>
               重新排入佇列
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <AlertDialog open={dialog === "delete"} onOpenChange={(o) => !o && close()}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>刪除任務 #{job.id}？</AlertDialogTitle>
-            <AlertDialogDescription>
-              任務紀錄、log 與輸出資料夾會一併刪除；已登記的產物要先在「模型」頁刪除。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>返回</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={pending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={remove}
-            >
-              刪除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

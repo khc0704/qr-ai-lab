@@ -22,7 +22,7 @@ from app.schemas.admin import (
     ZooTask,
 )
 from app.schemas.common import Ok, Page
-from app.schemas.job import JobRead, MoveBody, OrderBody, StopBody
+from app.schemas.job import JobIdsBody, JobRead, JobsDeleteResult, MoveBody, OrderBody, StopBody
 from app.schemas.project import PENDING_STATUSES
 from app.schemas.settings import JobDefaults, ResourcePool, ToolPool
 from app.services import (
@@ -180,10 +180,47 @@ async def restart_job(job_id: int, session: DbSession, admin: JobController) -> 
     return await ser.job(session, await jobs_svc.restart(session, admin, job))
 
 
-@router.delete("/jobs/{job_id}", response_model=Ok, summary="刪除任務與其 log / 輸出")
+@router.delete("/jobs/{job_id}", response_model=Ok, summary="刪除任務與其 log / 輸出 / 產物")
 async def delete_job(job_id: int, session: DbSession, admin: JobController) -> Ok:
+    """同 ``DELETE /jobs/{id}``，但不受專案角色限制（jobs.control）。"""
     await jobs_svc.delete(session, admin, await jobs_svc.get(session, job_id))
     return Ok()
+
+
+@router.get("/jobs", response_model=Page[JobRead], summary="所有專案的任務（任務管理頁）")
+async def list_all_jobs(
+    session: DbSession,
+    _: AdminUser,
+    status: str | None = Query(None, description="逗號分隔的狀態"),
+    kind: str | None = None,
+    project: str | None = Query(None, description="專案 slug"),
+    user_id: int | None = Query(None, description="建立者"),
+    q: str | None = Query(None, max_length=120, description="任務名稱包含，或任務 id"),
+    ephemeral: bool | None = Query(None, description="省略 = 全部；true = 只列一次性推論；false = 排除"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Page[JobRead]:
+    """跨專案的任務列表（含工具池與一次性推論），給管理員清理用；佇列狀態請看 ``/admin/queue``。"""
+    statuses = [s for s in status.split(",") if s] if status else None
+    rows, total = await jobs_svc.list_jobs(
+        session,
+        project_slug=project,
+        created_by_id=user_id,
+        statuses=statuses,
+        kind=kind,
+        q=q,
+        page=page,
+        page_size=page_size,
+        ephemeral=ephemeral,
+    )
+    return Page(items=await ser.jobs(session, rows), total=total, page=page, page_size=page_size)
+
+
+@router.post("/jobs/delete", response_model=JobsDeleteResult, summary="整批刪除已結束的任務")
+async def delete_jobs(body: JobIdsBody, session: DbSession, admin: JobController) -> JobsDeleteResult:
+    """能刪的都刪（各自寫 audit），刪不了的（執行中、模型還被推論任務引用）回在 ``skipped`` 並附原因。"""
+    deleted, skipped = await jobs_svc.delete_many(session, admin, body.job_ids)
+    return JobsDeleteResult(deleted=deleted, skipped=skipped)  # type: ignore[arg-type]
 
 
 @router.get("/audit", response_model=Page[AuditLogRead])

@@ -154,6 +154,33 @@ export async function getQueue(): Promise<{ running: Job[]; queued: Job[] }> {
   return { running: r.running.map(toJob), queued: r.queued.map(toJob) };
 }
 
+/** Admin only: every job across projects (tool pool and one-off inference included) for the 任務管理 page. */
+export async function listAdminJobsPage(opts: {
+  page?: number;
+  pageSize?: number;
+  status?: Job["status"][];
+  kind?: Job["kind"];
+  /** project slug */
+  project?: string;
+  /** job name contains, or an exact job id */
+  q?: string;
+  /** undefined = all, true = only one-off inference, false = none */
+  ephemeral?: boolean;
+}): Promise<Page<Job>> {
+  const raw = await apiFetch<J>(
+    `/admin/jobs${q({
+      status: opts.status?.join(","),
+      kind: opts.kind,
+      project: opts.project,
+      q: opts.q,
+      ephemeral: opts.ephemeral === undefined ? undefined : String(opts.ephemeral),
+      page: clampPage(opts.page),
+      page_size: opts.pageSize ?? 50,
+    })}`,
+  );
+  return toPage(raw, toJob);
+}
+
 /** The last `limit` log lines plus the SSE cursor (`last_event_id`) to resume the live stream without replay. */
 export async function getJobLog(jobId: number, limit = 2000): Promise<JobLogSnapshot> {
   return toLogSnapshot(await apiFetch<J>(`/jobs/${encodeURIComponent(String(jobId))}/logs${q({ limit })}`));

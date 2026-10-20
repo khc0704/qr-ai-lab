@@ -8,6 +8,7 @@ import { PreprocessJobResults } from "@/components/features/tool-job-results";
 import { ArtifactRowActions } from "@/components/features/artifact-row-actions";
 import { FamilyText, InputKindChip } from "@/components/features/chips";
 import { EmptyState } from "@/components/features/empty-state";
+import { JobDeleteButton } from "@/components/features/job-delete-button";
 import { JobLive } from "@/components/features/job-live";
 import { JobResults } from "@/components/features/job-results";
 import { JobStatusBar } from "@/components/features/job-status-bar";
@@ -32,7 +33,7 @@ import {
 } from "@/i18n/zh-TW";
 import { getArtifact, getJob, getJobLog, getProject, listArtifactsForJob } from "@/lib/api";
 import { formatBytes, formatMetric } from "@/lib/format";
-import { canCancelJob, canProject, projectRole } from "@/lib/roles";
+import { canCancelJob, canDeleteJob, canProject, projectRole } from "@/lib/roles";
 import { can, getCurrentUser } from "@/lib/session";
 import type { AnalysisKind, InferenceMode, PreprocessStep } from "@/types/domain";
 import { withBase } from "@/lib/base-path";
@@ -51,6 +52,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
   const controlsJobs = can(user, "jobs.control");
   const role = projectRole(project, user);
   const canCancel = canCancelJob(role, user, job.createdBy.id);
+  const canDelete = canDeleteJob(role, user, job.createdBy.id);
   const canRun = canProject(role, "run");
   const { leaderboard, ...metrics } = job.metrics ?? {};
   // Live metrics (job.metrics) are whatever the trainer reported last. Once a training job has a result, or
@@ -364,6 +366,7 @@ async function JobDetail({ params }: { params: Promise<{ slug: string; jobId: st
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {controlsJobs ? <AdminJobActions job={job} /> : null}
+            {canDelete ? <JobDeleteButton job={job} afterHref={`/projects/${slug}/jobs`} /> : null}
             {isTool || !canRun ? null : (
               <Button variant="outline" size="sm" asChild>
                 <Link href={`/projects/${slug}/jobs/new?from=${job.id}`}>

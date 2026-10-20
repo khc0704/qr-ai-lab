@@ -674,13 +674,36 @@ export async function restartJobAction(jobId: number, slug: string): Promise<Act
   return r;
 }
 
-/** admin: delete a finished job together with its log / output folder. */
+/**
+ * Delete a finished job with its log, outputs and the artifacts it produced. The backend decides who may:
+ * the creator, maintainers and above in the project, admins everywhere (DELETE /jobs/{id}).
+ */
 export async function deleteJobAction(jobId: number, slug: string): Promise<ActionResult<undefined>> {
   const r = await run(async () => {
-    await apiFetch<J>(`/admin/jobs/${idSchema.parse(jobId)}`, { method: "DELETE" });
+    await apiFetch<J>(`/jobs/${idSchema.parse(jobId)}`, { method: "DELETE" });
     return undefined;
   });
-  if (r.ok) revalidatePath(`/projects/${slug}/jobs`);
+  if (r.ok) {
+    revalidatePath(`/projects/${slug}/jobs`);
+    revalidatePath(`/projects/${slug}/models`);
+    revalidatePath("/admin/jobs");
+  }
+  return r;
+}
+
+const jobIdsSchema = z.array(idSchema).min(1).max(200);
+
+export interface JobsDeleteResult {
+  deleted: number[];
+  skipped: { id: number; code: string; message: string }[];
+}
+
+/** admin (jobs.control): bulk delete from the 任務管理 page; jobs that cannot go come back in `skipped`. */
+export async function deleteJobsAction(jobIds: number[]): Promise<ActionResult<JobsDeleteResult>> {
+  const r = await run(async () =>
+    apiFetch<JobsDeleteResult>("/admin/jobs/delete", { method: "POST", body: { job_ids: jobIdsSchema.parse(jobIds) } }),
+  );
+  if (r.ok) revalidatePath("/admin/jobs");
   return r;
 }
 

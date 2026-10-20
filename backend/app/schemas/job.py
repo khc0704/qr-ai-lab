@@ -97,5 +97,20 @@ class OrderBody(BaseModel):
     job_ids: list[int] = Field(min_length=1)
 
 
+class JobIdsBody(BaseModel):
+    job_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class SkippedJob(BaseModel):
+    id: int
+    code: str
+    message: str
+
+
+class JobsDeleteResult(BaseModel):
+    deleted: list[int]
+    skipped: list[SkippedJob]
+
+
 class MoveBody(BaseModel):
     position: Literal["top", "up", "down", "bottom"]

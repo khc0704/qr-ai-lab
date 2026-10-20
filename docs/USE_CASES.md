@@ -64,6 +64,7 @@
 - **訓練**：`vision.dino_fewshot`（`backbone=dinov2-small` 或 `dinov2-base`，`k` = kNN 票數）。凍結 DINOv2 取 CLS + 平均 patch 特徵，每類存原型；評估用分層切分或 leave-one-out。
 - **新增 bin code**：建推論 Job，`config.mode="extend"`，輸入是新類別的資料夾 zip → 產生新版本模型並設為預設，原本的類別都保留。
 - **推論**：`predict`（`config.min_similarity` 低於門檻回 `unknown`，避免硬塞進既有類別）、`retrieve`（看最像的範例影像，方便人工覆核）。
+- **何時改用微調**：類別固定、每類有幾十張以上、原型分類不夠準 → `vision.dino_finetune`：`method=linear` 只訓練分類頭（最快）、`lora` 在 DINOv2 的注意力層加低秩轉接器一起訓練（影像和自然影像差很多時，例如 SEM / TEM 紋理，特徵會真的適應你的資料；產物只有幾 MB）、`full` 全參數微調（每類上百張、VRAM 夠時）。推論同樣有 `predict`（`config.min_confidence` 低於門檻回 `unknown`）、`retrieve`、`embed`。
 - **何時改用 YOLO 分類**：類別固定、每類有數百張、要更高準確度 → `vision.yolo`（`model=yolov8s`、`pretrained=true` 用模型庫的 `yolov8s-cls.pt` 微調；`pretrained=false` 從頭訓練）。
 
 ### 3.4 只有良品影像：PatchCore 異常 + 熱圖

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { AdminJobActions } from "@/components/features/admin-job-actions";
+import { JobDeleteButton } from "@/components/features/job-delete-button";
 import { AnalysisReport } from "@/components/features/analysis-report";
 import { InputKindChip } from "@/components/features/chips";
 import { JobLive } from "@/components/features/job-live";
@@ -34,6 +35,7 @@ async function ToolJobDetail({ params }: { params: Promise<{ id: string }> }) {
     user,
     job.createdBy.id,
   );
+  const canDelete = canCancel; // same rule: the creator or an admin (the pool has no maintainers)
   const steps = (job.input.spec?.preprocess ?? job.config?.steps ?? []) as PreprocessStep[];
   const analysisKind = job.config?.analysis as AnalysisKind | undefined;
   const dataType = (job.input.spec?.data_type ?? job.config?.data_type) as DataType | undefined;
@@ -140,6 +142,7 @@ async function ToolJobDetail({ params }: { params: Promise<{ id: string }> }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {controlsJobs ? <AdminJobActions job={job} /> : null}
+            {canDelete ? <JobDeleteButton job={job} afterHref={back} /> : null}
             <Button variant="outline" size="sm" asChild>
               <Link href={back}>
                 <ArrowLeft />

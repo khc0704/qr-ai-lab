@@ -77,6 +77,9 @@ export function canCancelJob(
   return canProject(role, "manage") || createdById === user.id;
 }
 
+/** Deleting a finished job follows the cancel rule: creators their own, maintainers and above any in the project. */
+export const canDeleteJob = canCancelJob;
+
 /** Work tabs (data sources, jobs, models, members, settings) exist only once the application was approved. */
 export function isApproved(project: Pick<Project, "status">): boolean {
   return project.status === "active" || project.status === "completed" || project.status === "archived";

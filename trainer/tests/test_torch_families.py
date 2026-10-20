@@ -250,3 +250,59 @@ def test_dino_fewshot_extend_and_patchcore(tmp_path, ctx):
     assert len(res.rows) == 4 and (out3 / "heatmaps").exists() and res.extra_artifacts[0].path == "output/heatmaps"
     assert max(r["anomaly_score"] for r in res.rows[2:]) > min(r["anomaly_score"] for r in res.rows[:2])
     assert json.dumps(res.summary)  # serialisable
+
+
+@pytest.mark.parametrize("method", ["linear", "lora", "full"])
+def test_dino_finetune_roundtrip(tmp_path, ctx, method):
+    pytest.importorskip("transformers")
+    pytest.importorskip("PIL")
+    from trainer.models.vision import inject_lora, lora_state
+
+    zoo = tmp_path / "zoo"
+    _tiny_dino(zoo)
+    ctx.zoo = resolver(zoo, {"dinov2-small": "dinov2-small/"})
+    root = tmp_path / "imgs"
+    a = _images(root, "BIN_A", 8, "dark", 1)
+    b = _images(root, "BIN_B", 8, "bright", 2)
+    ds = Dataset(
+        "IMAGE", "classification", {}, X=a + b, y=["BIN_A"] * 8 + ["BIN_B"] * 8, ids=[p.name for p in a + b], root=root
+    )
+    epochs: list[int] = []
+    ctx.on_epoch = lambda e, m: epochs.append(e)
+    params = {"backbone": "dinov2-small", "method": method, "epochs": 4, "batch": 4, "lr": 5e-3, "rank": 2}
+    t = registry.create_trainer("vision.dino_finetune", "classification", params, ctx)
+    t.fit(ds)
+    assert epochs == [1, 2, 3, 4] and t.meta["classes"] == ["BIN_A", "BIN_B"] and t.meta["method"] == method
+    assert t.evaluate()["accuracy"] >= 0.5
+    if method == "lora":
+        assert t.net.lora_layers == 3  # one layer × query / key / value
+        assert all(".lora_" in k for k in lora_state(t.net.backbone)) and lora_state(t.net.backbone)
+        # the base projections never train; only adapters and the head do
+        assert all(not p.requires_grad for n, p in t.net.backbone.named_parameters() if ".lora_" not in n)
+    if method == "linear":
+        assert not any(p.requires_grad for p in t.net.backbone.parameters())
+    arts = t.export(tmp_path / "out")
+    model_dir = tmp_path / "out" / "model"
+    assert (model_dir / "head.pt").exists() and (model_dir / "reference.npz").exists()
+    assert (model_dir / "lora.pt").exists() == (method == "lora")
+    assert (model_dir / "backbone").is_dir() == (method == "full")
+    assert arts[0].name == f"dino_{method}" and arts[0].metadata["inference_modes"] == ["predict", "embed", "retrieve"]
+
+    inf = registry.create_inferencer("vision.dino_finetune", ctx)
+    inf.load(model_dir, arts[0].metadata)
+    probe = Dataset("IMAGE", "classification", {}, X=a[:2] + b[:2], ids=["a0", "a1", "b0", "b1"], root=root)
+    res = inf.predict(probe, "predict", {}, tmp_path / "pred")
+    assert [r["prediction"] for r in res.rows] == ["BIN_A", "BIN_A", "BIN_B", "BIN_B"], res.rows
+    assert len(res.rows[0]["top3"]) == 2 and res.summary["class_counts"] == {"BIN_A": 2, "BIN_B": 2}
+    res = inf.predict(probe, "predict", {"min_confidence": 1.01}, tmp_path / "pred")
+    assert {r["prediction"] for r in res.rows} == {"unknown"}
+    res = inf.predict(probe, "retrieve", {"k": 2}, tmp_path / "pred")
+    assert res.rows[0]["most_similar"][0]["label"] == "BIN_A" and len(res.rows[0]["most_similar"]) == 2
+    res = inf.predict(probe, "embed", {}, tmp_path / "pred")
+    assert len(res.rows[0]["embedding"]) == 64 and (tmp_path / "pred" / "embeddings.npy").exists()
+    if method == "lora":
+        # inject_lora is idempotent in count: a fresh backbone gets exactly the three wrapped layers
+        from transformers import AutoModel
+
+        m = AutoModel.from_pretrained(str(zoo / "dinov2-small"), local_files_only=True)
+        assert inject_lora(m, 2, 4.0) == 3

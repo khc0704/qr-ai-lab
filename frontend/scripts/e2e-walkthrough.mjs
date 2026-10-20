@@ -830,6 +830,12 @@ try {
     await waitJob(adminTok, second.id, ["running", "succeeded", "failed"], 120_000);
     await goto(page, "/admin/queue", 1500);
     await shot(page, "admin-queue-after", "中斷後：等待中的任務立刻取得資源開始執行");
+    await goto(page, "/admin/jobs", 1200);
+    await shot(
+      page,
+      "admin-jobs",
+      "任務管理：所有專案的任務（含工具池與一次性推論）依狀態 / 種類 / 專案 / 名稱篩選；勾選已結束的任務整批刪除（連同 log、輸出與產物；模型仍被推論任務引用的會跳過並說明原因）",
+    );
     await goto(page, "/admin/audit");
     await shot(page, "admin-audit", "稽核紀錄：核准申請、更新資源池、強制中斷…都有操作者、對象與理由");
     await goto(page, "/admin");

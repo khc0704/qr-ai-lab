@@ -18,6 +18,7 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
     "tabular.isolation_forest": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "vision.yolo": ("trainer.models.vision", "YoloTrainer", "YoloInferencer"),
     "vision.dino_fewshot": ("trainer.models.vision", "DinoFewShotTrainer", "DinoFewShotInferencer"),
+    "vision.dino_finetune": ("trainer.models.vision", "DinoFinetuneTrainer", "DinoFinetuneInferencer"),
     "vision.dino_patchcore": (
         "trainer.models.vision",
         "DinoPatchCoreTrainer",
@@ -47,6 +48,7 @@ REQUIRES: dict[str, list[str]] = {
     "tabular.xgboost": ["xgboost"],
     "vision.yolo": ["torch", "ultralytics"],
     "vision.dino_fewshot": ["torch", "transformers", "PIL"],
+    "vision.dino_finetune": ["torch", "transformers", "PIL"],
     "vision.dino_patchcore": ["torch", "transformers", "PIL"],
     "sequence.patch_autoencoder": ["torch"],
     "spectrum.masked_autoencoder": ["torch"],

@@ -875,3 +875,410 @@ __all__ = [
     "YoloTrainer",
     "all_images",
 ]
+
+
+# ---------------------------------------------------------------------------------------------------
+# DINOv2 fine-tuning — linear probe, LoRA adapters (hand-written, no peft) or full fine-tune
+# ---------------------------------------------------------------------------------------------------
+
+# transformers ≥ 5 names the DINOv2 projections q_proj / k_proj / v_proj; 4.x used query / key / value
+LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "query", "key", "value")
+
+
+def _lora_linear_class():  # built lazily: torch is only imported inside the trainers
+    import math
+
+    import torch
+
+    class LoRALinear(torch.nn.Module):
+        """``y = W x + (B A x) * alpha / rank`` with W frozen; only A and B train (B starts at zero so the first
+        step reproduces the pretrained layer exactly)."""
+
+        def __init__(self, base: torch.nn.Linear, rank: int, alpha: float) -> None:
+            super().__init__()
+            self.base = base
+            for p in self.base.parameters():
+                p.requires_grad_(False)
+            self.lora_a = torch.nn.Parameter(torch.empty(rank, base.in_features))
+            self.lora_b = torch.nn.Parameter(torch.zeros(base.out_features, rank))
+            torch.nn.init.kaiming_uniform_(self.lora_a, a=math.sqrt(5))
+            self.scaling = alpha / rank
+
+        def forward(self, x):
+            return self.base(x) + (x @ self.lora_a.T @ self.lora_b.T) * self.scaling
+
+    return LoRALinear
+
+
+def inject_lora(model, rank: int, alpha: float, targets: tuple[str, ...] = LORA_TARGETS) -> int:
+    """Wrap every attention projection named in ``targets`` (DINOv2: q / k / v) with a LoRA adapter.
+    Returns the number of wrapped layers."""
+    import torch
+
+    LoRALinear = _lora_linear_class()
+    n = 0
+    for name, module in list(model.named_modules()):
+        if not isinstance(module, torch.nn.Linear) or name.rsplit(".", 1)[-1] not in targets:
+            continue
+        parent_name, _, attr = name.rpartition(".")
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(parent, attr, LoRALinear(module, rank, alpha))
+        n += 1
+    return n
+
+
+def lora_state(model) -> dict[str, Any]:
+    return {k: v.detach().cpu() for k, v in model.state_dict().items() if ".lora_" in k}
+
+
+class _DinoFinetuneNet:
+    """Backbone (from the zoo) + feature head shared by the trainer and the inferencer."""
+
+    def __init__(self, ctx, backbone_id: str, method: str, n_classes: int, rank: int, alpha: float, backbone_dir=None):
+        import torch
+        from transformers import AutoImageProcessor, AutoModel
+
+        zoo_path = ctx.weight(backbone_id)
+        self.torch = torch
+        self.ctx = ctx
+        self.method = method
+        self.processor = AutoImageProcessor.from_pretrained(str(zoo_path), local_files_only=True)
+        src = backbone_dir if backbone_dir is not None else zoo_path
+        self.backbone = AutoModel.from_pretrained(str(src), local_files_only=True)
+        self.lora_layers = 0
+        if method == "lora":
+            self.lora_layers = inject_lora(self.backbone, rank, alpha)
+        if method != "full":
+            for name, p in self.backbone.named_parameters():
+                p.requires_grad_(".lora_" in name)
+        dim = int(self.backbone.config.hidden_size) * 2  # CLS + mean patch
+        self.head = torch.nn.Sequential(torch.nn.LayerNorm(dim), torch.nn.Linear(dim, n_classes))
+        self.backbone.to(ctx.device)
+        self.head.to(ctx.device)
+        self.feature_dim = dim
+
+    def pixels(self, paths: list[Path], augment: bool = False):
+        from PIL import Image, ImageOps
+
+        imgs = []
+        for p in paths:
+            im = Image.open(p).convert("RGB")
+            if augment and np.random.random() < 0.5:
+                im = ImageOps.mirror(im)
+            imgs.append(im)
+        return self.processor(images=imgs, return_tensors="pt")["pixel_values"].to(self.ctx.device)
+
+    def features(self, px):
+        h = self.backbone(pixel_values=px).last_hidden_state
+        return self.torch.cat([h[:, 0], h[:, 1:].mean(dim=1)], dim=1)
+
+    def train_mode(self, on: bool) -> None:
+        # a frozen backbone stays in eval (no dropout / drop-path noise) even while the head trains
+        self.backbone.train(on and self.method == "full")
+        self.head.train(on)
+
+    def trainable_parameters(self):
+        return [p for p in self.backbone.parameters() if p.requires_grad], list(self.head.parameters())
+
+    def embed(self, paths: list[Path], batch: int, progress=None) -> np.ndarray:
+        torch = self.torch
+        self.train_mode(False)
+        out = []
+        with torch.no_grad():
+            for k in range(0, len(paths), batch):
+                f = self.features(self.pixels(paths[k : k + batch]))
+                out.append(torch.nn.functional.normalize(f, dim=1).cpu().numpy())
+                if progress:
+                    progress(min(1.0, (k + batch) / max(1, len(paths))))
+        return np.concatenate(out) if out else np.zeros((0, self.feature_dim), np.float32)
+
+    def predict_proba(self, paths: list[Path], batch: int, progress=None) -> np.ndarray:
+        torch = self.torch
+        self.train_mode(False)
+        out = []
+        with torch.no_grad():
+            for k in range(0, len(paths), batch):
+                logits = self.head(self.features(self.pixels(paths[k : k + batch])))
+                out.append(torch.softmax(logits, dim=-1).cpu().numpy())
+                if progress:
+                    progress(min(1.0, (k + batch) / max(1, len(paths))))
+        return np.concatenate(out)
+
+
+class DinoFinetuneTrainer(BaseTrainer):
+    """Supervised fine-tuning of DINOv2 for image classification.
+
+    ``method``: ``linear`` trains only a head on frozen features (fast, needs ~10+ images per class),
+    ``lora`` adds low-rank adapters to the attention projections and trains them with the head (adapts the
+    features to the domain while the base weights stay untouched; artifact = adapters + head, a few MB),
+    ``full`` updates every parameter with a small ``backbone_lr`` (most capacity, most data and VRAM, artifact
+    = a whole backbone). Pretrained weights always come from the zoo (``ctx.weight``)."""
+
+    framework = "torch"
+    inference_modes = ["predict", "embed", "retrieve"]
+
+    def fit(self, ds: Dataset) -> None:
+        import torch
+
+        if not ds.has_labels:
+            raise ValueError("分類微調需要以類別命名的資料夾")
+        p = self.params
+        self.backbone_id = str(p.get("backbone", "dinov2-small"))
+        self.method = str(p.get("method", "lora"))
+        if self.method not in ("linear", "lora", "full"):
+            raise ValueError(f"method 必須是 linear / lora / full，不是 {self.method!r}")
+        self.rank = int(p.get("rank", 8))
+        self.alpha = float(p.get("lora_alpha", 2 * self.rank))
+        epochs = int(p.get("epochs", 15))
+        batch = int(p.get("batch", 16))
+        lr = float(p.get("lr", 1e-3))
+        backbone_lr = float(p.get("backbone_lr", 1e-5))
+        augment = bool(p.get("augment", True))
+        torch.manual_seed(int(p.get("seed", 42)))
+        np.random.seed(int(p.get("seed", 42)))
+
+        paths = [Path(x) for x in ds.X]
+        labels = np.asarray(ds.y).astype(str)
+        self.classes = sorted(set(labels.tolist()))
+        index = {c: i for i, c in enumerate(self.classes)}
+        y = np.array([index[v] for v in labels])
+        tr, va = holdout(len(paths), labels, "classification")
+        self.net = _DinoFinetuneNet(self.ctx, self.backbone_id, self.method, len(self.classes), self.rank, self.alpha)
+        bb_params, _head_params = self.net.trainable_parameters()
+        n_bb = sum(int(q.numel()) for q in bb_params)
+        info(
+            f"{self.family}: backbone={self.backbone_id} method={self.method} classes={len(self.classes)} "
+            f"train={len(tr)} val={len(va)} trainable backbone params={n_bb} "
+            f"(lora layers={self.net.lora_layers}) device={self.ctx.device}"
+        )
+        self.ctx.progress(0.02, "training")
+
+        best: tuple[float, dict[str, Any], dict[str, Any], int] | None = None
+        for attempt in range(2):
+            try:
+                best = self._train(paths, y, tr, va, epochs, batch, lr, backbone_lr, augment)
+                break
+            except torch.cuda.OutOfMemoryError:
+                if attempt == 1 or batch <= 1:
+                    raise
+                warn(f"{self.family}: CUDA out of memory with batch={batch} → retrying with {batch // 2}")
+                batch //= 2
+                torch.cuda.empty_cache()
+        assert best is not None
+        _, head_state, bb_state, best_epoch = best
+        self.net.head.load_state_dict(head_state)
+        if bb_state:
+            self.net.backbone.load_state_dict(bb_state, strict=False)
+        self.batch = batch
+        # reference bank (fine-tuned features of the training images) for retrieve mode
+        self.ref_emb = self.net.embed(paths, batch)
+        self.ref_labels, self.ref_ids = labels, np.asarray(ds.ids).astype(str)
+        self.meta.update(
+            {
+                "classes": self.classes,
+                "backbone": self.backbone_id,
+                "method": self.method,
+                "rank": self.rank if self.method == "lora" else None,
+                "lora_alpha": self.alpha if self.method == "lora" else None,
+                "feature_dim": self.net.feature_dim,
+                "best_epoch": best_epoch,
+                "train_per_class": dict(Counter(labels[tr].tolist())),
+            }
+        )
+        info(f"{self.family}: best epoch {best_epoch} " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
+
+    def _train(self, paths, y, tr, va, epochs, batch, lr, backbone_lr, augment):
+        import torch
+
+        net = self.net
+        bb_params, head_params = net.trainable_parameters()
+        groups = [{"params": head_params, "lr": lr}]
+        if bb_params:
+            groups.append({"params": bb_params, "lr": backbone_lr if self.method == "full" else lr})
+        opt = torch.optim.AdamW(groups, weight_decay=float(self.params.get("weight_decay", 0.01)))
+        steps = epochs * max(1, int(np.ceil(len(tr) / batch)))
+        sched = torch.optim.lr_scheduler.LambdaLR(
+            opt, lambda s: min(1.0, (s + 1) / max(1, int(0.1 * steps))) * max(0.05, 1 - s / steps)
+        )
+        loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
+        rng = np.random.default_rng(0)
+        cached = None
+        if self.method == "linear":  # frozen features never change: compute once, train the head on them
+            feats = []
+            with torch.no_grad():
+                net.train_mode(False)
+                for k in range(0, len(paths), batch):
+                    feats.append(net.features(net.pixels(paths[k : k + batch])).cpu())
+            cached = torch.cat(feats)
+        best = None
+        for epoch in range(1, epochs + 1):
+            net.train_mode(True)
+            order = rng.permutation(tr)
+            total = 0.0
+            for s in range(0, len(order), batch):
+                idx = order[s : s + batch]
+                yb = torch.as_tensor(y[idx]).to(self.ctx.device)
+                if cached is not None:
+                    logits = net.head(cached[idx].to(self.ctx.device))
+                else:
+                    logits = net.head(net.features(net.pixels([paths[i] for i in idx], augment=augment)))
+                loss = loss_fn(logits, yb)
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(head_params + bb_params, 1.0)
+                opt.step()
+                sched.step()
+                total += float(loss.detach()) * len(idx)
+                self.ctx.progress(0.02 + 0.9 * ((epoch - 1) + (s + len(idx)) / len(order)) / epochs, "training")
+            if cached is not None:
+                with torch.no_grad():
+                    net.train_mode(False)
+                    proba = torch.softmax(net.head(cached[va].to(self.ctx.device)), dim=-1).cpu().numpy()
+            else:
+                proba = net.predict_proba([paths[i] for i in va], batch)
+            preds = proba.argmax(axis=1)
+            self.metrics = M.classification(y[va], preds, proba)
+            ep = {"loss": total / max(1, len(order)), **self.metrics}
+            info(f"epoch {epoch}/{epochs} " + " ".join(f"{k}={v:.4f}" for k, v in ep.items()))
+            score = self.metrics.get("f1_macro", 0.0)
+            if best is None or score > best[0]:
+                head_state = {k: v.detach().cpu().clone() for k, v in net.head.state_dict().items()}
+                bb_state = (
+                    lora_state(net.backbone)
+                    if self.method == "lora"
+                    else {k: v.detach().cpu().clone() for k, v in net.backbone.state_dict().items()}
+                    if self.method == "full"
+                    else {}
+                )
+                best = (score, head_state, bb_state, epoch)
+            self.ctx.epoch(epoch, ep)
+        assert best is not None
+        self.metrics = {k: v for k, v in self.metrics.items()}
+        return best
+
+    def export(self, out: Path) -> list[ArtifactOut]:
+        import torch
+
+        model_dir = out / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(self.net.head.state_dict(), model_dir / "head.pt")
+        if self.method == "lora":
+            torch.save(lora_state(self.net.backbone), model_dir / "lora.pt")
+        elif self.method == "full":
+            self.net.backbone.save_pretrained(model_dir / "backbone")
+        np.savez_compressed(
+            model_dir / "reference.npz",
+            embeddings=self.ref_emb.astype(np.float32),
+            labels=np.asarray(self.ref_labels, dtype=str),
+            ids=np.asarray(self.ref_ids, dtype=str),
+        )
+        meta = {**self.meta, "metrics": self.metrics, "inference_modes": self.inference_modes}
+        (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
+        return [
+            ArtifactOut(
+                name=f"dino_{self.method}",
+                kind="model",
+                path="model",
+                framework=self.framework,
+                metrics=self.metrics,
+                metadata=meta,
+            )
+        ]
+
+
+class DinoFinetuneInferencer(BaseInferencer):
+    def load(self, model_path: Path, metadata: dict[str, Any]) -> None:
+        import torch
+
+        local = model_path / "metadata.json"
+        self.meta = {
+            **(json.loads(local.read_text(encoding="utf-8")) if local.exists() else {}),
+            **(metadata or {}),
+        }
+        self.classes = [str(c) for c in self.meta["classes"]]
+        method = str(self.meta.get("method", "lora"))
+        self.net = _DinoFinetuneNet(
+            self.ctx,
+            str(self.meta.get("backbone", "dinov2-small")),
+            method,
+            len(self.classes),
+            int(self.meta.get("rank") or 8),
+            float(self.meta.get("lora_alpha") or 16),
+            backbone_dir=model_path / "backbone" if method == "full" else None,
+        )
+        if method == "lora":
+            _missing, unexpected = self.net.backbone.load_state_dict(
+                torch.load(model_path / "lora.pt", map_location="cpu", weights_only=True), strict=False
+            )
+            if unexpected:
+                raise ValueError(f"LoRA 權重與骨幹不符：{unexpected[:3]}")
+        self.net.head.load_state_dict(torch.load(model_path / "head.pt", map_location="cpu", weights_only=True))
+        self.net.head.to(self.ctx.device)
+        ref = model_path / "reference.npz"
+        if ref.exists():
+            bank = np.load(ref, allow_pickle=False)
+            self.ref_emb, self.ref_labels, self.ref_ids = bank["embeddings"], bank["labels"], bank["ids"]
+        else:
+            self.ref_emb = None
+        self.batch = int(self.meta.get("batch", 16))
+        info(f"dino_finetune: loaded {method} head for {len(self.classes)} classes")
+
+    def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
+        out.mkdir(parents=True, exist_ok=True)
+        paths = [Path(x) for x in ds.X]
+        ids = ds.ids or [p.name for p in paths]
+        batch = int(options.get("batch", self.batch))
+        if mode == "embed":
+            emb = self.net.embed(paths, batch, progress=lambda f: self.ctx.progress(0.9 * f))
+            np.save(out / "embeddings.npy", emb)
+            rows = [{"id": i, "embedding": [round(float(v), 6) for v in e]} for i, e in zip(ids, emb, strict=True)]
+            return PredictResult(
+                rows,
+                {"mode": mode, "n": len(rows), "dim": int(emb.shape[1])},
+                [ArtifactOut(name="embeddings", kind="report", path="output/embeddings.npy", framework="torch")],
+            )
+        if mode == "retrieve":
+            if self.ref_emb is None:
+                raise ValueError("這個模型沒有參考影像庫，無法 retrieve")
+            k = int(options.get("k", 5))
+            emb = self.net.embed(paths, batch, progress=lambda f: self.ctx.progress(0.9 * f))
+            sims = emb @ self.ref_emb.T
+            rows = []
+            for n, i in enumerate(ids):
+                order = np.argsort(-sims[n])
+                rows.append(
+                    {
+                        "id": i,
+                        "max_similarity": float(sims[n][order[0]]),
+                        "most_similar": [
+                            {
+                                "id": str(self.ref_ids[j]),
+                                "label": str(self.ref_labels[j]),
+                                "similarity": round(float(sims[n][j]), 5),
+                            }
+                            for j in order[:k]
+                        ],
+                    }
+                )
+            return PredictResult(rows, {"mode": mode, "n": len(rows), "k": k})
+        proba = self.net.predict_proba(paths, batch, progress=lambda f: self.ctx.progress(0.9 * f))
+        reject = options.get("min_confidence")
+        rows = []
+        for n, i in enumerate(ids):
+            order = np.argsort(-proba[n])[:3]
+            pred = self.classes[int(order[0])]
+            conf = float(proba[n][order[0]])
+            if reject is not None and conf < float(reject):
+                pred = "unknown"
+            rows.append(
+                {
+                    "id": i,
+                    "prediction": pred,
+                    "confidence": conf,
+                    "top3": [
+                        {"class": self.classes[int(j)], "probability": round(float(proba[n][j]), 5)} for j in order
+                    ],
+                }
+            )
+        counts = Counter(r["prediction"] for r in rows)
+        return PredictResult(rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts)})

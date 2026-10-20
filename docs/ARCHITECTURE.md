@@ -294,6 +294,7 @@ GET    /jobs                                  最近任務（我參與的專案�
 GET    /capacity                              總資源池 + 已配置量（任何登入者；給精靈與首頁）
 POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sample、spec）→ steps / before / after + step_details（每步驟 warnings）+ warnings；TABULAR / TEXT 另有 rows_in / rows_out、columns_in / columns_out（每欄 dtype、missing、unique、min / max / mean、top）；GET /catalog/preprocess?data_type=
 GET    /jobs/{id}  POST /jobs/{id}/cancel     成員取消
+DELETE /jobs/{id}                             刪除已結束的任務（建立者 / maintainer 以上；連同 log、輸出、它產生的產物；模型還被推論任務引用 → 409 ARTIFACT_IN_USE）
 GET    /jobs/{id}/events(SSE；`Last-Event-ID` 續讀)  GET /jobs/{id}/logs（回 `last_event_id`）  GET /jobs/{id}/logs/download  GET /jobs/{id}/download  GET /jobs/{id}/artifacts
 GET    /projects/{slug}/artifacts  PATCH /artifacts/{id}(is_default)  GET /artifacts/{id}/download  DELETE /artifacts/{id}
 GET    /admin/overview                        待審申請數、佇列長度、執行中數、池使用率
@@ -302,7 +303,9 @@ GET    /admin/settings/resource-pool  PUT …   總資源池
 GET    /admin/queue                           queued + running 的統一列表（含專案、資源、等待時間）
 PUT    /admin/queue/order  POST /admin/queue/{id}/move
 POST   /admin/jobs/{id}/stop                  強制中斷（reason）
-DELETE /admin/jobs/{id}                       刪除 Job 與其產物 / log
+DELETE /admin/jobs/{id}                       刪除 Job 與其產物 / log（不受專案角色限制）
+GET    /admin/jobs                            所有專案的任務（含工具池、一次性推論；status / kind / project / user_id / q / ephemeral 篩選）
+POST   /admin/jobs/delete {job_ids}           整批刪除，刪不了的回 skipped + 原因
 GET    /admin/audit
 GET    /internal/jobs/{id}/spec  POST …/status  POST …/metrics  POST …/artifacts  POST …/result
 GET    /healthz  GET /readyz
@@ -316,6 +319,7 @@ GET    /healthz  GET /readyz
 - `POST /admin/gpus/{index}/reset`（superadmin）、`GET /admin/usage?range=1h|6h|24h|7d|30d`（admin 以上）
 - `POST /tools/uploads`、`GET /tools/uploads/{id}`、`POST /tools/uploads/{id}/preview`（即時）、`POST /tools/uploads/{id}/process`（→ 202 preprocess 任務）、`POST /tools/uploads/{id}/analyze`（→ 202 analysis 任務）、`DELETE /tools/uploads/{id}`、`GET /tools/pool`（工具池配額與我目前的任務數）、`GET /tools/jobs`（只回自己的；所有登入者）；`GET/PUT /admin/settings/tool-pool`（superadmin；含 `max_jobs_per_user`）；`GET /jobs/{id}/download` 對前處理結果交付一次即刪
 - 資源池多了 `gpu_share`；Job 多了 `requested_gpu_memory_mb`；`/admin/node` 的 GPU 多了 `job_ids`、`reserved_mb`、`processes`
+- 任務刪除：`DELETE /jobs/{id}`（建立者刪自己的、maintainer 以上刪專案內任何、admin 到處都行；工具池任務只有建立者與管理員）會連同產物一起刪，執行中（409 `JOB_ACTIVE`）與模型仍被推論任務引用（409 `ARTIFACT_IN_USE`）時拒絕；管理員的 `GET /admin/jobs` + `POST /admin/jobs/delete` 是「任務管理」頁（`/admin/jobs`）的跨專案列表與整批刪除
 
 ## 13. 部署（公司 Ubuntu GPU 伺服器，不連外網）
 

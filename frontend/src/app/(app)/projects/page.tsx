@@ -112,7 +112,7 @@ async function Projects({ searchParams }: { searchParams: Promise<{ status?: str
   return (
     <>
       <PageHeader
-        title="專案"
+        title="專案管理"
         description={
           admin
             ? "所有專案與申請：申請中的專案點進「申請」分頁審核、核准並設定配額。"
