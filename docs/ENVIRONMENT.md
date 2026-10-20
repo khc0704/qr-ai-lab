@@ -76,6 +76,7 @@
 |---|---|---|
 | `BACKEND_URL` | `http://localhost:8000` | Next.js 伺服器端打 FastAPI 的位址（瀏覽器不直接連；不含 `/ai-lab-api` 前綴） |
 | `NEXT_PUBLIC_BASE_PATH` | （空） | 網站的路徑前綴（正式 `/ai-lab`）；**build 與 `next start` 都要看到同一個值**（`next.config.ts` 在兩個時間點都讀它；systemd 的 EnvironmentFile 已涵蓋），改了要重跑 `install-03-frontend.sh`；`<Link>` / `redirect` 由 Next.js 自動加，手寫的 URL 走 `withBase()` |
+| `NEXT_DEV_ALLOWED_ORIGINS` | （空） | 只有 `npm run dev`：允許從這些主機（逗號分隔，可 `*.corp`）載入 dev 資源（HMR、overlay）；從別台機器瀏覽開發伺服器時必設，否則頁面不會 hydrate。production build 忽略 |
 | `AUTH_MODE` | `local` | 與 backend 一致 |
 | `AUTH_SECRET` | （keycloak 必填） | 加密 Auth.js session cookie（`openssl rand -base64 32`） |
 | `AUTH_URL` | （keycloak 必填） | 對外網址**含前綴**（`https://qrit.tsmc.com/ai-lab`）；Keycloak 的 redirect URI = `$AUTH_URL/api/auth/callback/keycloak` |

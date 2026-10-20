@@ -225,6 +225,7 @@ cd backend && .venv/bin/uvicorn app.main:app --reload   # 終端 1：API + 內�
 cd frontend && npm run dev                           # 終端 2：http://localhost:3000，superadmin / admin / user
 ```
 
+- **從別台機器瀏覽 `npm run dev`**（不是在開發機自己的瀏覽器）：Next.js 16 的 dev server 只把自己的資源（`/_next/*`：HMR websocket、dev overlay）給 localhost，別的來源會被 403 擋掉，而 Turbopack 的 client 在接不上 HMR 時**不會 hydrate**：頁面看得到但什麼都按不了、下拉選單沒有選項、表單沒反應。解法：`frontend/.env.local` 設 `NEXT_DEV_ALLOWED_ORIGINS=<那台機器用來連你的位址，例 192.168.1.20 或 devbox.local>`（逗號分隔，可用 `*.corp` 萬用字元），並用 `npm run dev -- -H 0.0.0.0` 讓它聽所有介面；或直接 `npm run dev -- -H 192.168.1.20`（`-H` 指定的主機名會自動被允許）。經 nginx 轉發也一樣要設（dev server 看到的 Origin 仍是那台機器的位址）。正式 build（`npm run build && npm run start`）沒有這個限制。
 - WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 cu126 的 torch。
 - 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6380/0`、`SCHEDULER_EMBEDDED=false`，`.venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed`，再開第三個終端 `.venv/bin/python -m app.scheduler`。
 - 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm；完整的四個終端寫在 7.1a。
@@ -736,6 +737,7 @@ docker compose -f /opt/qr-ai-lab/infra/docker-compose.yml --env-file /opt/qr-ai-
 
 ## 8. 常見問題
 
+- **頁面有畫面但什麼都按不了、下拉沒有選項、表單沒反應（只有從別台機器連 dev server 時）**：Next.js 16 擋掉非 localhost 來源的 `/_next/*`（dev server 終端會印「Blocked cross-origin request to Next.js dev resource /_next/hmr from "<ip>"」），client 沒 hydrate。設 `NEXT_DEV_ALLOWED_ORIGINS=<ip 或主機名>` 後重啟 `npm run dev -- -H 0.0.0.0`（§7.1）。
 - **`EADDRINUSE: 3000`**：有別的 dev server 在跑；`npm run dev -- -p 3001` 換 port，或關掉舊的。
 - **Node 版本太舊**：Next.js 16 需要 ≥ 20.9；`nvm install 22 && nvm use 22`。
 - **Turbopack 快取怪異**：`rm -rf frontend/.next` 後重跑。
