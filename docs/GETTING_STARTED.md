@@ -241,7 +241,7 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 
 ### 7.1a 開發模式 + MariaDB + Redis +（假或真的）Keycloak（WSL2 或 Ubuntu 都一樣）
 
-7.1 是最快的路（SQLite、內嵌排程器、本地帳號）。要在**不裝 systemd 服務、不用 nginx** 的情況下測正式拓樸（MariaDB、Redis、獨立排程器程序、Keycloak 登入），開四個終端：
+7.1 是最快的路（SQLite、內嵌排程器、本地帳號）。要在**不裝 systemd 服務**的情況下測正式拓樸（MariaDB、Redis、獨立排程器程序、Keycloak 登入；nginx 可選，見本節最後），開四個終端。開發環境沒有任何固定路徑或固定帳號：repo 放哪裡都可以（下面的 `cd backend` 都是相對 repo 根目錄）、全部用**你自己的帳號**跑（`systemd-run --user` 用的是你登入後的 user manager，不需要 linger）、`DATA_ROOT` 預設是 `backend/./data`、`TRAINER_DIR` 預設 `../trainer`，都不用改。§7.3 的 `/opt/qr-ai-lab`、`qrlab` 使用者、`/etc/qr-ai-lab/*.env` 只屬於正式環境的 systemd 服務。
 
 ```bash
 # 0. 一次性：MariaDB + Redis（Docker；WSL2 用 Docker Desktop 的 WSL integration）
@@ -273,6 +273,23 @@ cd frontend && npm run dev
 角色怎麼決定（兩種模式都一樣）：Keycloak **只提供身分**（`preferred_username`、email、姓名），角色存在我們的 `users.role`。第一次登入一律是 `user`；`SUPERADMIN_USERNAME` 指定的那個帳號登入時自動成為唯一的 superadmin；其他人要變成 admin 只能由 superadmin 在 `/admin/users` 指派（或 `python -m app.cli set-role`）。`KEYCLOAK_ROLE_MAP` 預設空，所以 token 裡的 realm / client role 完全不影響角色（假 Keycloak 的 `admin` 帳號登入後也是 `user`）；只有刻意設了 `KEYCLOAK_ROLE_MAP=qr-admin:admin` 之類的對應才會用 token 的 role 覆蓋，而且最多到 admin。
 
 切回本地帳號：兩邊 `AUTH_MODE=local`，backend `.venv/bin/python -m app.cli seed` 建 superadmin / admin / user。
+
+**可選：加上 nginx 路徑前綴（`http://localhost/ai-lab`）**，和正式環境一樣的 URL 結構，但服務仍是上面四個終端：
+
+```bash
+sudo apt install -y nginx-light
+sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/
+echo 'limit_req_zone $binary_remote_addr zone=qrlab_login:1m rate=10r/m;' | sudo tee /etc/nginx/conf.d/qrlab-zone.conf
+# 把 infra/nginx/qr-ai-lab.conf 裡的 location 區塊（含 large_client_header_buffers）貼進 /etc/nginx/sites-available/default 的 server { listen 80; … }
+sudo nginx -t && sudo systemctl reload nginx
+# 三個設定要跟著前綴走（改完重啟對應的終端）：
+#   backend/.env         ROOT_PATH=/ai-lab-api   CORS_ORIGINS=http://localhost
+#   frontend/.env.local  AUTH_URL=http://localhost/ai-lab   COOKIE_SECURE=0
+#   前端啟動改成 NEXT_PUBLIC_BASE_PATH=/ai-lab npm run dev   （basePath 是啟動時決定的；npm run build 也要帶同一個值）
+#   假 Keycloak 的 client redirect 不用改（它接受任何 redirect_uri）；真的 Keycloak 要登記 http://localhost/ai-lab/api/auth/callback/keycloak
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/ai-lab/login      # 200
+curl -s http://localhost/ai-lab-api/healthz                                 # {"status":"ok"}
+```
 
 ### 7.1b 開發（原生 Ubuntu 桌機 / 筆電；與 7.1 相同，只有 Docker 與 systemd 的來源不同）
 
