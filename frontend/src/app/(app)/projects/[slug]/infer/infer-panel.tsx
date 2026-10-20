@@ -28,6 +28,8 @@ export interface InferModel {
   inferenceModes: string[];
   gpuRequired: boolean;
   weightsReady: boolean;
+  /** op ids the model replays at inference (trained with preprocessing) */
+  preprocess: string[];
 }
 
 const ACCEPT: Record<DataType, string> = {
@@ -160,6 +162,12 @@ export function InferPanel({
               </label>
             ))}
           </div>
+          {model?.preprocess.length ? (
+            <p className="text-xs text-muted-foreground" data-testid="model-preprocess-note">
+              這個模型訓練時用了前處理，推論會自動套用同一組步驟：
+              <span className="ml-1 font-mono">{model.preprocess.join(" → ")}</span>；給原始資料就好。
+            </p>
+          ) : null}
           {model ? (
             <div className="grid gap-2">
               <Label htmlFor="infer-mode">推論模式</Label>

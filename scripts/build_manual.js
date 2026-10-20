@@ -229,7 +229,7 @@ const children = [
   h2("5.3 分類：類別固定、每類幾十張以上 → DINOv2 微調"),
   ...ul([
     "家族 vision.dino_finetune：真的訓練 DINOv2 做分類。config.method = linear 只訓練分類頭（最快）；lora 在注意力層加低秩轉接器一起訓練（SEM / TEM 這類和自然影像差很多的資料用這個，產物只有幾 MB）；full 全參數微調（每類上百張、顯示卡記憶體夠時）。",
-    "其他參數：epochs、lr、rank（LoRA 秩）、batch；自動模式會在 linear / lora 之間搜尋。推論 predict 回 prediction、confidence、top3（config.min_confidence 可讓低信心的回 unknown）；retrieve 找最像的訓練影像；embed 輸出特徵向量。",
+    "其他參數：epochs、lr、rank（LoRA 秩）、batch、augment（訓練時的隨機增強，自己挑：hflip、vflip、rotate90、crop、brightness、contrast；方向有意義的影像不要加翻轉 / 旋轉）；自動模式會在 linear / lora 之間搜尋。推論 predict 回 prediction、confidence、top3（config.min_confidence 可讓低信心的回 unknown）；retrieve 找最像的訓練影像；embed 輸出特徵向量。",
     "few-shot 與微調怎麼選：類別會一直增加、每類只有幾張 → few-shot；類別固定、每類幾十張以上、要更準 → 微調。",
   ]),
   h2("5.4 分類：類別固定、資料多 → YOLO 分類"),

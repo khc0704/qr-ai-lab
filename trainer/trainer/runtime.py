@@ -315,6 +315,13 @@ def _infer(spec: dict[str, Any], env: Env, ctx: Context, backend: Backend) -> tu
     out_dir = env.output_dir / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     res = inferencer.predict(ds, mode, spec["config"], out_dir)
+    if local.exists():
+        # a model produced by this run (e.g. few-shot `extend`) replays the same preprocessing as the one it extends:
+        # copy the fitted state next to it, or the next inference fails with "模型缺少前處理狀態檔"
+        for extra in res.extra_artifacts:
+            new_dir = env.output_dir / extra.path
+            if extra.kind == "model" and new_dir.is_dir() and not (new_dir / PREPROCESS_STATE_FILE).exists():
+                shutil.copy2(local, new_dir / PREPROCESS_STATE_FILE)
     for n, row in enumerate(res.rows):  # lets the result page map a row back to the sample in the input file
         if isinstance(row, dict):
             row.setdefault("row_index", n)

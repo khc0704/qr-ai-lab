@@ -148,7 +148,7 @@ families:
     inference_modes: [predict, embed, retrieve]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 20
-    defaults: { backbone: dinov2-small, method: lora, epochs: 15, lr: 0.001, rank: 8, lora_alpha: 16, batch: 16, backbone_lr: 0.00001, augment: true }
+    defaults: { backbone: dinov2-small, method: lora, epochs: 15, lr: 0.001, rank: 8, lora_alpha: 16, batch: 16, backbone_lr: 0.00001, augment: [hflip] }
     search_space:
       method: { type: categorical, choices: [linear, lora] }
       lr: { type: float, low: 0.0001, high: 0.01, log: true }
@@ -157,7 +157,7 @@ families:
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
-    sop: 真的訓練 DINOv2 做分類：linear 只訓練分類頭（最快、每類 10+ 張）、lora 在注意力層加低秩轉接器一起訓練（領域差異大時用；產物只有幾 MB）、full 全部參數微調（資料多、VRAM 夠時）。類別固定、每類有幾十張以上、few-shot 原型不夠準時選這個；類別會一直增加仍用 few-shot。
+    sop: 真的訓練 DINOv2 做分類：linear 只訓練分類頭（最快、每類 10+ 張）、lora 在注意力層加低秩轉接器一起訓練（領域差異大時用；產物只有幾 MB）、full 全部參數微調（資料多、VRAM 夠時）。類別固定、每類有幾十張以上、few-shot 原型不夠準時選這個；類別會一直增加仍用 few-shot。augment 自己挑（hflip、vflip、rotate90、crop、brightness、contrast），方向有意義的影像不要加翻轉 / 旋轉。
 
   vision.dino_patchcore:
     label: DINOv2 PatchCore 異常偵測

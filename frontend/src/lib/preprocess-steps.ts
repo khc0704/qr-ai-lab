@@ -206,3 +206,12 @@ export function cropFromSteps(steps: PreprocessStep[]): CropRect | null {
   };
   return { left: num("left", 0), top: num("top", 0), right: num("right", 1), bottom: num("bottom", 1) };
 }
+
+/** The op ids a trained model replays at inference (artifact metadata `preprocess`); empty when it has none. */
+export function modelPreprocessOps(metadata: Record<string, unknown> | undefined | null): string[] {
+  const steps = metadata?.preprocess;
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .map((s) => (s && typeof s === "object" ? (s as { op?: unknown }).op : undefined))
+    .filter((op): op is string => typeof op === "string");
+}

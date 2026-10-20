@@ -267,19 +267,25 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
         if not zoo_svc.family_ready(model_family):
             raise bad_request("WEIGHTS_MISSING", f"{model_family} 推論需要的預訓練權重不在模型庫，請管理員先匯入")
 
-    steps = body.input.spec.get("preprocess")
+    # A model trained with preprocessing replays its own fitted pipeline at inference (the state travels with the
+    # model dir), so steps sent along with an inference job are dropped rather than refused: whatever the wizard,
+    # a copied job or a client put there, the model's pipeline is the only correct one.
+    fixed_steps = (artifact.metadata_ or {}).get("preprocess") if artifact is not None else None
+    spec_in = dict(body.input.spec)
+    steps = spec_in.get("preprocess")
+    if steps and fixed_steps:
+        spec_in.pop("preprocess", None)
+        steps = None
     if steps:
-        if artifact is not None and (artifact.metadata_ or {}).get("preprocess"):
-            raise bad_request(
-                "PREPROCESS_FIXED_BY_MODEL", "此模型訓練時已內含前處理，推論會自動套用相同步驟，請移除 preprocess"
-            )
         try:
             qrlab_preprocess.validate(project.data_type, task_type, steps)
         except ValueError as e:
             raise bad_request("PREPROCESS_INVALID", str(e)) from e
 
     data_source: DataSource | None = None
-    input_doc: dict[str, Any] = {"kind": body.input.kind, "format": body.input.format, "spec": body.input.spec}
+    input_doc: dict[str, Any] = {"kind": body.input.kind, "format": body.input.format, "spec": spec_in}
+    if fixed_steps:
+        input_doc["preprocess_from_model"] = [str(st.get("op")) for st in fixed_steps if isinstance(st, dict)]
     if body.input.kind == "data_source":
         if not body.input.data_source_id:
             raise bad_request("DATA_SOURCE_REQUIRED", "請選擇資料來源")
@@ -288,7 +294,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
             raise not_found("DATA_SOURCE_NOT_FOUND", "找不到資料來源")
         input_doc["format"] = body.input.format or data_source.format
         input_doc["data_source_name"] = data_source.name
-        input_doc["spec"] = {**(data_source.default_spec or {}), **body.input.spec}
+        input_doc["spec"] = {**(data_source.default_spec or {}), **spec_in}
     elif body.input.kind == "upload":
         if not body.input.upload_id:
             raise bad_request("UPLOAD_REQUIRED", "請先上傳檔案")
@@ -335,7 +341,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
             "original_filename": up.original_filename,
             "size_bytes": up.size_bytes,
             "file": dst.name,
-            "spec": {**detected, **body.input.spec},
+            "spec": {**detected, **spec_in},
             # reproducibility: the upload is deleted when the job ends, the fingerprint is kept
             "fingerprint": {
                 "sha256": sha256,

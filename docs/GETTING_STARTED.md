@@ -227,7 +227,7 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 
 - WSL2 專屬：`/etc/wsl.conf` 加 `[boot]\nsystemd=true` 後 `wsl --shutdown`，排程器才能用 systemd cgroup（否則自動退到 subprocess + affinity + watchdog，功能一樣，只是記憶體上限靠 watchdog）；GPU 要 Windows 端的 NVIDIA driver（WSL 內不要另裝 driver），`nvidia-smi` 在 WSL 看得到就能用 cu126 的 torch。
 - 要測「兩個程序 + Redis + MariaDB」的正式拓樸：`docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`，backend `.env` 改 `DATABASE_URL=mariadb+asyncmy://…`、`REDIS_URL=redis://localhost:6380/0`、`SCHEDULER_EMBEDDED=false`，`.venv/bin/alembic upgrade head && .venv/bin/python -m app.cli seed`，再開第三個終端 `.venv/bin/python -m app.scheduler`。
-- 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm。
+- 要測 Keycloak：照 §5 第 5 點用假 Keycloak，或直接填公司的 realm；完整的四個終端寫在 7.1a。
 
 **WSL2 + Windows 的 Docker Desktop（MariaDB / Redis 跑在 Docker Desktop，其餘都在 WSL 內）**
 
@@ -238,6 +238,41 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 - 公司 image mirror / proxy：設在 Docker Desktop → Settings → Docker Engine（`registry-mirrors`）或 Resources → Proxies，不是 WSL 的 `/etc/docker/daemon.json`；`infra/.env` 的 `DOCKER_REGISTRY` 仍可用來指定完整的 mirror 前綴。
 - 資料存在 Docker Desktop 的 volume（`qr-ai-lab_mariadb-data`），不在 WSL distro 內；`docker compose … down -v` 才會刪。
 - 開 `systemd=true` 之後 Docker Desktop 的 WSL integration 照常運作，排程器就能用 systemd cgroup；GPU 走 Windows 端的 NVIDIA driver，Docker 完全不碰 GPU。
+
+### 7.1a 開發模式 + MariaDB + Redis +（假或真的）Keycloak（WSL2 或 Ubuntu 都一樣）
+
+7.1 是最快的路（SQLite、內嵌排程器、本地帳號）。要在**不裝 systemd 服務、不用 nginx** 的情況下測正式拓樸（MariaDB、Redis、獨立排程器程序、Keycloak 登入），開四個終端：
+
+```bash
+# 0. 一次性：MariaDB + Redis（Docker；WSL2 用 Docker Desktop 的 WSL integration）
+./infra/install-01-docker.sh && nano infra/.env && ./infra/install-01-docker.sh     # 或 docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
+# backend/.env 改成：
+#   DATABASE_URL=mariadb+asyncmy://qr:<MARIADB_PASSWORD>@localhost:3307/qr_ai_lab
+#   REDIS_URL=redis://localhost:6380/0
+#   SCHEDULER_EMBEDDED=false
+#   AUTH_MODE=keycloak   KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr   KEYCLOAK_CLIENT_ID=qr-ai-lab   SUPERADMIN_USERNAME=superadmin
+#   （真的 Keycloak：KEYCLOAK_ISSUER=https://<sso>/realms/<realm>、KEYCLOAK_CLIENT_ID=<client id>、SUPERADMIN_USERNAME=<你的帳號>）
+# frontend/.env.local 改成：
+#   AUTH_MODE=keycloak   AUTH_URL=http://localhost:3000   AUTH_SECRET=<openssl rand -base64 32>
+#   AUTH_KEYCLOAK_ID=qr-ai-lab   AUTH_KEYCLOAK_SECRET=dev-secret   AUTH_KEYCLOAK_ISSUER=http://127.0.0.1:8089/realms/qr
+#   （真的 Keycloak：三個 AUTH_KEYCLOAK_* 填公司的 client；redirect URI 要登記 http://localhost:3000/api/auth/callback/keycloak）
+cd backend && .venv/bin/alembic upgrade head && cd ..          # MariaDB 建表（keycloak 模式不 seed 本地帳號）
+
+# 1. 假 Keycloak（真的 Keycloak 就跳過這個終端）
+backend/.venv/bin/python scripts/fake_keycloak.py --port 8089 --realm qr --client qr-ai-lab --secret dev-secret
+# 2. API（沒有內嵌排程器）
+cd backend && .venv/bin/uvicorn app.main:app --reload
+# 3. 排程器（獨立程序，事件走 Redis）
+cd backend && .venv/bin/python -m app.scheduler
+# 4. 前端
+cd frontend && npm run dev
+```
+
+開 `http://localhost:3000/login` → 「使用公司帳號登入（Keycloak）」→ 假 Keycloak 的登入頁（帳號 `superadmin` / `admin` / `user` / `alice`，密碼隨便）→ 回首頁。檢查點：Dashboard 顯示排程器來自 Redis（不是 embedded）、`docker compose -f infra/docker-compose.yml --env-file infra/.env exec mariadb mariadb -uqr -p qr_ai_lab -e "select username, role from users"` 看得到登入後自動建立的帳號、`/admin/users` 能把 `user` 指派為管理員。
+
+角色怎麼決定（兩種模式都一樣）：Keycloak **只提供身分**（`preferred_username`、email、姓名），角色存在我們的 `users.role`。第一次登入一律是 `user`；`SUPERADMIN_USERNAME` 指定的那個帳號登入時自動成為唯一的 superadmin；其他人要變成 admin 只能由 superadmin 在 `/admin/users` 指派（或 `python -m app.cli set-role`）。`KEYCLOAK_ROLE_MAP` 預設空，所以 token 裡的 realm / client role 完全不影響角色（假 Keycloak 的 `admin` 帳號登入後也是 `user`）；只有刻意設了 `KEYCLOAK_ROLE_MAP=qr-admin:admin` 之類的對應才會用 token 的 role 覆蓋，而且最多到 admin。
+
+切回本地帳號：兩邊 `AUTH_MODE=local`，backend `.venv/bin/python -m app.cli seed` 建 superadmin / admin / user。
 
 ### 7.1b 開發（原生 Ubuntu 桌機 / 筆電；與 7.1 相同，只有 Docker 與 systemd 的來源不同）
 

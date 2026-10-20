@@ -75,7 +75,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
 | `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
 | `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base`；`k: 1 … 20` |
-| `vision.dino_finetune` | `backbone=dinov2-small, method=lora, epochs=15, lr=1e-3, rank=8, lora_alpha=16, batch=16, backbone_lr=1e-5, augment=true` | `method: linear / lora`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`；`epochs: 5 … 30`（`full` 只在手動模式） |
+| `vision.dino_finetune` | `backbone=dinov2-small, method=lora, epochs=15, lr=1e-3, rank=8, lora_alpha=16, batch=16, backbone_lr=1e-5, augment=[hflip]` | `method: linear / lora`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`；`epochs: 5 … 30`（`full` 只在手動模式）。`augment` 自選：`hflip / vflip / rotate90 / crop / brightness / contrast`（列表或逗號字串；`false` 關閉），每個 op 各以 0.5 機率套用 |
 | `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
 | `vision.image_quality` | `z_threshold=3.0, distance_percentile=99` | （無；compare 的 `effect_warn / effect_fail / alpha` 在推論 config 指定） |
 | `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2` |

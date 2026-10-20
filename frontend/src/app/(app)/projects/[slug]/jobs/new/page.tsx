@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { isApproved } from "@/lib/roles";
 import { getCatalog, getJob, getProject, listArtifacts, listDataSources, listPreprocessOps } from "@/lib/api";
+import { modelPreprocessOps } from "@/lib/preprocess-steps";
 import { NewJobWizard } from "./new-job-wizard";
 
 async function Wizard({
@@ -48,6 +49,7 @@ async function Wizard({
         family: m.modelFamily,
         isDefault: m.isDefault,
         inferenceModes: ((m.metadata?.inference_modes as string[] | undefined) ?? []) as string[],
+        preprocess: modelPreprocessOps(m.metadata),
       }))}
       catalog={catalog}
       ops={ops}

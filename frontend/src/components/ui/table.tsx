@@ -1,12 +1,36 @@
 "use client";
 
+// shadcn table with two additions every list in the app gets for free: a 「展開內容」toggle that lets
+// truncated cells wrap (long names, paths, file names), and drag handles on the header cells to resize columns.
 import * as React from "react";
+import { WrapText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({ className, children, ...props }: React.ComponentProps<"table">) {
+  const [wrap, setWrap] = React.useState(false);
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
-      <table data-slot="table" className={cn("w-full caption-bottom text-sm", className)} {...props} />
+    <div
+      data-slot="table-container"
+      data-wrap={wrap || undefined}
+      className="group/table relative w-full overflow-x-auto"
+    >
+      <table data-slot="table" className={cn("w-full caption-bottom text-sm", className)} {...props}>
+        {children}
+      </table>
+      <button
+        type="button"
+        aria-pressed={wrap}
+        aria-label={wrap ? "恢復單行顯示" : "展開內容（換行顯示被截斷的文字）"}
+        title={wrap ? "恢復單行顯示" : "展開內容"}
+        onClick={() => setWrap((w) => !w)}
+        className={cn(
+          "absolute top-1.5 right-1.5 z-10 inline-flex size-6 items-center justify-center rounded-md border border-border bg-card/90 text-muted-foreground shadow-xs backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+          wrap ? "text-brand-ink opacity-100" : "opacity-0 group-hover/table:opacity-100",
+        )}
+        data-testid="table-wrap-toggle"
+      >
+        <WrapText className="size-3.5" />
+      </button>
     </div>
   );
 }
@@ -42,16 +66,49 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   );
 }
 
-function TableHead({ className, ...props }: React.ComponentProps<"th">) {
+const MIN_COLUMN_PX = 48;
+
+/** Header cell with a drag handle on its right edge: dragging sets the column width (auto layout keeps it as a minimum). */
+function TableHead({ className, children, style, ...props }: React.ComponentProps<"th">) {
+  const ref = React.useRef<HTMLTableCellElement>(null);
+  const [width, setWidth] = React.useState<number | undefined>(undefined);
+  const onPointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
+    const th = ref.current;
+    if (!th) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    const move = (ev: PointerEvent) => setWidth(Math.max(MIN_COLUMN_PX, Math.round(startW + ev.clientX - startX)));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   return (
     <th
+      ref={ref}
       data-slot="table-head"
+      style={width === undefined ? style : { ...style, width, minWidth: width, maxWidth: width }}
       className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "relative h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}
-    />
+    >
+      {children}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖曳調整欄寬"
+        title="拖曳調整欄寬；雙擊恢復"
+        onPointerDown={onPointerDown}
+        onDoubleClick={() => setWidth(undefined)}
+        className="absolute top-0 right-0 h-full w-2 cursor-col-resize touch-none opacity-0 transition-opacity select-none group-hover/table:opacity-100 after:absolute after:top-2 after:bottom-2 after:left-[3px] after:w-px after:bg-border-strong hover:after:bg-primary"
+      />
+    </th>
   );
 }
 

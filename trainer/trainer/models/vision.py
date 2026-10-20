@@ -551,6 +551,7 @@ class DinoFewShotInferencer(BaseInferencer):
             **(metadata or {}),
         }
         self.dino = _Dino(self.ctx, str(self.meta.get("backbone", "dinov2-small")))
+        self.model_path = model_path
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
         out.mkdir(parents=True, exist_ok=True)
@@ -910,6 +911,51 @@ def _lora_linear_class():  # built lazily: torch is only imported inside the tra
     return LoRALinear
 
 
+AUGMENT_OPS = ("hflip", "vflip", "rotate90", "crop", "brightness", "contrast")
+
+
+def parse_augment(value: Any) -> tuple[str, ...]:
+    """``augment`` param → the ops to apply at train time. ``true`` = hflip only (the safe default for industrial
+    images), ``false`` / empty = none, a list or comma string picks from AUGMENT_OPS."""
+    if value is None or value is False:
+        return ()
+    if value is True:
+        return ("hflip",)
+    items = value.split(",") if isinstance(value, str) else list(value)
+    ops = tuple(str(v).strip().lower() for v in items if str(v).strip())
+    bad = [o for o in ops if o not in AUGMENT_OPS]
+    if bad:
+        raise ValueError(f"augment 不認得 {bad}，可用：{', '.join(AUGMENT_OPS)}")
+    return ops
+
+
+def augment_image(im, ops: tuple[str, ...]):
+    """Random train-time augmentation on a PIL image (each op fires with p=0.5, crop keeps 80–100% of the frame)."""
+    from PIL import ImageEnhance, ImageOps
+
+    rng = np.random
+    for op in ops:
+        if rng.random() >= 0.5:
+            continue
+        if op == "hflip":
+            im = ImageOps.mirror(im)
+        elif op == "vflip":
+            im = ImageOps.flip(im)
+        elif op == "rotate90":
+            im = im.rotate(90 * int(rng.integers(1, 4)), expand=True)
+        elif op == "crop":
+            w, h = im.size
+            f = float(rng.uniform(0.8, 1.0))
+            cw, ch = max(1, int(w * f)), max(1, int(h * f))
+            x0, y0 = int(rng.integers(0, w - cw + 1)), int(rng.integers(0, h - ch + 1))
+            im = im.crop((x0, y0, x0 + cw, y0 + ch))
+        elif op == "brightness":
+            im = ImageEnhance.Brightness(im).enhance(float(rng.uniform(0.8, 1.2)))
+        elif op == "contrast":
+            im = ImageEnhance.Contrast(im).enhance(float(rng.uniform(0.8, 1.2)))
+    return im
+
+
 def inject_lora(model, rank: int, alpha: float, targets: tuple[str, ...] = LORA_TARGETS) -> int:
     """Wrap every attention projection named in ``targets`` (DINOv2: q / k / v) with a LoRA adapter.
     Returns the number of wrapped layers."""
@@ -957,14 +1003,14 @@ class _DinoFinetuneNet:
         self.head.to(ctx.device)
         self.feature_dim = dim
 
-    def pixels(self, paths: list[Path], augment: bool = False):
-        from PIL import Image, ImageOps
+    def pixels(self, paths: list[Path], augment: tuple[str, ...] = ()):
+        from PIL import Image
 
         imgs = []
         for p in paths:
             im = Image.open(p).convert("RGB")
-            if augment and np.random.random() < 0.5:
-                im = ImageOps.mirror(im)
+            if augment:
+                im = augment_image(im, augment)
             imgs.append(im)
         return self.processor(images=imgs, return_tensors="pt")["pixel_values"].to(self.ctx.device)
 
@@ -1033,7 +1079,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         batch = int(p.get("batch", 16))
         lr = float(p.get("lr", 1e-3))
         backbone_lr = float(p.get("backbone_lr", 1e-5))
-        augment = bool(p.get("augment", True))
+        augment = parse_augment(p.get("augment", True))
         torch.manual_seed(int(p.get("seed", 42)))
         np.random.seed(int(p.get("seed", 42)))
 
@@ -1049,7 +1095,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         info(
             f"{self.family}: backbone={self.backbone_id} method={self.method} classes={len(self.classes)} "
             f"train={len(tr)} val={len(va)} trainable backbone params={n_bb} "
-            f"(lora layers={self.net.lora_layers}) device={self.ctx.device}"
+            f"(lora layers={self.net.lora_layers}) augment={list(augment) or 'none'} device={self.ctx.device}"
         )
         self.ctx.progress(0.02, "training")
 
@@ -1081,6 +1127,7 @@ class DinoFinetuneTrainer(BaseTrainer):
                 "rank": self.rank if self.method == "lora" else None,
                 "lora_alpha": self.alpha if self.method == "lora" else None,
                 "feature_dim": self.net.feature_dim,
+                "augment": list(augment),
                 "best_epoch": best_epoch,
                 "train_per_class": dict(Counter(labels[tr].tolist())),
             }

@@ -1,3 +1,4 @@
+import { Download } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -7,12 +8,15 @@ import { JobStatusBar } from "@/components/features/job-status-bar";
 import { PageSkeleton } from "@/components/features/skeletons";
 import { StatusBadge } from "@/components/features/status-badge";
 import { RelativeTime } from "@/components/features/time";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { inferenceModeLabel } from "@/i18n/zh-TW";
 import { getCatalog, getJob, getJobLog, getProject, getToolPoolStatus, listArtifacts, listJobsPage } from "@/lib/api";
 import { canCancelJob, canProject, isApproved, projectRole } from "@/lib/roles";
 import { getCurrentUser } from "@/lib/session";
+import { withBase } from "@/lib/base-path";
+import { modelPreprocessOps } from "@/lib/preprocess-steps";
 import { cn } from "@/lib/utils";
 import type { InferenceMode } from "@/types/domain";
 import { InferPanel, type InferModel } from "./infer-panel";
@@ -52,6 +56,7 @@ async function Infer({
       inferenceModes: ((m.metadata?.inference_modes as string[] | undefined) ?? fam?.inference_modes ?? []) as string[],
       gpuRequired: fam?.resources.gpu === "required",
       weightsReady: fam?.weights_ready !== false,
+      preprocess: modelPreprocessOps(m.metadata),
     };
   });
   const canCancel = current ? canCancelJob(role, user, current.createdBy.id) : false;
@@ -95,7 +100,26 @@ async function Infer({
             }
             results={
               current.result ? (
-                <JobResults result={current.result} job={current} />
+                <div className="space-y-4">
+                  {current.status === "succeeded" ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm">
+                      <span className="text-muted-foreground">
+                        完整結果（所有列）可下載為 CSV；{pool.resultTtlHours} 小時後連同這次推論一起清除。
+                      </span>
+                      <Button variant="outline" size="sm" asChild>
+                        <a
+                          href={withBase(`/api/download/jobs/${current.id}/download`)}
+                          download
+                          data-testid="infer-download"
+                        >
+                          <Download />
+                          下載結果（CSV）
+                        </a>
+                      </Button>
+                    </div>
+                  ) : null}
+                  <JobResults result={current.result} job={current} />
+                </div>
               ) : (
                 <p className="text-sm text-muted-foreground">推論完成後結果會顯示在這裡。</p>
               )

@@ -60,6 +60,8 @@ interface ModelInfo {
   family: string;
   isDefault: boolean;
   inferenceModes: string[];
+  /** op ids the model replays at inference (trained with preprocessing) */
+  preprocess?: string[];
 }
 
 type FieldKind = "string" | "number" | "boolean";
@@ -206,6 +208,8 @@ export function NewJobWizard({
     cloneFrom?.artifactId ?? models.find((m) => m.isDefault)?.id ?? models[0]?.id ?? null,
   );
   const selectedModel = models.find((m) => m.id === modelId);
+  // a model trained with preprocessing replays its own fitted pipeline: the wizard never sends steps for it
+  const modelSteps = isTrain ? [] : (selectedModel?.preprocess ?? []);
   const inferenceModes = (
     selectedModel?.inferenceModes.length ? selectedModel.inferenceModes : ["predict"]
   ) as InferenceMode[];
@@ -244,7 +248,7 @@ export function NewJobWizard({
         const parsed = coerceValue(v, kind);
         if (parsed !== undefined) specOut[k] = parsed;
       }
-      if (preprocess.length) specOut.preprocess = preprocess;
+      if (preprocess.length && modelSteps.length === 0) specOut.preprocess = preprocess;
       let rows: unknown[] | undefined;
       if (inputKind === "inline") {
         try {
@@ -689,6 +693,13 @@ export function NewJobWizard({
                 ))}
               </SelectContent>
             </Select>
+            {modelSteps.length ? (
+              <p className="text-xs text-muted-foreground" data-testid="model-preprocess-note">
+                這個模型訓練時用了前處理，推論會自動套用同一組步驟：
+                <span className="ml-1 font-mono">{modelSteps.join(" → ")}</span>
+                ；輸入原始資料即可，不用（也不能）再設定。
+              </p>
+            ) : null}
           </div>
         ) : null}
       </CardContent>
@@ -844,6 +855,12 @@ export function NewJobWizard({
               <dd>
                 {selectedModel ? `${selectedModel.name} v${selectedModel.version}` : "—"} ·{" "}
                 {inferenceModeLabel[effectiveMode as InferenceMode] ?? effectiveMode}
+              </dd>
+              <dt className="text-label">前處理</dt>
+              <dd className="font-mono text-xs">
+                {modelSteps.length
+                  ? `${modelSteps.join(" → ")}（模型內含，自動套用）`
+                  : preprocess.map((s) => s.op).join(" → ") || "無"}
               </dd>
             </>
           )}

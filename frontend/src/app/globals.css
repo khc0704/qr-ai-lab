@@ -264,3 +264,13 @@
   background-size: 200% 100%;
   animation: var(--animate-shimmer);
 }
+
+/* 7. Tables: 「展開內容」mode lets truncated cells wrap so nothing is hidden behind an ellipsis */
+[data-slot="table-container"][data-wrap] :is(td, th),
+[data-slot="table-container"][data-wrap] :is(td, th) :is(span, a, div, p, code, dd, dt) {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
