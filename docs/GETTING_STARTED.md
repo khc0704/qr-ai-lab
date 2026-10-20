@@ -110,7 +110,7 @@ REDIS_URL=redis://localhost:6380/0 .venv/bin/python -m app.scheduler
   1. 瀏覽器上傳（單檔權重如 YOLO `.pt`、TabPFN `.ckpt` 直接傳；Hugging Face snapshot 類型（DINOv2 / DINOv3、BERT、Qwen3 Embedding）傳整個資料夾的 zip）。
   2. 伺服器路徑：先把檔案放到 `MODEL_ZOO_IMPORT_ROOT`（NAS、USB 掛載點），頁面填相對路徑。
   3. 內網 URL：公司鏡像 / 檔案伺服器，主機要在 `MODEL_ZOO_ALLOWED_HOSTS`。
-- **所有權重的來源都是 Hugging Face Hub**（清單與授權在 `docs/MODEL_CATALOG.md` §9）。有網路的機器先 `pip install huggingface_hub pyyaml`，再用 `python3 scripts/fetch_model_zoo.py --dest ./model_zoo` 把全部抓好（`--only dinov2-small yolov8n` 可挑；DINOv3 是 gated 模型：先在 Hugging Face 的模型頁接受授權，`export HF_TOKEN=hf_…` 再執行），整個資料夾放到傳輸資料夾再逐一匯入，或直接複製到 `MODEL_ZOO_ROOT`（manifest 相容）。
+- **權重來源以 Hugging Face Hub 為主**（清單與授權在 `docs/MODEL_CATALOG.md` §9；YOLO 的 -seg / -cls 從 GitHub release）。有網路的機器先 `pip install huggingface_hub pyyaml`，再用 `python3 scripts/fetch_model_zoo.py --dest ./model_zoo` 把全部抓好（`--only dinov2-small yolov8n` 可挑、`--skip dinov3-vits16 dinov3-vitb16` 可略過；DINOv3 是 gated 模型：先在 Hugging Face 的模型頁接受授權，`export HF_TOKEN=hf_…` 再執行；失敗的檔會列在結尾，重跑只補缺的），整個資料夾放到傳輸資料夾再逐一匯入，或直接複製到 `MODEL_ZOO_ROOT`（manifest 相容）。
 - 權重缺少時：精靈的模型卡片會標「缺權重」，建立任務會被拒絕（`WEIGHTS_MISSING`）；AutoML 會自動跳過缺權重的候選（例如沒匯入 TabPFN 權重時表格 AutoML 就不試它）。sklearn / XGBoost / CatBoost / PLS / 影像品質 / 光譜 MAE 家族不需要權重。
 - 命令列檢查：`cd backend && .venv/bin/python -m app.cli model-zoo --verify`。
 

@@ -128,7 +128,7 @@
 ## 4. 預訓練權重政策（模型庫）
 
 - 伺服器上的 Job 子程序**離線**（`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`），不會從任何套件自動下載模型。
-- **所有權重都來自 Hugging Face Hub**（YOLO 從 `Ultralytics/YOLOv8`、DINOv2 / v3 從 `facebook/*`、BERT、Qwen3-Embedding、TabPFN 從 `Prior-Labs/tabpfn_2_5`；清單與授權見 `docs/MODEL_CATALOG.md` §9）。需要的權重清單在 `backend/app/catalog/model_catalog.yaml` 每個家族的 `weights`；管理員在**有網路的機器**執行
+- **權重以 Hugging Face Hub 為主**（YOLO 偵測版從 `Ultralytics/YOLOv8`、DINOv2 / v3 從 `facebook/*`、BERT、Qwen3-Embedding、TabPFN 從 `Prior-Labs/tabpfn_2_5`；YOLO 的 -seg / -cls 權重 Hugging Face 沒有，仍從 ultralytics 的 GitHub release 抓；清單與授權見 `docs/MODEL_CATALOG.md` §9）。需要的權重清單在 `backend/app/catalog/model_catalog.yaml` 每個家族的 `weights`；管理員在**有網路的機器**執行
   `python3 scripts/fetch_model_zoo.py --dest ./model_zoo`（DINOv3 是 gated：先在模型頁接受授權、`export HF_TOKEN=…`），把整個資料夾放到伺服器的 `MODEL_ZOO_ROOT`（預設 `DATA_ROOT/model_zoo`），
   再用 `.venv/bin/python -m app.cli model-zoo --verify` 或管理員頁「模型庫」確認。
 - sklearn / XGBoost / CatBoost / PLS / 影像品質基準沒有預訓練權重，直接訓練；`vision.yolo` 的 `pretrained=false` 也不需要權重。

@@ -134,6 +134,8 @@ families:
     sop: 只用正常（或大多正常）的表格資料找離群樣本，例如 WAT / PCM 參數異常。
 
   vision.yolo:
+    # detection weights come from the Hugging Face mirror (Ultralytics/YOLOv8); the -seg / -cls files are not
+    # hosted there, so they stay on the GitHub release the ultralytics package itself downloads from
     label: YOLO
     group: vision
     framework: ultralytics
@@ -151,10 +153,10 @@ families:
       - { id: yolov8n,     file: yolov8n.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
       - { id: yolov8s,     file: yolov8s.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
       - { id: yolov8m,     file: yolov8m.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8m.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
-      - { id: yolov8n-seg, file: yolov8n-seg.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n-seg.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
-      - { id: yolov8s-seg, file: yolov8s-seg.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s-seg.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
-      - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n-cls.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
-      - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s-cls.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8n-seg, file: yolov8n-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-seg.pt", license: AGPL-3.0, sha256: null, kind: file }
+      - { id: yolov8s-seg, file: yolov8s-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-seg.pt", license: AGPL-3.0, sha256: null, kind: file }
+      - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
+      - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
     sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。
 
   vision.dino_fewshot:

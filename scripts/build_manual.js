@@ -316,7 +316,7 @@ const children = [
     "佇列：看排隊與執行中的任務，置頂 / 上下移動重排；每次重排都寫稽核紀錄。",
     "強制中斷 / 重新執行 / 刪除（admin 以上）：任務頁與佇列頁都有。重新執行會用相同輸入與設定建立新任務（一次性上傳的任務除外，因為資料已經刪掉）。",
     "使用率歷史：節點實際用量、配置給任務的量、GPU 使用率與顯存、各專案占用；可切 1 小時到 30 天，分母可選專案配額 / 資源池 / 系統總量。",
-    "模型庫（superadmin 才能改）：列出目錄需要的預訓練權重與是否存在，三種帶進來的方式：瀏覽器上傳、伺服器路徑、內網 URL；訓練程序完全離線。所有權重的來源都是 Hugging Face Hub（YOLO：Ultralytics/YOLOv8；DINOv2 / v3：facebook；BERT；Qwen3-Embedding；TabPFN：Prior-Labs），有網路的機器用 scripts/fetch_model_zoo.py 一次抓齊（DINOv3 為 gated 模型，要先接受授權並設定 HF_TOKEN）。",
+    "模型庫（superadmin 才能改）：列出目錄需要的預訓練權重與是否存在，三種帶進來的方式：瀏覽器上傳、伺服器路徑、內網 URL；訓練程序完全離線。權重來源以 Hugging Face Hub 為主（YOLO 偵測版：Ultralytics/YOLOv8；DINOv2 / v3：facebook；BERT；Qwen3-Embedding；TabPFN：Prior-Labs；YOLO 的分割 / 分類權重 Hugging Face 沒有，從 ultralytics 的 GitHub release 抓），有網路的機器用 scripts/fetch_model_zoo.py 一次抓齊（DINOv3 為 gated 模型，要先接受授權並設定 HF_TOKEN，或用 --skip 略過）。",
     "專案申請審核（admin 以上）：專案列表以「申請中 / 審核中」篩選就是待審清單；在專案的「申請」分頁開始審核、核准（設定 GPU / CPU / 記憶體 / 儲存配額、同時執行上限與成員）或退回。工具池（superadmin）：所有人前處理 / 分析任務共用的配額與每人同時上限。",
     "刪專案（superadmin）：專案設定頁最下方，要輸入 slug 確認；有未結束任務時拒絕。刪討論串（admin 以上）：討論串頁的「刪除」。",
   ]),

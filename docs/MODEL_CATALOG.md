@@ -172,18 +172,19 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
 
 ## 9. 預訓練權重（模型庫）
 
-- **所有權重的來源都是 Hugging Face Hub**（`families.*.weights`：`id`、`file`、`source`、`license`、`sha256`、`kind: hf_repo | hf_file | file`）：
+- **權重來源以 Hugging Face Hub 為主**（`families.*.weights`：`id`、`file`、`source`、`license`、`sha256`、`kind: hf_repo | hf_file | file`）；唯一的例外是 YOLO 的分割 / 分類權重，Hugging Face 上沒有，仍從 ultralytics 的 GitHub release 抓：
 
-| 權重 | 來源（Hugging Face） | 授權 | 類型 |
+| 權重 | 來源 | 授權 | 類型 |
 |---|---|---|---|
-| `yolov8n/s/m`、`yolov8n/s-seg`、`yolov8n/s-cls` | `Ultralytics/YOLOv8`（`resolve/main/<file>.pt`） | AGPL-3.0 | `hf_file` |
+| `yolov8n/s/m` | Hugging Face `Ultralytics/YOLOv8`（`resolve/main/<file>.pt`） | AGPL-3.0 | `hf_file` |
+| `yolov8n/s-seg`、`yolov8n/s-cls` | GitHub `ultralytics/assets/releases/download/v8.1.0/<file>.pt`（Hugging Face 沒有這幾個檔） | AGPL-3.0 | `file` |
 | `dinov2-small`、`dinov2-base` | `facebook/dinov2-small`、`facebook/dinov2-base` | Apache-2.0 | `hf_repo` |
 | `dinov3-vits16`、`dinov3-vitb16` | `facebook/dinov3-vits16-pretrain-lvd1689m`、`facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 License（gated：先在模型頁接受授權，下載時要 `HF_TOKEN`） | `hf_repo` |
 | `bert-base-chinese`、`xlm-roberta-base` | `google-bert/bert-base-chinese`、`FacebookAI/xlm-roberta-base` | Apache-2.0 / MIT | `hf_repo` |
 | `qwen3-embedding-0.6b` | `Qwen/Qwen3-Embedding-0.6B` | Apache-2.0 | `hf_repo` |
 | `tabpfn-v2.5-classifier`、`tabpfn-v2.5-regressor` | `Prior-Labs/tabpfn_2_5`（`tabpfn-v2.5-*-v2.5_default.ckpt`） | Prior Labs License（Apache-2.0 加註明出處） | `hf_file` |
 
-- 伺服器不連外、trainer 不下載：管理員在 **管理 → 模型庫**（`/admin/model-zoo`）把權重帶進 `MODEL_ZOO_ROOT`，三種方式：瀏覽器上傳（單檔或 HF snapshot 的 zip）、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）；匯入時比對 `sha256`、寫 `manifest.json` 與稽核紀錄。有網路的機器用 `scripts/fetch_model_zoo.py --dest <資料夾>`（需要 `pip install huggingface_hub pyyaml`；`hf_repo` 走 `snapshot_download`、`hf_file` 走 `hf_hub_download`；gated 模型先 `export HF_TOKEN=hf_…`）整批抓好再放到傳輸資料夾。
+- 伺服器不連外、trainer 不下載：管理員在 **管理 → 模型庫**（`/admin/model-zoo`）把權重帶進 `MODEL_ZOO_ROOT`，三種方式：瀏覽器上傳（單檔或 HF snapshot 的 zip）、伺服器路徑（`MODEL_ZOO_IMPORT_ROOT`）、內網 URL（`MODEL_ZOO_ALLOWED_HOSTS`）；匯入時比對 `sha256`、寫 `manifest.json` 與稽核紀錄。有網路的機器用 `scripts/fetch_model_zoo.py --dest <資料夾>`（需要 `pip install huggingface_hub pyyaml`；`hf_repo` 走 `snapshot_download`、`hf_file` 走 `hf_hub_download`、`file` 走 urllib；gated 模型先 `export HF_TOKEN=hf_…`，還沒有 token 就 `--skip dinov3-vits16 dinov3-vitb16`；單一檔案失敗會列在結尾、其他照抓，重跑會跳過已存在的）整批抓好再放到傳輸資料夾。
   Job 子程序以 `MODEL_ZOO_ROOT` 直接讀取，runner 設定 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`。
 - `GET /api/v1/admin/model-zoo`、`.venv/bin/python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在；`GET /api/v1/catalog` 的 `weights_ready` 讓精靈標示缺權重的家族，建立任務時缺權重會被拒絕（`WEIGHTS_MISSING`）。
 - 新增需要權重的家族：先在 yaml 的 `weights` 登記，再實作 trainer（透過 `ctx.weight(id)` 取路徑，絕不自行下載）。

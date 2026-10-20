@@ -5,12 +5,16 @@ server's MODEL_ZOO_ROOT (default DATA_ROOT/model_zoo). The server itself never d
 
     python3 scripts/fetch_model_zoo.py --dest ./model_zoo               # download all
     python3 scripts/fetch_model_zoo.py --dest ./model_zoo --only yolov8s dinov2-small
+    python3 scripts/fetch_model_zoo.py --dest ./model_zoo --skip dinov3-vits16 dinov3-vitb16   # no HF token yet
     python3 scripts/fetch_model_zoo.py --dest /srv/qr-ai-lab/model_zoo --verify   # on the server, no network
 
-Every weight comes from the Hugging Face Hub: `kind: hf_repo` snapshots a whole repo (DINO, BERT, Qwen) and
-`kind: hf_file` downloads one file from a repo (YOLO .pt, TabPFN .ckpt). Needs PyYAML (the catalog is YAML) and
-`pip install huggingface_hub` — run it with backend/.venv/bin/python. Gated repos (DINOv3 asks you to accept its
-licence on the model page first) need a token: `export HF_TOKEN=hf_…` (or `huggingface-cli login`) before running.
+Weights come from the Hugging Face Hub where they are hosted: `kind: hf_repo` snapshots a whole repo (DINO,
+BERT, Qwen) and `kind: hf_file` downloads one file from a repo (YOLO detection .pt, TabPFN .ckpt); `kind: file`
+is a plain URL (the YOLO -seg / -cls files only exist on the ultralytics GitHub release). Needs PyYAML (the
+catalog is YAML) and `pip install huggingface_hub` — run it with backend/.venv/bin/python. Gated repos (DINOv3
+asks you to accept its licence on the model page first) need a token: `export HF_TOKEN=hf_…` (or
+`huggingface-cli login`) before running. A failed download is reported and the others continue; re-running
+skips files that are already there.
 """
 
 from __future__ import annotations
@@ -131,14 +135,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dest", required=True, type=Path, help="model zoo folder to fill / verify")
     ap.add_argument("--only", nargs="*", default=None, help="weight ids to process (default: all)")
+    ap.add_argument("--skip", nargs="*", default=(), help="weight ids to leave out (e.g. the gated dinov3-*)")
     ap.add_argument("--verify", action="store_true", help="no downloads: check files against manifest.json")
     args = ap.parse_args()
     dest: Path = args.dest
     dest.mkdir(parents=True, exist_ok=True)
     manifest_path = dest / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"weights": {}}
-    weights = [w for w in load_weights() if not args.only or w["id"] in args.only]
+    weights = [w for w in load_weights() if (not args.only or w["id"] in args.only) and w["id"] not in args.skip]
     problems = 0
+    failed: list[str] = []
     for w in weights:
         target = dest / w["file"].rstrip("/")
         print(f"[{w['id']}] {w['file']}  ({', '.join(w['families'])}; {w['license']})")
@@ -157,12 +163,21 @@ def main() -> int:
             continue
         if target.exists():
             print("  exists, skipping download")
-        elif w.get("kind") == "hf_repo":
-            download_hf_repo(w["source"], target)
-        elif w.get("kind") == "hf_file" or "huggingface.co/" in w["source"]:
-            download_hf_file(w["source"], target)
         else:
-            download_file(w["source"], target)
+            try:
+                if w.get("kind") == "hf_repo":
+                    download_hf_repo(w["source"], target)
+                elif w.get("kind") == "hf_file" or "huggingface.co/" in w["source"]:
+                    download_hf_file(w["source"], target)
+                else:
+                    download_file(w["source"], target)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:  # one broken source must not stop the other downloads
+                print(f"  FAILED: {type(e).__name__}: {str(e).splitlines()[0][:200]}")
+                failed.append(w["id"])
+                problems += 1
+                continue
         digest = sha256_of(target)
         if w.get("sha256") and digest != w["sha256"]:
             print(f"  WARNING checksum differs from catalog: {digest}")
@@ -179,6 +194,8 @@ def main() -> int:
         manifest["generated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
         manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"\nmanifest written: {manifest_path}")
+    if failed:
+        print(f"\nnot downloaded: {' '.join(failed)}  (fix the cause and re-run; finished files are kept)")
     if problems:
         print(f"\n{problems} problem(s)")
         return 1
