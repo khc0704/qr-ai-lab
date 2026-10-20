@@ -274,22 +274,26 @@ cd frontend && npm run dev
 
 切回本地帳號：兩邊 `AUTH_MODE=local`，backend `.venv/bin/python -m app.cli seed` 建 superadmin / admin / user。
 
-**可選：加上 nginx 路徑前綴（`http://localhost/ai-lab`）**，和正式環境一樣的 URL 結構，但服務仍是上面四個終端：
+**可選：加上 nginx 路徑前綴（`http://localhost/ai-lab`）**，和正式環境一樣的 URL 結構；服務仍是上面四個終端，只是前端改用 `/ai-lab` 的 basePath、後端改用 `/ai-lab-api` 的 ROOT_PATH。dev 用的 site 檔是一個完整、自給自足的檔案（`infra/nginx/qr-ai-lab-dev.conf`，含 Turbopack HMR 的 websocket 設定；正式環境才用 `qr-ai-lab.conf` + snippets）：
 
 ```bash
-sudo apt install -y nginx-light
-sudo cp infra/nginx/qr-ai-lab-proxy.conf /etc/nginx/snippets/
-echo 'limit_req_zone $binary_remote_addr zone=qrlab_login:1m rate=10r/m;' | sudo tee /etc/nginx/conf.d/qrlab-zone.conf
-# 把 infra/nginx/qr-ai-lab.conf 裡的 location 區塊（含 large_client_header_buffers）貼進 /etc/nginx/sites-available/default 的 server { listen 80; … }
+sudo apt install -y nginx
+sudo cp infra/nginx/qr-ai-lab-dev-http.conf /etc/nginx/conf.d/                 # http {} 層的 Upgrade 對應（HMR / SSE）
+sudo cp infra/nginx/qr-ai-lab-dev.conf /etc/nginx/sites-available/qr-ai-lab-dev
+sudo ln -sf /etc/nginx/sites-available/qr-ai-lab-dev /etc/nginx/sites-enabled/qr-ai-lab-dev
+sudo rm -f /etc/nginx/sites-enabled/default                                      # 它也占 80
 sudo nginx -t && sudo systemctl reload nginx
-# 三個設定要跟著前綴走（改完重啟對應的終端）：
+# 三個設定跟著前綴走（改完重啟對應的終端）：
 #   backend/.env         ROOT_PATH=/ai-lab-api   CORS_ORIGINS=http://localhost
 #   frontend/.env.local  AUTH_URL=http://localhost/ai-lab   COOKIE_SECURE=0
-#   前端啟動改成 NEXT_PUBLIC_BASE_PATH=/ai-lab npm run dev   （basePath 是啟動時決定的；npm run build 也要帶同一個值）
-#   假 Keycloak 的 client redirect 不用改（它接受任何 redirect_uri）；真的 Keycloak 要登記 http://localhost/ai-lab/api/auth/callback/keycloak
+#   前端啟動改成：cd frontend && NEXT_PUBLIC_BASE_PATH=/ai-lab npm run dev   （basePath 是啟動時決定的；之後 npm run build 也要帶同一個值）
+#   假 Keycloak 接受任何 redirect_uri，不用改；真的 Keycloak 要登記 http://localhost/ai-lab/api/auth/callback/keycloak
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/ai-lab/login      # 200
 curl -s http://localhost/ai-lab-api/healthz                                 # {"status":"ok"}
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/ai-lab-api/docs   # 200（Swagger；ROOT_PATH 正確才載得進來）
 ```
+
+瀏覽器開 `http://localhost/ai-lab/login`；WSL2 的 80 port 會自動轉到 Windows 的 localhost。`http://localhost/` 會導到 `/ai-lab/`。
 
 ### 7.1b 開發（原生 Ubuntu 桌機 / 筆電；與 7.1 相同，只有 Docker 與 systemd 的來源不同）
 
@@ -434,7 +438,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 **上線檢查**
 
-- `https://qrit.tsmc.com/ai-lab/login` → Keycloak → 回首頁；`https://qrit.tsmc.com/ai-lab-api/docs` 打得開。
+- `https://qrit.tsmc.com/ai-lab/login` → Keycloak → 回首頁；`https://qrit.tsmc.com/ai-lab-api/docs` 打得開。`curl -sI https://qrit.tsmc.com/ai-lab` 要是 307 到 `/ai-lab/login`（或登入後 200），不能是 301 到 `/ai-lab/`：nginx 不可以把 `/ai-lab` 轉成 `/ai-lab/`，Next.js 會再轉回來而形成無限重導向（範本已改成把 `/ai-lab` 原樣交給 Next.js）。
 - 以 `SUPERADMIN_USERNAME` 的帳號登入，Dashboard「任務執行方式」是 systemd 且記憶體 / CPU 都是 cgroup；資源池勾選要開放的 GPU；模型庫把權重帶進來。
 - dev 與 prod 的實質差異只有：帳號來源（本地 / Keycloak）、DB（SQLite / MariaDB）、排程器是否獨立程序（內嵌 / 獨立 + Redis）、runner（看 systemd 是否可用）、路徑前綴（無 / `/ai-lab`）。任務本身、權限判斷、資料不留存政策在兩邊完全一樣。
 
