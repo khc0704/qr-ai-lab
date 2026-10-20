@@ -11,6 +11,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog import loader
 from app.core.errors import bad_request, conflict, forbidden
 from app.db.base import utcnow
 from app.models import Comment, Project, ProjectMember, ProjectRequest, User
@@ -53,9 +54,24 @@ def _application(project: Project) -> ProjectRequest:
     return r
 
 
+def supported_tasks(data_type: str) -> list[str]:
+    """Tasks at least one model family can run on this data type (the catalog is the source of truth)."""
+    return [t for t in loader.load_catalog()["tasks"] if loader.families_for(data_type, t)]
+
+
+def check_task(data_type: str, task_type: str) -> None:
+    tasks = supported_tasks(data_type)
+    if task_type not in tasks:
+        raise bad_request(
+            "TASK_NOT_SUPPORTED",
+            f"{data_type} 沒有模型支援 {task_type}；可選：{', '.join(tasks)}",
+        )
+
+
 async def apply(session: AsyncSession, user: User, body: ProjectApplyBody, *, pool_gpu: int) -> Project:
     if body.requested_gpu > pool_gpu:
         raise bad_request("GPU_EXCEEDS_POOL", f"GPU 需求 {body.requested_gpu} 超過資源池 {pool_gpu}")
+    check_task(body.data_type, body.task_type)
     slug = await _unique_slug(session, body.proposed_slug or slugify(body.title))
     r = ProjectRequest(
         applicant_id=user.id,
@@ -103,6 +119,8 @@ async def update_application(session: AsyncSession, user: User, project: Project
     if project.status not in ("pending", "rejected"):
         raise conflict("REQUEST_NOT_EDITABLE", f"狀態 {project.status} 不能修改申請")
     data = body.model_dump(exclude_none=True)
+    if body.data_type is not None or body.task_type is not None:
+        check_task(body.data_type or project.data_type, body.task_type or project.task_type)
     if "members" in data:
         data["members"] = [m.model_dump() for m in body.members or []]
     for k, v in data.items():

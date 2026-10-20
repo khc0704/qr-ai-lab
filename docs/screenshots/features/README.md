@@ -12,3 +12,6 @@
 | `04-iqa-paired.png` | 有 `golden/` 參考資料夾時的「與參考影像逐張比對（全參考）」卡片（PSNR / SSIM / MS-SSIM / GMSD） |
 | `05-wizard-retrieve.png` | 建立推論任務精靈：同一組 retrieve 選項 |
 | `06-model-zoo.png` | 管理員「模型庫」：所有權重來源都是 Hugging Face Hub（snapshot 與單檔兩種類型） |
+| `07-apply-task-filter.png` | 專案申請：任務下拉只列出該資料類型有模型能做的（例：IMAGE 四種） |
+| `08-wizard-typed-params.png` | 建立任務精靈：`backbone` / `method` 是下拉（含 DINOv3），`augment` 是多選 |
+| `09-cell-expand.png` | 結果表格：被截斷的格子右側有「展開完整內容」切換，只展開那一格 |

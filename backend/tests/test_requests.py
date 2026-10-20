@@ -177,3 +177,23 @@ async def test_issue_and_comment_editing(client, admin, user, other):
     )
     r = await client.patch(f"/api/v1/issues/{iid}/comments/{system['id']}", json={"body": "x"}, headers=admin)
     assert r.status_code == 403 and r.json()["detail"]["code"] == "COMMENT_NOT_EDITABLE"
+
+
+async def test_task_must_be_supported_by_some_family(client, user):
+    """TEXT × detection has no model family → the application is refused, and so is editing one into it."""
+    body = {**REQUEST, "data_type": "TEXT", "task_type": "detection", "proposed_slug": "text-det"}
+    r = await client.post("/api/v1/projects", json=body, headers=user)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "TASK_NOT_SUPPORTED"
+    assert "classification" in r.json()["detail"]["message"]
+    ok = {**REQUEST, "data_type": "TEXT", "task_type": "anomaly_detection", "proposed_slug": "text-novelty"}
+    assert (await client.post("/api/v1/projects", json=ok, headers=user)).status_code == 201
+    r = await client.patch(
+        "/api/v1/projects/text-novelty/application", json={"task_type": "segmentation"}, headers=user
+    )
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "TASK_NOT_SUPPORTED"
+    r = await client.patch("/api/v1/projects/text-novelty/application", json={"data_type": "SEQUENCE"}, headers=user)
+    assert r.status_code == 200 and r.json()["data_type"] == "SEQUENCE"  # SEQUENCE × anomaly_detection exists
+    r = await client.patch(
+        "/api/v1/projects/text-novelty/application", json={"data_type": "IMAGE", "task_type": "detection"}, headers=user
+    )
+    assert r.status_code == 200 and r.json()["task_type"] == "detection"

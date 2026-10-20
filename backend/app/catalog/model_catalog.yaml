@@ -16,6 +16,7 @@ tasks:
   segmentation:      { label: 分割,     metrics: [mask_map50_95, mask_map50], direction: maximize, needs_labels: true }
   anomaly_detection: { label: 異常偵測, metrics: [auroc, f1],                direction: maximize, needs_labels: false }
 
+# augment_choices: train-time augmentation ops the wizard offers as a multi-select (defaults.augment = preselected)
 # inference_modes: what a trained artifact can be asked to do at inference time
 #   predict   → label / value per sample            detect / segment → boxes / masks
 #   score     → anomaly score + threshold verdict    embed → vector per sample
@@ -143,7 +144,8 @@ families:
     inference_modes: [detect, segment, predict]
     resources: { gpu: required, cpu_min: 4, memory_mb_min: 8192 }
     min_rows: 200
-    defaults: { model: yolov8s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true }
+    defaults: { model: yolov8s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true, augment: [hflip, crop, brightness] }
+    augment_choices: [hflip, vflip, rotate90, crop, brightness]
     search_space:
       model: { type: categorical, choices: [yolov8n, yolov8s, yolov8m] }
       imgsz: { type: categorical, choices: [512, 640, 800] }
@@ -187,6 +189,7 @@ families:
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 20
     defaults: { backbone: dinov2-small, method: lora, epochs: 15, lr: 0.001, rank: 8, lora_alpha: 16, batch: 16, backbone_lr: 0.00001, augment: [hflip] }
+    augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
     search_space:
       backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
       method: { type: categorical, choices: [linear, lora] }

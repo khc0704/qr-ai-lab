@@ -140,3 +140,29 @@ async def test_data_source_credentials_hidden_and_quota(client, admin, user, sup
     )
     assert r.status_code == 200 and r.json()["max_running_jobs"] == 1
     assert (await client.get("/api/v1/admin/overview", headers=superadmin)).json()["pool_gpu_total"] == 1
+
+
+def test_chosen_weight_must_be_in_the_zoo(monkeypatch):
+    """A family counts as ready when any alternative weight is present; the backbone / model a config picks
+    must itself be there (else the job would only fail inside the trainer)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app.services import jobs as jobs_svc
+
+    monkeypatch.setattr(jobs_svc.zoo_svc, "weight_present", lambda wid: wid in {"dinov2-small", "yolov8n-seg"})
+    check = jobs_svc._check_chosen_weight
+    check("vision.dino_fewshot", "classification", {})
+    check("vision.dino_fewshot", "classification", {"backbone": "dinov2-small"})
+    check("vision.yolo", "segmentation", {"model": "yolov8n"})
+    check("vision.yolo", "segmentation", {"model": "yolov8m", "pretrained": False})  # from scratch: no weight
+    check("tabular.xgboost", "regression", {"max_depth": 4})
+    with pytest.raises(HTTPException) as e:
+        check("vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16"})
+    assert e.value.detail["code"] == "WEIGHTS_MISSING" and "dinov3-vits16" in e.value.detail["message"]
+    with pytest.raises(HTTPException) as e:
+        check("vision.yolo", "detection", {"model": "yolov8n"})  # only the -seg file is present
+    assert e.value.detail["code"] == "WEIGHTS_MISSING"
+    with pytest.raises(HTTPException) as e:
+        check("vision.dino_finetune", "classification", {"backbone": "resnet50"})
+    assert e.value.detail["code"] == "WEIGHT_UNKNOWN"

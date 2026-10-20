@@ -73,6 +73,15 @@ export const inferenceModeLabel: Record<InferenceMode, string> = {
   extend: "新增類別（免重訓）",
 };
 
+export const augmentOpLabel: Record<string, string> = {
+  hflip: "水平翻轉",
+  vflip: "垂直翻轉",
+  rotate90: "旋轉 90°",
+  crop: "隨機裁切",
+  brightness: "亮度抖動",
+  contrast: "對比抖動",
+};
+
 export const retrieveOrderLabel: Record<RetrieveOrder, string> = {
   both: "最相似與最不相似都列",
   similar: "只找最相似",

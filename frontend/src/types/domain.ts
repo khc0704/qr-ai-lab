@@ -490,6 +490,8 @@ export interface CatalogFamily {
   max_rows?: number;
   defaults: Record<string, unknown>;
   search_space: Record<string, { type: string; low?: number; high?: number; log?: boolean; choices?: unknown[] }>;
+  /** train-time augmentation ops the wizard offers as a multi-select (defaults.augment = preselected) */
+  augment_choices?: string[];
   weights: string[];
   weights_ready?: boolean;
   sop: string;

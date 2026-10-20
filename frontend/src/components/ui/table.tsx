@@ -3,7 +3,7 @@
 // shadcn table with two additions every list in the app gets for free: a 「展開內容」toggle that lets
 // truncated cells wrap (long names, paths, file names), and drag handles on the header cells to resize columns.
 import * as React from "react";
-import { WrapText } from "lucide-react";
+import { ChevronsLeftRight, WrapText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function Table({ className, children, ...props }: React.ComponentProps<"table">) {
@@ -112,16 +112,69 @@ function TableHead({ className, children, style, ...props }: React.ComponentProp
   );
 }
 
-function TableCell({ className, ...props }: React.ComponentProps<"td">) {
+/** True when the cell, or something inside it, hides content behind an ellipsis. */
+function overflows(td: HTMLElement): boolean {
+  if (td.scrollWidth > td.clientWidth + 1) return true;
+  for (const el of td.querySelectorAll<HTMLElement>("span, div, a, code, p")) {
+    if (el.scrollWidth > el.clientWidth + 1) return true;
+  }
+  return false;
+}
+
+/** Body cell. A long value that is cut off gets a small toggle on its right edge that expands just this cell
+ *  (wrapped, full content); the table-level 「展開內容」toggle does the same for every cell at once. */
+function TableCell({ className, children, onMouseEnter, ...props }: React.ComponentProps<"td">) {
+  const ref = React.useRef<HTMLTableCellElement>(null);
+  const [overflowing, setOverflowing] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+  React.useEffect(() => {
+    const td = ref.current;
+    if (!td || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!td.dataset.expanded) setOverflowing(overflows(td));
+    });
+    ro.observe(td);
+    return () => ro.disconnect();
+  }, []);
+  const showToggle = overflowing || expanded;
   return (
     <td
+      ref={ref}
       data-slot="table-cell"
+      data-expanded={expanded || undefined}
+      onMouseEnter={(e) => {
+        if (!expanded) setOverflowing(overflows(e.currentTarget));
+        onMouseEnter?.(e);
+      }}
       className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "relative p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        showToggle && "pr-6",
         className,
       )}
       {...props}
-    />
+    >
+      {children}
+      {showToggle ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={expanded ? "收合這一格" : "展開完整內容"}
+          title={expanded ? "收合" : "展開完整內容"}
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((x) => !x);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className={cn(
+            "absolute top-1/2 right-0.5 z-10 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded border border-border bg-card text-muted-foreground shadow-xs hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+            expanded && "text-brand-ink",
+          )}
+          data-testid="cell-expand"
+        >
+          <ChevronsLeftRight className="size-3" />
+        </button>
+      ) : null}
+    </td>
   );
 }
 

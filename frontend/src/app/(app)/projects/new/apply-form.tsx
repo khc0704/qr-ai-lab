@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { BookOpen, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useEffect, useMemo, useTransition } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -50,18 +50,29 @@ export function ApplyForm({
   poolGpu,
   poolCpu,
   poolMemoryMb,
+  tasksByType,
   initial,
 }: {
   poolGpu: number;
   poolCpu: number;
   poolMemoryMb: number;
+  /** from `supportedTasks(catalog)` (lib/catalog.ts) */
+  tasksByType: Record<DataType, TaskType[]>;
   initial?: Project;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const app = initial?.application;
+  const formSchema = useMemo(
+    () =>
+      schema.superRefine((v, ctx) => {
+        if (!(tasksByType[v.dataType] ?? []).includes(v.taskType))
+          ctx.addIssue({ code: "custom", path: ["taskType"], message: `${v.dataType} 沒有模型支援這個任務` });
+      }),
+    [tasksByType],
+  );
   const form = useForm<Values>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       title: initial?.name ?? "",
       purpose: app?.purpose ?? "",
@@ -79,6 +90,12 @@ export function ApplyForm({
   });
   const members = useFieldArray({ control: form.control, name: "members" });
   const dataType = useWatch({ control: form.control, name: "dataType" });
+  const taskType = useWatch({ control: form.control, name: "taskType" });
+  const taskOptions = useMemo(() => tasksByType[dataType] ?? [], [tasksByType, dataType]);
+  useEffect(() => {
+    // switching the data type to one that cannot do the chosen task → fall back to its first supported task
+    if (taskOptions.length && !taskOptions.includes(taskType)) form.setValue("taskType", taskOptions[0]);
+  }, [taskOptions, taskType, form]);
   const chosen = useWatch({ control: form.control, name: "members" });
   const num = (field: { onChange: (v: number) => void }) => (e: React.ChangeEvent<HTMLInputElement>) =>
     field.onChange(Number(e.target.value));
@@ -344,13 +361,19 @@ export function ApplyForm({
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {(Object.keys(taskTypeLabel) as TaskType[]).map((k) => (
-                          <SelectItem key={k} value={k}>
-                            {taskTypeLabel[k]}
-                          </SelectItem>
-                        ))}
+                        {(Object.keys(taskTypeLabel) as TaskType[])
+                          .filter((k) => taskOptions.includes(k))
+                          .map((k) => (
+                            <SelectItem key={k} value={k}>
+                              {taskTypeLabel[k]}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
+                    <FormDescription>
+                      {dataTypeLabel[dataType]}可做：
+                      {taskOptions.map((t) => taskTypeLabel[t]).join("、") || "—"}
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

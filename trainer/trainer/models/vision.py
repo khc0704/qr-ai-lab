@@ -75,6 +75,31 @@ def _prepare_cls_folder(ds: Dataset, work_dir: Path) -> Path:
     return target
 
 
+# the shared `augment` ops → ultralytics training hyper-parameters (value when the op is on / off)
+YOLO_AUGMENT: dict[str, dict[str, tuple[float, float]]] = {
+    "hflip": {"fliplr": (0.5, 0.0)},
+    "vflip": {"flipud": (0.5, 0.0)},
+    "rotate90": {"degrees": (90.0, 0.0)},
+    "crop": {"scale": (0.5, 0.0), "translate": (0.1, 0.0)},
+    "brightness": {"hsv_v": (0.4, 0.0)},
+}
+
+
+def yolo_augment_kwargs(value: Any) -> dict[str, float]:
+    """``augment`` param (list / comma string / bool) → ultralytics kwargs; every op the family knows is set
+    explicitly so unchecking one really turns it off. Ops YOLO has no knob for (contrast) are ignored with a
+    warning."""
+    ops = parse_augment(value)
+    unknown = [o for o in ops if o not in YOLO_AUGMENT]
+    if unknown:
+        warn(f"yolo: augment {unknown} has no ultralytics equivalent, ignored")
+    out: dict[str, float] = {}
+    for op, knobs in YOLO_AUGMENT.items():
+        for key, (on, off) in knobs.items():
+            out[key] = on if op in ops else off
+    return out
+
+
 class YoloTrainer(BaseTrainer):
     framework = "ultralytics"
 
@@ -143,6 +168,10 @@ class YoloTrainer(BaseTrainer):
             # AMP off unless asked (config `amp: true`): ultralytics' AMP check wants to download a checkpoint
             "amp": bool(self.params.get("amp", False)) and ctx.device == "cuda",
         }
+        if "augment" in self.params:
+            aug = yolo_augment_kwargs(self.params["augment"])
+            info("yolo: augment " + ", ".join(f"{k}={v}" for k, v in aug.items()))
+            kwargs.update(aug)
         try:
             results = model.train(**kwargs)
         except RuntimeError as e:

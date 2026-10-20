@@ -189,6 +189,27 @@ def ephemeral_resources(project: Project, model_family: str) -> dict[str, Any]:
     }
 
 
+YOLO_WEIGHT_SUFFIX = {"segmentation": "-seg", "classification": "-cls"}
+
+
+def _check_chosen_weight(model_family: str, task_type: str | None, config: dict[str, Any]) -> None:
+    """A family is "ready" when any of its alternative weights is in the zoo; the one the config picked
+    (``backbone`` for DINO, ``model`` + task suffix for YOLO) must itself be there, or the job would only fail
+    inside the trainer."""
+    ids = {w["id"] for w in loader.family(model_family).get("weights", [])}
+    wanted: str | None = None
+    if config.get("backbone") is not None:
+        wanted = str(config["backbone"])
+    elif model_family == "vision.yolo" and config.get("model") is not None and config.get("pretrained", True):
+        wanted = f"{config['model']}{YOLO_WEIGHT_SUFFIX.get(task_type or '', '')}"
+    if wanted is None:
+        return
+    if wanted not in ids:
+        raise bad_request("WEIGHT_UNKNOWN", f"{model_family} 沒有 {wanted} 這個權重，可選：{', '.join(sorted(ids))}")
+    if not zoo_svc.weight_present(wanted):
+        raise bad_request("WEIGHTS_MISSING", f"權重 {wanted} 尚未匯入模型庫，請管理員在「模型庫」頁匯入")
+
+
 async def create(session: AsyncSession, actor: User, project: Project, body: JobCreate) -> Job:
     if project.status != "active":
         raise conflict("PROJECT_ARCHIVED", "專案已封存")
@@ -226,6 +247,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 raise bad_request(
                     "WEIGHTS_MISSING", f"{model_family} 需要的預訓練權重尚未匯入模型庫，請管理員在「模型庫」頁匯入"
                 )
+            _check_chosen_weight(model_family, task_type, body.config or {})
         else:
             try:
                 search = loader.automl_search(project.data_type, task_type, body.input.spec)

@@ -172,6 +172,14 @@ def family_ready(fid: str | None) -> bool:
     return True if not fid else families_ready().get(fid, True)
 
 
+def weight_present(weight_id: str) -> bool:
+    """A specific catalog weight (e.g. the backbone a job config picked) is in the zoo."""
+    try:
+        return _present(target_of(weight(weight_id)))
+    except KeyError:
+        return False
+
+
 # --- bringing files in ---------------------------------------------------------------------------
 
 

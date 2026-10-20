@@ -1,6 +1,7 @@
 // Server-rendered inference results: summary stats, the IQA "compare" verdict table, and the first
 // rows of predictions. Everything else is in the downloadable CSV / JSONL.
 import { PreviewTable } from "@/components/features/preview-table";
+import { ExpandableValue } from "@/components/features/expandable-value";
 import { VerdictBadge } from "@/components/features/verdict-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -76,8 +77,8 @@ export function JobResults({ result, job }: { result: Record<string, unknown>; j
               {summary.map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-3 border-b border-border/60 py-1">
                   <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="truncate text-right" title={cell(v)}>
-                    {cell(v)}
+                  <dd className="min-w-0 text-right">
+                    <ExpandableValue text={cell(v)} />
                   </dd>
                 </div>
               ))}

@@ -34,6 +34,16 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 
 ## 3. 任務類型
 
+資料類型 × 任務的組合由目錄決定：只有至少一個家族 `supports` 的組合才能申請專案（`POST /projects` 與修改申請對其他組合回 400 `TASK_NOT_SUPPORTED`，申請表單的任務下拉只列出可做的）。目前：
+
+| data_type | 可申請的任務 |
+|---|---|
+| TABULAR | classification、regression、anomaly_detection |
+| IMAGE | classification、detection、segmentation、anomaly_detection |
+| SEQUENCE | anomaly_detection |
+| TEXT | classification、anomaly_detection |
+| SPECTRUM | classification、regression、anomaly_detection |
+
 | task_type | 白話 | 需要標籤 | 主要指標（第一個為 AutoML 目標） |
 |---|---|---|---|
 | `classification` | 預測類別（良 / 不良、bin code） | 是 | `f1_macro`、`accuracy`、`auroc`（二元） |
@@ -79,7 +89,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.catboost` | `iterations=500, learning_rate=0.05, depth=6, l2_leaf_reg=3` | `iterations: 200 … 1000`；`learning_rate: log 0.01 … 0.3`；`depth: 4 … 10`；`l2_leaf_reg: log 1 … 10`。共用 GPU 時自動改 CPU（CatBoost 的 GPU 配置不受 torch 的記憶體比例限制） |
 | `tabular.tabpfn` | `n_estimators=auto` | `n_estimators: 1 / 4 / 8`（上下文集成數；越多越準越慢）。`ignore_pretraining_limits=true` 可超過預訓練上限（不建議） |
 | `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
-| `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150` |
+| `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true, augment=[hflip, crop, brightness]` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150`。`augment` 多選：`hflip / vflip / rotate90 / crop / brightness`（對應 ultralytics 的 `fliplr / flipud / degrees / scale+translate / hsv_v`，沒勾的設 0） |
 | `vision.dino_fewshot` | `backbone=dinov2-small, k=5, metric=cosine` | `backbone: dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`；`k: 1 … 20` |
 | `vision.dino_finetune` | `backbone=dinov2-small, method=lora, epochs=15, lr=1e-3, rank=8, lora_alpha=16, batch=16, backbone_lr=1e-5, augment=[hflip]` | `backbone: dinov2-small / dinov3-vits16`；`method: linear / lora`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`；`epochs: 5 … 30`（`full` 只在手動模式）。`augment` 自選：`hflip / vflip / rotate90 / crop / brightness / contrast`（列表或逗號字串；`false` 關閉），每個 op 各以 0.5 機率套用 |
 | `vision.dino_patchcore` | `backbone=dinov2-small, coreset_ratio=0.1, k=3` | `backbone: dinov2-small / dinov3-vits16`；`coreset_ratio: 0.02 … 0.3`；`k: 1 … 9` |
@@ -89,6 +99,8 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `spectrum.pls` | `n_components=10, scale=false` | `n_components: 2 … 30`（自動上限 = 波長數與列數 − 2；`scale=true` 會把每個波長標準化，光譜通常不需要） |
 | `text.bert_classifier` | `model=bert-base-chinese, max_len=256, lr=2e-5, epochs=3, batch=16` | `lr: log 1e-5 … 5e-5`；`epochs: 2 … 5`；`max_len: 128 / 256 / 512` |
 | `text.qwen_embedding` | `model=qwen3-embedding-0.6b, max_len=512, batch=16, C=1.0, instruction=""` | `C: log 0.01 … 100`（分類頭）；`max_len: 256 / 512 / 1024`。`instruction` 只在 retrieve 的查詢端加上（Qwen3-Embedding 的 `Instruct: …\nQuery: …` 格式），同類文字互比時留空 |
+
+精靈的參數欄位依目錄型別呈現：`search_space` 為 `categorical` 的（`backbone`、`model`、`method`、`kernel` …）是下拉選單、布林是 true / false、`augment` 是多選（家族的 `augment_choices`，`defaults.augment` 預先勾好）、其餘是文字框；留空 = 用預設。建立任務時後端會檢查 `backbone` / `model` 指到的權重真的在模型庫（否則 400 `WEIGHTS_MISSING`，不會等到任務跑起來才失敗）。
 
 共通：驗證集 = 20% 分層切分（分類）或隨機；異常偵測只用正常樣本訓練、異常樣本進驗證集；手動 Job 的 `config` 會覆蓋預設；
 AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial 抽到的參數（例如固定 `epochs`）。
@@ -212,6 +224,7 @@ families:
       mask_ratio: { type: float, low: 0.3, high: 0.75 }
       dim: { type: categorical, choices: [32, 64, 128] }
     weights: []            # 或 [{ id, file, source, license, sha256, kind }]
+    augment_choices: []    # 影像訓練家族才有：精靈多選的增強 op（defaults.augment 為預選）
     sop: 把光譜切 patch 隨機遮蔽再重建……
 automl:
   - data_type: SPECTRUM

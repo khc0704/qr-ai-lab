@@ -79,8 +79,9 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 ## 核心領域詞彙（程式碼與 DB 都用這些值）
 
 - `data_type`：`TABULAR | IMAGE | SEQUENCE | TEXT | SPECTRUM`
-- `task_type`：`classification | regression | detection | segmentation | anomaly_detection`
+- `task_type`：`classification | regression | detection | segmentation | anomaly_detection`；一個專案只能申請目錄裡至少一個家族支援的 data_type × task 組合（`services/applications.check_task` → 400 `TASK_NOT_SUPPORTED`；申請表單只列可做的任務）
 - `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.catboost | tabular.tabpfn | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_finetune | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | spectrum.pls | text.bert_classifier | text.qwen_embedding`
+- 精靈的手動參數依目錄型別呈現（categorical → 下拉、布林 → true / false、`augment` → 依家族 `augment_choices` 的多選、其餘文字框）；建任務時後端用 `_check_chosen_weight` 確認 `backbone` / `model` 指到的權重在模型庫
 - 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）；`retrieve` 另有 `config.order = similar | dissimilar | both` 與 `k`（共用元件 `components/features/retrieve-options.tsx`，trainer 端 `trainer/retrieval.py`）
 - 解釋圖：DINO 家族的 `predict` / `retrieve` 寫 `output/attention/<id>.png`（結果列 `attention`），影像品質基準寫 `output/maps/<id>.png`（結果列 `map` + `map_metric`）；都是 RGBA 疊圖（`trainer/viz.py`），由 `GET /jobs/{id}/output/{path}`（只允許 `output/` 下的圖片 / csv / json / npy）經前端 `/api/download/jobs/{id}/output/…` 代理，`SampleViewer` 疊在瀏覽器本地的原圖上；伺服器仍不存原圖
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）

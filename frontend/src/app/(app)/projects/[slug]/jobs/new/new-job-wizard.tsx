@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, ChevronLeft, ChevronRight, LoaderCircle, Rocket } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronLeft, ChevronRight, LoaderCircle, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -19,13 +19,21 @@ import { StatusBadge } from "@/components/features/status-badge";
 import { Stepper } from "@/components/features/stepper";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { dataTypeLabel, familyLabel, inferenceModeLabel, jobCopy, taskTypeLabel } from "@/i18n/zh-TW";
+import { augmentOpLabel, dataTypeLabel, familyLabel, inferenceModeLabel, jobCopy, taskTypeLabel } from "@/i18n/zh-TW";
 import { createJobAction, previewPreprocessAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -122,6 +130,135 @@ function coerceValue(v: string, kind: FieldKind, nullable = false): unknown {
   }
   if (kind === "boolean") return v === "true" ? true : v === "false" ? false : v;
   return v;
+}
+
+const DEFAULT_SENTINEL = "__default__";
+const AUGMENT_NONE = "none"; // the user unticked every op: sent as [] (an empty string would mean "use the default")
+
+/** `augment` list / comma string → the ops; "" (untouched) falls back to the family default. */
+function augmentOps(value: string | undefined, fallback: unknown): string[] {
+  if (value === AUGMENT_NONE) return [];
+  const raw = value
+    ? value
+    : Array.isArray(fallback)
+      ? fallback.join(",")
+      : typeof fallback === "string"
+        ? fallback
+        : "";
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** One hyper-parameter input: a select for categorical / boolean params, a multi-select for `augment`, a text
+ *  box otherwise. "" always means "use the catalog default". */
+function ParamField({
+  family,
+  name,
+  def,
+  value,
+  onChange,
+}: {
+  family: CatalogFamily | undefined;
+  name: string;
+  def: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const id = `p-${name}`;
+  const space = family?.search_space?.[name];
+  const choices = family?.augment_choices;
+  if (name === "augment" && choices?.length) {
+    const ops = augmentOps(value, family?.defaults?.augment);
+    const set = (op: string, on: boolean) => {
+      const next = choices.filter((c) => (c === op ? on : ops.includes(c)));
+      onChange(next.length ? next.join(",") : AUGMENT_NONE);
+    };
+    return (
+      <div className="grid gap-2">
+        <Label htmlFor={id}>{name}</Label>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              id={id}
+              type="button"
+              variant="outline"
+              className="h-9 w-full justify-between font-mono font-normal"
+              data-testid="augment-picker"
+            >
+              <span className="truncate">{ops.length ? ops.join(", ") : "（不做增強）"}</span>
+              <ChevronDown className="size-4 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuLabel>訓練時的隨機增強（各以 0.5 機率套用）</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {choices.map((op) => (
+              <DropdownMenuCheckboxItem
+                key={op}
+                checked={ops.includes(op)}
+                onCheckedChange={(on) => set(op, on === true)}
+                onSelect={(e) => e.preventDefault()}
+              >
+                <span className="font-mono">{op}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{augmentOpLabel[op] ?? ""}</span>
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <p className="text-[11px] text-muted-foreground">方向有意義的影像不要加翻轉 / 旋轉。</p>
+      </div>
+    );
+  }
+  const { kind } = paramKind(family, name);
+  const options: { value: string; label: string }[] | null =
+    space?.type === "categorical" && space.choices?.length
+      ? space.choices.map((c) => ({ value: String(c), label: String(c) }))
+      : kind === "boolean"
+        ? [
+            { value: "true", label: "true" },
+            { value: "false", label: "false" },
+          ]
+        : null;
+  if (options) {
+    return (
+      <div className="grid gap-2">
+        <Label htmlFor={id}>{name}</Label>
+        <Select value={value || DEFAULT_SENTINEL} onValueChange={(v) => onChange(v === DEFAULT_SENTINEL ? "" : v)}>
+          <SelectTrigger id={id} className="w-full font-mono" data-testid={`param-${name}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={DEFAULT_SENTINEL}>
+              <span className="font-mono">{def}</span>
+              <span className="ml-2 text-xs text-muted-foreground">預設</span>
+            </SelectItem>
+            {options
+              .filter((o) => o.value !== def)
+              .map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  <span className="font-mono">{o.label}</span>
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{name}</Label>
+      <Input
+        id={id}
+        className="font-mono"
+        inputMode={kind === "number" ? "decimal" : undefined}
+        placeholder={def}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
 }
 
 /** What type a hyper-parameter has: the search space's declared type first, then the default value's type. */
@@ -274,6 +411,10 @@ export function NewJobWizard({
       if (isTrain && mode === "manual") {
         const fam = catalog.families[family];
         for (const [k, v] of Object.entries(params)) {
+          if (k === "augment" && fam?.augment_choices?.length) {
+            if (v) config.augment = augmentOps(v, fam.defaults?.augment);
+            continue;
+          }
           const { kind, nullable } = paramKind(fam, k);
           const parsed = coerceValue(v, kind, nullable);
           if (parsed !== undefined) config[k] = parsed;
@@ -640,16 +781,14 @@ export function NewJobWizard({
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             {familyParams(family).map((p) => (
-              <div key={p.key} className="grid gap-2">
-                <Label htmlFor={`p-${p.key}`}>{p.key}</Label>
-                <Input
-                  id={`p-${p.key}`}
-                  className="font-mono"
-                  placeholder={p.def}
-                  value={params[p.key] ?? ""}
-                  onChange={(e) => setParams({ ...params, [p.key]: e.target.value })}
-                />
-              </div>
+              <ParamField
+                key={p.key}
+                family={catalog.families[family]}
+                name={p.key}
+                def={p.def}
+                value={params[p.key] ?? ""}
+                onChange={(v) => setParams({ ...params, [p.key]: v })}
+              />
             ))}
           </div>
         </CardContent>

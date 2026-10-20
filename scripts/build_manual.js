@@ -112,7 +112,7 @@ const children = [
   h2("1.2 從申請到推論的流程"),
   ...ol([
     "登入（過渡期為本地帳號；之後接公司 Keycloak）。",
-    "「專案申請」填題目、資料類型（TABULAR / IMAGE / SEQUENCE / TEXT / SPECTRUM）、任務類型、需要的 GPU / CPU / 記憶體 / 儲存。",
+    "「專案申請」填題目、資料類型（TABULAR / IMAGE / SEQUENCE / TEXT / SPECTRUM）、任務類型（下拉只列出該資料類型有模型能做的：表格與光譜可做分類 / 迴歸 / 異常偵測，影像可做分類 / 偵測 / 分割 / 異常偵測，序列只有異常偵測，文字是分類 / 異常偵測）、需要的 GPU / CPU / 記憶體 / 儲存。",
     "管理員審核：核准時指定專案代號（slug）、配額與成員，系統自動建立專案。",
     "專案 →「資料來源」：新增你自己的 MinIO / URL（只存連線資訊，憑證加密），或在建立任務時一次性上傳檔案。",
     "（可選）在上傳後選幾個資料前處理步驟，平台抽樣套用給你看前後對照。",
@@ -236,7 +236,7 @@ const children = [
   ]),
   h2("5.4 分類：類別固定、資料多 → YOLO 分類"),
   ...ul([
-    "家族 vision.yolo，task classification；config.model = yolov8n / s / m、imgsz、epochs；pretrained = true 從模型庫的 yolov8s-cls.pt 微調，false 從頭訓練。",
+    "家族 vision.yolo，task classification；config.model = yolov8n / s / m、imgsz、epochs；pretrained = true 從模型庫的 yolov8s-cls.pt 微調，false 從頭訓練。augment 是多選（hflip、vflip、rotate90、crop、brightness；預設 hflip + crop + brightness），偵測 / 分割任務也一樣。",
     "指標 accuracy、f1_macro；推論 predict 回 prediction、confidence、top5。",
   ]),
   h2("5.5 偵測與分割量測"),

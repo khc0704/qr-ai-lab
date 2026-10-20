@@ -7,6 +7,7 @@
 import { Eye, FileUp, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ExpandableValue } from "@/components/features/expandable-value";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -247,8 +248,11 @@ function KeyValues({ columns, values }: { columns: string[]; values: unknown[] }
           <dt className="truncate text-muted-foreground" title={c}>
             {c}
           </dt>
-          <dd className="truncate" title={String(values[i] ?? "")}>
-            {values[i] === null || values[i] === undefined || values[i] === "" ? "—" : String(values[i])}
+          <dd className="min-w-0">
+            <ExpandableValue
+              className="justify-start"
+              text={values[i] === null || values[i] === undefined || values[i] === "" ? "—" : String(values[i])}
+            />
           </dd>
         </div>
       ))}
