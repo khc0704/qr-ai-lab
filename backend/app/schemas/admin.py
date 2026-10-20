@@ -175,7 +175,7 @@ class ModelZooEntry(BaseModel):
     file: str
     license: str | None = None
     source: str | None = None
-    kind: str = "file"  # file | hf_repo
+    kind: str = "file"  # file (any single file) | hf_file (one file of a Hugging Face repo) | hf_repo (snapshot)
     present: bool
     status: str = "missing"  # present | missing | mismatch | importing | error
     size_bytes: int | None = None

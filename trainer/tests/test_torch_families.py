@@ -294,10 +294,12 @@ def test_dino_finetune_roundtrip(tmp_path, ctx, method):
     res = inf.predict(probe, "predict", {}, tmp_path / "pred")
     assert [r["prediction"] for r in res.rows] == ["BIN_A", "BIN_A", "BIN_B", "BIN_B"], res.rows
     assert len(res.rows[0]["top3"]) == 2 and res.summary["class_counts"] == {"BIN_A": 2, "BIN_B": 2}
+    assert res.rows[0]["attention"] == "attention/a0.png" and (tmp_path / "pred" / "attention" / "a0.png").exists()
     res = inf.predict(probe, "predict", {"min_confidence": 1.01}, tmp_path / "pred")
     assert {r["prediction"] for r in res.rows} == {"unknown"}
     res = inf.predict(probe, "retrieve", {"k": 2}, tmp_path / "pred")
     assert res.rows[0]["most_similar"][0]["label"] == "BIN_A" and len(res.rows[0]["most_similar"]) == 2
+    assert res.rows[0]["neighbors"] == res.rows[0]["most_similar"] and res.rows[0]["attention"]
     res = inf.predict(probe, "embed", {}, tmp_path / "pred")
     assert len(res.rows[0]["embedding"]) == 64 and (tmp_path / "pred" / "embeddings.npy").exists()
     if method == "lora":
@@ -306,3 +308,176 @@ def test_dino_finetune_roundtrip(tmp_path, ctx, method):
 
         m = AutoModel.from_pretrained(str(zoo / "dinov2-small"), local_files_only=True)
         assert inject_lora(m, 2, 4.0) == 3
+
+
+def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16") -> None:
+    """A DINOv3-shaped backbone: 4 register tokens between CLS and the patches, patch size 16."""
+    from transformers import BitImageProcessor, DINOv3ViTConfig, DINOv3ViTModel
+
+    d = zoo / name
+    d.mkdir(parents=True)
+    cfg = DINOv3ViTConfig(
+        hidden_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=64,
+        image_size=64,
+        patch_size=16,
+        num_register_tokens=4,
+    )
+    DINOv3ViTModel(cfg).save_pretrained(d)
+    BitImageProcessor(size={"shortest_edge": 64}, crop_size={"height": 64, "width": 64}).save_pretrained(d)
+
+
+def test_dinov3_register_tokens_attention_and_retrieve_order(tmp_path, ctx):
+    pytest.importorskip("transformers")
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    from trainer.models.vision import _Dino
+
+    zoo = tmp_path / "zoo"
+    _tiny_dino3(zoo)
+    ctx.zoo = resolver(zoo, {"dinov3-vits16": "dinov3-vits16/"})
+    dino = _Dino(ctx, "dinov3-vits16")
+    assert dino.n_special == 5  # CLS + 4 registers are not part of the spatial grid
+    root = tmp_path / "imgs"
+    a = _images(root, "BIN_A", 6, "dark", 1)
+    b = _images(root, "BIN_B", 6, "bright", 2)
+    _, patches = dino.embed(a[:2], patches=True)
+    assert patches.shape[1] == 16  # (64 / 16)² patches, registers skipped
+    ds = Dataset(
+        "IMAGE", "classification", {}, X=a + b, y=["BIN_A"] * 6 + ["BIN_B"] * 6, ids=[p.name for p in a + b], root=root
+    )
+    t = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16", "k": 3}, ctx)
+    t.fit(ds)
+    arts = t.export(tmp_path / "out")
+    inf = registry.create_inferencer("vision.dino_fewshot", ctx)
+    inf.load(tmp_path / "out" / "model", arts[0].metadata)
+    probe = Dataset("IMAGE", "classification", {}, X=a[:1] + b[:1], ids=["q/a0.png", "q/b0.png"], root=root)
+    out = tmp_path / "pred"
+    res = inf.predict(probe, "predict", {}, out)
+    assert [r["prediction"] for r in res.rows] == ["BIN_A", "BIN_B"]
+    assert res.rows[0]["attention"] == "attention/q__a0.png" and (out / "attention" / "q__a0.png").exists()
+    overlay = Image.open(out / "attention" / "q__a0.png")
+    assert overlay.mode == "RGBA" and overlay.size == (64, 64)
+    # retrieve: the caller picks the direction; the overlay follows the chosen neighbour
+    res = inf.predict(probe, "retrieve", {"k": 2, "order": "dissimilar"}, tmp_path / "ret")
+    assert "least_similar" in res.rows[0] and "most_similar" not in res.rows[0]
+    assert res.rows[0]["neighbors"][0]["label"] == "BIN_B" and res.summary["order"] == "dissimilar"
+    assert (tmp_path / "ret" / "attention" / "q__a0.png").exists()
+    res = inf.predict(probe, "retrieve", {"k": 2, "order": "similar", "attention": False}, tmp_path / "ret2")
+    assert res.rows[0]["neighbors"][0]["label"] == "BIN_A" and "attention" not in res.rows[0]
+    assert not (tmp_path / "ret2" / "attention").exists()
+    with pytest.raises(ValueError):
+        inf.predict(probe, "retrieve", {"order": "sideways"}, tmp_path / "ret3")
+
+
+def _tiny_qwen(zoo: Path, texts: list[str], name: str = "qwen3-embedding-0.6b") -> None:
+    """A character-level Qwen3 (hidden 32) saved like a Hugging Face snapshot: left-padding tokenizer + model."""
+    from tokenizers import Regex, Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
+
+    d = zoo / name
+    d.mkdir(parents=True)
+    chars = sorted({ch for t in texts for ch in t})
+    vocab = {"<|endoftext|>": 0, "<unk>": 1, **{c: i + 2 for i, c in enumerate(chars)}}
+    tok = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
+    tok.pre_tokenizer = pre_tokenizers.Split(Regex("."), "isolated")
+    PreTrainedTokenizerFast(
+        tokenizer_object=tok,
+        pad_token="<|endoftext|>",
+        eos_token="<|endoftext|>",
+        unk_token="<unk>",
+        padding_side="left",
+    ).save_pretrained(d)
+    cfg = Qwen3Config(
+        vocab_size=len(vocab),
+        hidden_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+        intermediate_size=64,
+        max_position_embeddings=64,
+    )
+    Qwen3Model(cfg).save_pretrained(d)
+
+
+def test_qwen_embedding_classification_retrieve_and_embed(tmp_path, ctx):
+    pytest.importorskip("transformers")
+    import pandas as pd
+
+    alarms = ["機台溫度過高警報", "晶圓破片停機", "真空度異常警報", "冷卻水流量不足"]
+    infos = ["例行保養完成", "批次作業正常結束", "配方更新完成", "每日點檢正常"]
+    texts = [t + str(i % 5) for i in range(6) for t in alarms] + [t + str(i % 5) for i in range(6) for t in infos]
+    labels = ["alarm"] * (6 * 4) + ["info"] * (6 * 4)
+    zoo = tmp_path / "zoo"
+    _tiny_qwen(zoo, texts)
+    ctx.zoo = resolver(zoo, {"qwen3-embedding-0.6b": "qwen3-embedding-0.6b/"})
+    ds = Dataset(
+        "TEXT", "classification", {}, X=pd.Series(texts), y=pd.Series(labels), ids=[f"t{i}" for i in range(len(texts))]
+    )
+    t = registry.create_trainer("text.qwen_embedding", "classification", {"max_len": 16, "batch": 8}, ctx)
+    t.fit(ds)
+    assert "f1_macro" in t.evaluate() and t.inference_modes == ["predict", "retrieve", "embed"]
+    t.finalize(ds)
+    arts = t.export(tmp_path / "out")
+    model_dir = tmp_path / "out" / "model"
+    assert (model_dir / "reference.npz").exists() and (model_dir / "head.joblib").exists()
+    assert arts[0].metadata["dim"] == 32 and arts[0].metadata["base"] == "qwen3-embedding-0.6b"
+    # the artifact holds no backbone: the inferencer loads it from the zoo again
+    inf = registry.create_inferencer("text.qwen_embedding", ctx)
+    inf.load(model_dir, arts[0].metadata)
+    q = Dataset("TEXT", "classification", {}, X=pd.Series(["溫度警報", "保養完成"]), ids=["a", "b"])
+    res = inf.predict(q, "predict", {}, tmp_path / "p1")
+    assert {r["prediction"] for r in res.rows} <= {"alarm", "info"} and "proba_alarm" in res.rows[0]
+    res = inf.predict(q, "predict", {"min_confidence": 1.01}, tmp_path / "p1b")
+    assert {r["prediction"] for r in res.rows} == {"unknown"}
+    res = inf.predict(q, "embed", {}, tmp_path / "p2")
+    assert len(res.rows[0]["embedding"]) == 32 and (tmp_path / "p2" / "embeddings.npy").exists()
+    assert abs(np.linalg.norm(res.rows[0]["embedding"]) - 1) < 1e-3
+    res = inf.predict(q, "retrieve", {"order": "dissimilar", "k": 3}, tmp_path / "p3")
+    row = res.rows[0]
+    assert "least_similar" in row and "most_similar" not in row and len(row["neighbors"]) == 3
+    assert row["neighbors"][0]["label"] in ("alarm", "info") and res.summary["order"] == "dissimilar"
+    assert res.summary["reference_size"] == len(texts) and len(res.summary["most_novel"]) == 2
+    res = inf.predict(q, "retrieve", {"reference": "self", "k": 1}, tmp_path / "p4")
+    assert res.rows[0]["most_similar"][0]["id"] == "b" and res.rows[1]["most_similar"][0]["id"] == "a"
+    with pytest.raises(ValueError, match="order"):
+        inf.predict(q, "retrieve", {"order": "nearest"}, tmp_path / "p5")
+
+
+def test_qwen_embedding_novelty_scores(tmp_path, ctx):
+    pytest.importorskip("transformers")
+    import pandas as pd
+
+    normal = [f"例行保養完成 第{i}次" for i in range(30)]
+    odd = ["真空幫浦起火 緊急停機", "冷卻水大量外漏"]
+    zoo = tmp_path / "zoo"
+    _tiny_qwen(zoo, normal + odd)
+    ctx.zoo = resolver(zoo, {"qwen3-embedding-0.6b": "qwen3-embedding-0.6b/"})
+    ds = Dataset(
+        "TEXT",
+        "anomaly_detection",
+        {},
+        X=pd.Series(normal + odd),
+        y=pd.Series(["normal"] * 30 + ["odd"] * 2),
+        ids=[str(i) for i in range(32)],
+    )
+    t = registry.create_trainer("text.qwen_embedding", "anomaly_detection", {"max_len": 16}, ctx)
+    t.fit(ds)
+    m = t.evaluate()
+    assert m["threshold"] >= 0 and t.inference_modes == ["score", "retrieve", "embed"]
+    arts = t.export(tmp_path / "out")
+    assert not (tmp_path / "out" / "model" / "head.joblib").exists()
+    inf = registry.create_inferencer("text.qwen_embedding", ctx)
+    inf.load(tmp_path / "out" / "model", arts[0].metadata)
+    res = inf.predict(
+        Dataset("TEXT", None, {}, X=pd.Series([normal[0], odd[0]]), ids=["n", "o"]), "score", {}, tmp_path / "s"
+    )
+    assert res.summary["mode"] == "score" and res.rows[0]["anomaly_score"] <= res.rows[1]["anomaly_score"]
+    assert {"anomaly_score", "is_anomaly"} <= set(res.rows[0])
+    # predict on a novelty model is the same as score (no classification head)
+    res = inf.predict(Dataset("TEXT", None, {}, X=pd.Series(["x"]), ids=["x"]), "predict", {}, tmp_path / "s2")
+    assert res.summary["mode"] == "score" and "anomaly_score" in res.rows[0]

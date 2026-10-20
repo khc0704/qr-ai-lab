@@ -1,4 +1,5 @@
-"""Classic ML families (sklearn / XGBoost): linear, SVM, random forest, XGBoost, isolation forest.
+"""Classic ML families (sklearn / XGBoost / CatBoost / TabPFN): linear, SVM, random forest, XGBoost, CatBoost,
+TabPFN (tabular foundation model, in-context: fit = store the rows), isolation forest.
 
 One Pipeline = preprocessor (impute + scale + one-hot, or TF-IDF for TEXT) + estimator, exported with joblib.
 """
@@ -38,7 +39,9 @@ def _text_pipeline_head():
 class TabularTrainer(BaseTrainer):
     def __init__(self, family: str, task: str | None, params: dict[str, Any], ctx) -> None:
         super().__init__(family, task, params, ctx)
-        self.framework = "xgboost" if family == "tabular.xgboost" else "sklearn"
+        self.framework = {"tabular.xgboost": "xgboost", "tabular.catboost": "catboost", "tabular.tabpfn": "tabpfn"}.get(
+            family, "sklearn"
+        )
         self.inference_modes = ["score"] if family == "tabular.isolation_forest" else ["predict"]
         self.pipe: Pipeline | None = None
         self.classes: list[str] | None = None
@@ -117,6 +120,40 @@ class TabularTrainer(BaseTrainer):
             if task == "classification":
                 return xgb.XGBClassifier(**kw)
             return xgb.XGBRegressor(**kw)
+        if self.family == "tabular.catboost":
+            from catboost import CatBoostClassifier, CatBoostRegressor
+
+            task_type = "GPU" if (self.ctx.device == "cuda" and not self.ctx.gpu_memory_mb) else "CPU"
+            if self.ctx.device == "cuda" and self.ctx.gpu_memory_mb:
+                info(f"catboost: GPU is shared (JOB_GPU_MEMORY_MB={self.ctx.gpu_memory_mb}) → task_type=CPU")
+            kw = {
+                "iterations": int(p.get("iterations", 500)),
+                "learning_rate": float(p.get("learning_rate", 0.05)),
+                "depth": int(p.get("depth", 6)),
+                "l2_leaf_reg": float(p.get("l2_leaf_reg", 3.0)),
+                "random_seed": seed,
+                "thread_count": n_jobs,
+                "task_type": task_type,
+                "verbose": False,
+                "allow_writing_files": False,
+            }
+            if task == "classification":
+                return CatBoostClassifier(**kw)
+            return CatBoostRegressor(**kw)
+        if self.family == "tabular.tabpfn":
+            from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+            which = "classifier" if task == "classification" else "regressor"
+            n_est = p.get("n_estimators", "auto")
+            kw = {
+                "model_path": str(self.ctx.weight(f"tabpfn-v2.5-{which}")),
+                "device": "cuda" if self.ctx.device == "cuda" else "cpu",
+                "n_estimators": int(n_est) if n_est != "auto" else "auto",
+                "ignore_pretraining_limits": bool(p.get("ignore_pretraining_limits", False)),
+                "random_state": seed,
+                "n_preprocessing_jobs": n_jobs,
+            }
+            return TabPFNClassifier(**kw) if task == "classification" else TabPFNRegressor(**kw)
         if self.family == "tabular.isolation_forest":
             from sklearn.ensemble import IsolationForest
 

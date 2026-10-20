@@ -7,6 +7,7 @@ import { SampleViewer, type SampleTarget } from "@/components/features/sample-vi
 import { VerdictBadge, verdictTone } from "@/components/features/verdict-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMetric } from "@/lib/format";
+import { withBase } from "@/lib/base-path";
 import { jobKey } from "@/lib/local-data";
 import { cn } from "@/lib/utils";
 import type { Job } from "@/types/domain";
@@ -22,6 +23,18 @@ export function cellText(v: unknown): string {
 }
 
 /** Build the viewer target for a result row; null when nothing local can back it (data source input). */
+/** Overlay the trainer wrote for a row: `attention` (DINO families) or `map` (image-quality maps), a path under
+ * the job's output/ folder, fetched through the download proxy. */
+export function overlayFor(job: Job, row: Row): { overlayUrl?: string; overlayLabel?: string } {
+  const rel = typeof row.attention === "string" ? row.attention : typeof row.map === "string" ? row.map : undefined;
+  if (!rel || !/^[\w./-]+\.(png|jpe?g|webp)$/i.test(rel) || rel.includes("..")) return {};
+  const encoded = rel.split("/").map(encodeURIComponent).join("/");
+  return {
+    overlayUrl: withBase(`/api/download/jobs/${job.id}/output/${encoded}`),
+    overlayLabel: typeof row.attention === "string" ? "模型關注的區塊" : "偏離基準最多的區塊",
+  };
+}
+
 export function sampleTargetFor(job: Job, row: Row, index: number): SampleTarget | null {
   const id = row.id === undefined || row.id === null ? String(index) : String(row.id);
   // the trainer numbers every prediction row in input order; the id may be an id-column value instead
@@ -34,7 +47,7 @@ export function sampleTargetFor(job: Job, row: Row, index: number): SampleTarget
   }
   if (job.input.kind !== "upload") return null;
   const idColumn = typeof job.input.spec.id_column === "string" ? job.input.spec.id_column : undefined;
-  return { ref: { id, index: rowIndex, idColumn } };
+  return { ref: { id, index: rowIndex, idColumn }, ...overlayFor(job, row) };
 }
 
 export function PreviewTable({ rows, columns, job }: { rows: Row[]; columns: string[]; job?: Job }) {

@@ -296,6 +296,7 @@ POST   /projects/{slug}/uploads/{id}/preview  前處理抽樣預覽（steps、sa
 GET    /jobs/{id}  POST /jobs/{id}/cancel     成員取消
 DELETE /jobs/{id}                             刪除已結束的任務（建立者 / maintainer 以上；連同 log、輸出、它產生的產物；模型還被推論任務引用 → 409 ARTIFACT_IN_USE）
 GET    /jobs/{id}/events(SSE；`Last-Event-ID` 續讀)  GET /jobs/{id}/logs（回 `last_event_id`）  GET /jobs/{id}/logs/download  GET /jobs/{id}/download  GET /jobs/{id}/artifacts
+GET    /jobs/{id}/output/{path}               讀 `output/` 底下的單一檔案（只允許 png / jpg / webp / csv / json / txt / npy，路徑不得離開 output/）：結果頁用它取「模型關注的區塊」/「偏離基準最多的區塊」疊圖（`output/attention/*.png`、`output/maps/*.png`），前端經 `/api/download/jobs/{id}/output/…` 代理
 GET    /projects/{slug}/artifacts  PATCH /artifacts/{id}(is_default)  GET /artifacts/{id}/download  DELETE /artifacts/{id}
 GET    /admin/overview                        待審申請數、佇列長度、執行中數、池使用率
 GET    /admin/node                            每張 GPU 使用率 / 記憶體、CPU、memory、disk（實體）

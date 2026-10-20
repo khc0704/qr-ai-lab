@@ -129,7 +129,13 @@ export function ZooTable({
                 <TableCell>
                   <div className="font-medium">{e.id}</div>
                   <div className="truncate font-mono text-xs text-muted-foreground" title={e.file}>
-                    {e.file} · {e.kind === "hf_repo" ? "HF snapshot" : "單檔"} · {e.license ?? "—"}
+                    {e.file} ·{" "}
+                    {e.kind === "hf_repo"
+                      ? "Hugging Face snapshot"
+                      : e.kind === "hf_file"
+                        ? "Hugging Face 單檔"
+                        : "單檔"}{" "}
+                    · {e.license ?? "—"}
                   </div>
                 </TableCell>
                 <TableCell className="truncate text-sm">{e.families.map((f) => familyLabel(f)).join("、")}</TableCell>

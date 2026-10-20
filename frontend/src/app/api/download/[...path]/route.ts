@@ -1,7 +1,13 @@
 // Streams backend downloads (artifacts, logs, inference output) through the server with the token.
 import { BACKEND_URL, getToken } from "@/lib/backend";
 
-const ALLOWED = [/^artifacts\/\d+\/download$/, /^jobs\/\d+\/logs\/download$/, /^jobs\/\d+\/download$/];
+const ALLOWED = [
+  /^artifacts\/\d+\/download$/,
+  /^jobs\/\d+\/logs\/download$/,
+  /^jobs\/\d+\/download$/,
+  // files the trainer wrote under the job's output/ folder (attention overlays, heatmaps, comparison maps)
+  /^jobs\/\d+\/output\/[^?]+\.(png|jpe?g|webp|csv|json|txt|npy)$/i,
+];
 
 export async function GET(_request: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const token = await getToken();

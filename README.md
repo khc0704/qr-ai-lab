@@ -4,7 +4,7 @@
 
 本服務不保存使用者的資料集；只保存訓練產物、log 與指標。管理員可設定所有專案合計的總資源池、重排佇列、強制中斷 Job；每個 Job 都有 log。
 
-前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy（排程器把任務當主機子程序跑在 trainer venv，cgroup / affinity 限制、依剩餘顯存共用 GPU）；trainer 套件涵蓋 sklearn / XGBoost / YOLO / DINOv2 / 光譜與序列自編碼器 / BERT，預訓練權重只從離線模型庫載入；MariaDB、Redis（docker compose 只跑這兩個）；本機磁碟 `DATA_ROOT`；認證 dev 用本地帳號、prod 接公司 Keycloak（Auth.js），系統角色 superadmin / admin / user 可在 UI 調整；另有不需專案的資料前處理與資料分析服務（任務跑在所有人共用的工具池）；單台 Ubuntu GPU 伺服器以 systemd 部署。
+前端 Next.js 16 + Tailwind v4 + shadcn/ui（npm）；後端 FastAPI + SQLAlchemy（排程器把任務當主機子程序跑在 trainer venv，cgroup / affinity 限制、依剩餘顯存共用 GPU）；trainer 套件涵蓋 sklearn / XGBoost / CatBoost / TabPFN / YOLO / DINOv2 與 DINOv3（附模型關注區塊疊圖）/ 影像品質基準（調整建議、全參考比對）/ PLS 與光譜、序列自編碼器 / BERT / Qwen3 Embedding，預訓練權重只從離線模型庫載入（來源一律 Hugging Face Hub）；MariaDB、Redis（docker compose 只跑這兩個）；本機磁碟 `DATA_ROOT`；認證 dev 用本地帳號、prod 接公司 Keycloak（Auth.js），系統角色 superadmin / admin / user 可在 UI 調整；另有不需專案的資料前處理與資料分析服務（任務跑在所有人共用的工具池）；單台 Ubuntu GPU 伺服器以 systemd 部署。
 
 ## 文件
 
@@ -32,7 +32,7 @@
 - 前端已實際串接 backend（登入、專案申請與審核（同一個專案頁）、資料來源、上傳 + 前處理預覽、訓練 / 推論精靈、即時 log、管理員佇列 / 強制中斷 / 稽核）；端到端截圖見 `docs/screenshots/e2e/`，報告見 `docs/manuals/QR-AI-Lab-串接測試報告.pdf`。
 - backend 已完成：本地帳號 `admin` / `user`、專案申請與審批、討論區、資料來源（憑證加密）、一次性上傳、Job 佇列與資源池、管理員 API（資源池、重排、強制中斷、稽核、模型庫匯入）、SSE 事件、log；排程器把任務當主機子程序跑（systemd cgroup 或 subprocess + watchdog），沒有任務容器。
 - 部署：伺服器不連外；Docker 只跑 MariaDB / Redis，backend / 排程器 / 前端是 systemd 服務（`infra/install-0*.sh` 四步），套件走公司鏡像，權重由管理員經模型庫頁帶進來。
-- trainer 已完成 12 個模型家族（含影像品質基準 / 機台比對）與 AutoML、推論模式；sklearn、PyTorch（CPU、小型權重）與 YOLO（CPU，從 yaml 與從 yolov8n.pt 微調）皆有測試。
+- trainer 已完成 17 個模型家族（含影像品質基準 / 機台比對、TabPFN、PLS、Qwen3 Embedding）與 AutoML、推論模式；sklearn、PyTorch（CPU、小型權重）與 YOLO（CPU，從 yaml 與從 yolov8n.pt 微調）皆有測試。
 - 資料前處理：`libs/preprocess` 共用套件，上傳後抽樣預覽、訓練時 fit、推論自動沿用。
 - 使用者手冊：`docs/manuals/`（DOCX / PDF）。
 - 本地啟動流程見 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。

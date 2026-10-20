@@ -4,10 +4,12 @@
 // browser still holds (see lib/local-data.ts). An inline row (pasted JSON) is shown as-is; an uploaded file is
 // resolved locally (zip entry → image, CSV → row + curve for wide numeric rows). When the file is not in this
 // tab any more (reload, another browser) the user can re-attach it, verified against the job's fingerprint.
-import { FileUp, ImageOff, LoaderCircle } from "lucide-react";
+import { Eye, FileUp, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   attachLocalFile,
@@ -24,6 +26,9 @@ export interface SampleTarget {
   ref: SampleRef;
   /** The row itself when the input was pasted inline (no file to read). */
   inlineRow?: Record<string, unknown>;
+  /** URL of a transparent heat overlay the model wrote for this sample (attention / deviation map). */
+  overlayUrl?: string;
+  overlayLabel?: string;
 }
 
 export function SampleViewer({
@@ -105,7 +110,16 @@ function SampleBody({
         <LoaderCircle className="size-4 animate-spin" /> 讀取中…
       </p>
     );
-  if (sample.kind === "image") return <ImageView key={`${key}:${sample.name}`} blob={sample.blob} name={sample.name} />;
+  if (sample.kind === "image")
+    return (
+      <ImageView
+        key={`${key}:${sample.name}`}
+        blob={sample.blob}
+        name={sample.name}
+        overlayUrl={target.overlayUrl}
+        overlayLabel={target.overlayLabel}
+      />
+    );
   if (sample.kind === "row") return <RowView columns={sample.columns} values={sample.values} index={sample.index} />;
   if (sample.kind === "text")
     return (
@@ -120,18 +134,66 @@ function SampleBody({
   );
 }
 
-function ImageView({ blob, name }: { blob: Blob; name: string }) {
+function ImageView({
+  blob,
+  name,
+  overlayUrl,
+  overlayLabel,
+}: {
+  blob: Blob;
+  name: string;
+  overlayUrl?: string;
+  overlayLabel?: string;
+}) {
   // Mounted with key={name}, so one object URL per image; revoked when the view unmounts.
   const [url] = useState(() => URL.createObjectURL(blob));
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  const [showOverlay, setShowOverlay] = useState(true);
+  const [opacity, setOpacity] = useState(70);
+  const [overlayFailed, setOverlayFailed] = useState(false);
+  const overlay = overlayUrl && !overlayFailed;
   return (
     <figure className="space-y-2">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt={name}
-        className="max-h-[70vh] w-full rounded-md border border-border bg-muted object-contain"
-      />
+      <div className="relative w-full overflow-hidden rounded-md border border-border bg-muted">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={name} className="block max-h-[70vh] w-full object-contain" />
+        {overlay && showOverlay ? (
+          // the overlay is rendered at the image's own size, so stretching it over the same box lines up
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={overlayUrl}
+            alt=""
+            aria-hidden
+            onError={() => setOverlayFailed(true)}
+            style={{ opacity: opacity / 100 }}
+            className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+            data-testid="sample-overlay"
+          />
+        ) : null}
+      </div>
+      {overlay ? (
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <Label htmlFor="overlay-toggle" className="flex items-center gap-2 text-xs">
+            <Switch id="overlay-toggle" checked={showOverlay} onCheckedChange={setShowOverlay} />
+            <Eye className="size-3.5" />
+            {overlayLabel ?? "模型關注的區塊"}
+          </Label>
+          <label className="flex items-center gap-2 text-muted-foreground">
+            透明度
+            <input
+              type="range"
+              min={10}
+              max={100}
+              value={opacity}
+              onChange={(e) => setOpacity(Number(e.target.value))}
+              className="w-28 accent-primary"
+              aria-label="關注區塊的透明度"
+              disabled={!showOverlay}
+            />
+          </label>
+          <span className="text-muted-foreground">紅 = 影響判斷最多的位置；只顯示模型實際看到的中央區域。</span>
+        </div>
+      ) : null}
       <figcaption className="truncate font-mono text-[11px] text-muted-foreground">{name}</figcaption>
     </figure>
   );

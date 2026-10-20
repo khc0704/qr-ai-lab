@@ -8,6 +8,13 @@ import { SourceKindChip } from "@/components/features/chips";
 import { Dropzone } from "@/components/features/dropzone";
 import { PreprocessDrawer, PreprocessSummary } from "@/components/features/preprocess-drawer";
 import { PreprocessWorkbench } from "@/components/features/preprocess-workbench";
+import {
+  clampK,
+  DEFAULT_RETRIEVE,
+  isRetrieveOrder,
+  RetrieveOptions,
+  type RetrieveConfig,
+} from "@/components/features/retrieve-options";
 import { StatusBadge } from "@/components/features/status-badge";
 import { Stepper } from "@/components/features/stepper";
 import { Button } from "@/components/ui/button";
@@ -216,6 +223,10 @@ export function NewJobWizard({
   const [inferMode, setInferMode] = useState<string>((cloneFrom?.config?.mode as string | undefined) ?? "");
   const effectiveMode =
     inferMode && inferenceModes.includes(inferMode as InferenceMode) ? inferMode : inferenceModes[0];
+  const [retrieve, setRetrieve] = useState<RetrieveConfig>(() => ({
+    order: isRetrieveOrder(cloneFrom?.config?.order) ? cloneFrom.config.order : DEFAULT_RETRIEVE.order,
+    k: typeof cloneFrom?.config?.k === "number" ? clampK(cloneFrom.config.k) : DEFAULT_RETRIEVE.k,
+  }));
   const [pending, startTransition] = useTransition();
 
   const gpuOf = (f: string) => catalog.families[f]?.resources.gpu === "required";
@@ -272,6 +283,10 @@ export function NewJobWizard({
         config.search = { candidates, max_trials: budget.trials, time_budget_minutes: budget.minutes };
       }
       if (!isTrain && effectiveMode) config.mode = effectiveMode;
+      if (!isTrain && effectiveMode === "retrieve") {
+        config.order = retrieve.order;
+        config.k = retrieve.k;
+      }
       const body = {
         kind,
         name: name || (isTrain ? (mode === "auto" ? "automl-run" : `${family.split(".")[1]}-run`) : "batch-infer"),
@@ -693,6 +708,14 @@ export function NewJobWizard({
                 ))}
               </SelectContent>
             </Select>
+            {effectiveMode === "retrieve" ? (
+              <RetrieveOptions
+                value={retrieve}
+                onChange={setRetrieve}
+                idPrefix="job-retrieve"
+                className="max-w-xl pt-1"
+              />
+            ) : null}
             {modelSteps.length ? (
               <p className="text-xs text-muted-foreground" data-testid="model-preprocess-note">
                 這個模型訓練時用了前處理，推論會自動套用同一組步驟：

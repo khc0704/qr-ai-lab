@@ -80,8 +80,9 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 
 - `data_type`：`TABULAR | IMAGE | SEQUENCE | TEXT | SPECTRUM`
 - `task_type`：`classification | regression | detection | segmentation | anomaly_detection`
-- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_finetune | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | text.bert_classifier`
-- 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）
+- `model_family`（見 `docs/MODEL_CATALOG.md`）：`tabular.linear | tabular.svm | tabular.random_forest | tabular.xgboost | tabular.catboost | tabular.tabpfn | tabular.isolation_forest | vision.yolo | vision.dino_fewshot | vision.dino_finetune | vision.dino_patchcore | vision.image_quality | sequence.patch_autoencoder | spectrum.masked_autoencoder | spectrum.pls | text.bert_classifier | text.qwen_embedding`
+- 推論模式（推論 Job 的 `config.mode`）：`predict | score | compare | embed | retrieve | detect | segment | measure | extend`（見 `docs/USE_CASES.md` §1）；`retrieve` 另有 `config.order = similar | dissimilar | both` 與 `k`（共用元件 `components/features/retrieve-options.tsx`，trainer 端 `trainer/retrieval.py`）
+- 解釋圖：DINO 家族的 `predict` / `retrieve` 寫 `output/attention/<id>.png`（結果列 `attention`），影像品質基準寫 `output/maps/<id>.png`（結果列 `map` + `map_metric`）；都是 RGBA 疊圖（`trainer/viz.py`），由 `GET /jobs/{id}/output/{path}`（只允許 `output/` 下的圖片 / csv / json / npy）經前端 `/api/download/jobs/{id}/output/…` 代理，`SampleViewer` 疊在瀏覽器本地的原圖上；伺服器仍不存原圖
 - 前處理：`input.spec.preprocess = [{op, params}]`，op id 形如 `tabular.impute`、`image.align`、`sequence.msc`、`text.dedupe`（`libs/preprocess`）
 - 專案申請 = 建立 `pending` 的 project（`POST /projects`）；申請內容在 `project_requests`（`projects.request_id`），專案頁的「申請」分頁顯示與審核；沒有獨立的申請列表 / 審核頁 / 配額頁
 - Issue（討論區）`type`：`question | bug | feature`；`status`：`open | closed`
@@ -115,7 +116,7 @@ python3 scripts/design_lint.py frontend/src      # UI 變更後必跑
 12. 不確定時選最簡單、單機可跑、可觀測（有 log、有狀態）的做法；v1 不做多節點、不做 Kubernetes。
 13. 資源限制要在程序內也成立：runner 設齊 `*_NUM_THREADS` / `LOKY_MAX_CPU_COUNT`，trainer 啟動時 `limits.apply_from_env`（threadpoolctl + torch threads + 共用 GPU 的 memory fraction）並把實際限制印進 log；新增用原生函式庫的模型時 `n_jobs` 取 `ctx.cpu`。
 14. 排程器每 `USAGE_SAMPLE_INTERVAL_S` 秒寫一筆 `resource_samples`（節點 / 資源池 / 各專案配置與實測），管理員「使用率歷史」頁讀 `GET /admin/usage?range=`；取樣與清理都在 `app/scheduler/loop.py`，不要在 API 程序另外採樣。
-15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: file | hf_repo`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
+15. 預訓練權重不自動下載：trainer 只透過 `ctx.weight(id)` 從模型庫取檔，runner 設 `HF_HUB_OFFLINE=1` 等離線變數；需要新權重先在 yaml 的 `weights` 登記（`kind: hf_repo | hf_file | file`；**來源一律 Hugging Face Hub**，`scripts/fetch_model_zoo.py` 以 `snapshot_download` / `hf_hub_download` 抓，gated 模型如 DINOv3 需要 `HF_TOKEN`），管理員再經 `/admin/model-zoo` 帶進來。Job 永遠是主機子程序，不要再引入任務容器。
 16. 前處理步驟只在 `libs/preprocess` 定義（一個 op = 一個類別，含參數規格與可選的 fit 狀態），backend 與 trainer 都從那裡 import；新增步驟要能在上傳預覽中套用、能序列化狀態、推論能 replay。
 
 17. 環境變數範本（`infra/systemd/*.env.example`、`backend/.env.example`）的註解一律獨立成行（systemd 會把行尾 `# …` 當成值）；新增 `Settings` 欄位要同時加到兩份範本與 `docs/ENVIRONMENT.md`（`backend/tests/test_infra_contracts.py` 會檢查）。全專案只用 pip（沒有 uv / poetry）：改了 pyproject 的依賴就跑 `scripts/pin_requirements.sh` 重新釘 `requirements*.txt`；torch 只釘在 `trainer/requirements-torch.txt`，`nvidia-*` / `triton` 永遠不寫進 requirements（它們隨 torch 來，而且版本跟驅動綁）。

@@ -7,8 +7,10 @@ server's MODEL_ZOO_ROOT (default DATA_ROOT/model_zoo). The server itself never d
     python3 scripts/fetch_model_zoo.py --dest ./model_zoo --only yolov8s dinov2-small
     python3 scripts/fetch_model_zoo.py --dest /srv/qr-ai-lab/model_zoo --verify   # on the server, no network
 
-Needs PyYAML (the catalog is YAML) — run it with backend/.venv/bin/python or `pip install pyyaml`; Hugging Face
-repos (kind: hf_repo) also need `pip install huggingface_hub`; plain files use urllib only.
+Every weight comes from the Hugging Face Hub: `kind: hf_repo` snapshots a whole repo (DINO, BERT, Qwen) and
+`kind: hf_file` downloads one file from a repo (YOLO .pt, TabPFN .ckpt). Needs PyYAML (the catalog is YAML) and
+`pip install huggingface_hub` — run it with backend/.venv/bin/python. Gated repos (DINOv3 asks you to accept its
+licence on the model page first) need a token: `export HF_TOKEN=hf_…` (or `huggingface-cli login`) before running.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 import urllib.request
 from datetime import UTC, datetime
@@ -65,19 +68,63 @@ def download_file(url: str, dest: Path) -> None:
     tmp.replace(dest)
 
 
-def download_hf_repo(source: str, dest: Path) -> None:
+def _hf():
     try:
-        from huggingface_hub import snapshot_download
+        import huggingface_hub
     except ImportError:
-        sys.exit("hf_repo weights need `pip install huggingface_hub`")
-    repo_id = source.split("huggingface.co/", 1)[1].strip("/")
+        sys.exit("Hugging Face weights need `pip install huggingface_hub`")
+    return huggingface_hub
+
+
+def parse_hf_source(source: str) -> tuple[str, str | None]:
+    """``https://huggingface.co/<owner>/<repo>[/resolve/<rev>/<path>]`` → (repo_id, file path or None)."""
+    tail = source.split("huggingface.co/", 1)[1].strip("/")
+    if "/resolve/" in tail:
+        repo_id, rest = tail.split("/resolve/", 1)
+        return repo_id, rest.split("/", 1)[1] if "/" in rest else None
+    return tail, None
+
+
+def _gated_hint(e: Exception) -> None:
+    text = str(e)
+    if "401" in text or "403" in text or "gated" in text.lower():
+        print(
+            "  this repo is gated or private: accept the licence on its Hugging Face page, then set HF_TOKEN=hf_… "
+            "(or run `huggingface-cli login`) and retry"
+        )
+
+
+def download_hf_repo(source: str, dest: Path) -> None:
+    hf = _hf()
+    repo_id, _ = parse_hf_source(source)
     print(f"  snapshot {repo_id}")
-    snapshot_download(
-        repo_id,
-        local_dir=str(dest),
-        allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "tokenizer*", "*.py"],
-        ignore_patterns=["*.bin", "*.h5", "*.msgpack", "*.onnx", "*.ot"],
-    )
+    try:
+        hf.snapshot_download(
+            repo_id,
+            local_dir=str(dest),
+            allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "tokenizer*", "*.py"],
+            ignore_patterns=["*.bin", "*.h5", "*.msgpack", "*.onnx", "*.ot"],
+        )
+    except Exception as e:
+        _gated_hint(e)
+        raise
+
+
+def download_hf_file(source: str, dest: Path) -> None:
+    hf = _hf()
+    repo_id, filename = parse_hf_source(source)
+    if not filename:
+        sys.exit(f"hf_file source must point at a file (…/resolve/main/<file>): {source}")
+    print(f"  hf_hub_download {repo_id} :: {filename}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    scratch = dest.parent / f".hf-{dest.name}"
+    try:
+        got = hf.hf_hub_download(repo_id, filename, local_dir=str(scratch))
+    except Exception as e:
+        _gated_hint(e)
+        raise
+    Path(got).replace(dest)
+    shutil.rmtree(scratch, ignore_errors=True)
 
 
 def main() -> int:
@@ -112,6 +159,8 @@ def main() -> int:
             print("  exists, skipping download")
         elif w.get("kind") == "hf_repo":
             download_hf_repo(w["source"], target)
+        elif w.get("kind") == "hf_file" or "huggingface.co/" in w["source"]:
+            download_hf_file(w["source"], target)
         else:
             download_file(w["source"], target)
         digest = sha256_of(target)

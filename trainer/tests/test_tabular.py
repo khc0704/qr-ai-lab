@@ -106,3 +106,62 @@ def test_xgboost_falls_back_to_cpu_on_a_shared_gpu(tmp_path):
     cpu_only = Context(work_dir=tmp_path, cpu=2, gpu=0)
     est = registry.create_trainer("tabular.xgboost", "regression", {}, cpu_only)._estimator()
     assert est.get_params()["device"] == "cpu"
+
+
+@pytest.mark.parametrize("task", ["classification", "regression"])
+def test_catboost_roundtrip(tmp_path, ctx, task):
+    pytest.importorskip("catboost")
+    if task == "classification":
+        df = cls_frame()
+        target = "label"
+    else:
+        df = reg_frame()
+        target = "yield_pct"
+    ds = Dataset("TABULAR", task, {"target": target}, X=df.drop(columns=[target]), y=df[target])
+    t = registry.create_trainer("tabular.catboost", task, {"iterations": 80}, ctx)
+    assert t.framework == "catboost"
+    t.fit(ds)
+    m = t.evaluate()
+    assert (m["f1_macro"] > 0.75) if task == "classification" else (m["rmse"] < 1.0)
+    t.finalize(ds)
+    arts = t.export(tmp_path)
+    assert arts[0].framework == "catboost" and any(a.name == "feature_importance" for a in arts)
+    inf = registry.create_inferencer("tabular.catboost", ctx)
+    inf.load(tmp_path / "model", {**arts[0].metadata, "task_type": task})
+    res = inf.predict(Dataset("TABULAR", task, {}, X=df.drop(columns=[target]).head(5)), "predict", {}, tmp_path)
+    assert len(res.rows) == 5 and ("confidence" in res.rows[0]) == (task == "classification")
+
+
+def test_tabpfn_estimator_reads_weights_from_the_zoo(tmp_path):
+    pytest.importorskip("tabpfn")
+    from trainer.models.base import Context
+    from trainer.models.zoo import resolver
+
+    zoo = tmp_path / "zoo"
+    (zoo / "tabpfn-v2.5-classifier-v2.5_default.ckpt").parent.mkdir(parents=True)
+    (zoo / "tabpfn-v2.5-classifier-v2.5_default.ckpt").write_bytes(b"")
+    (zoo / "tabpfn-v2.5-regressor-v2.5_default.ckpt").write_bytes(b"")
+    ctx = Context(
+        work_dir=tmp_path,
+        cpu=3,
+        gpu=0,
+        zoo=resolver(
+            zoo,
+            {
+                "tabpfn-v2.5-classifier": "tabpfn-v2.5-classifier-v2.5_default.ckpt",
+                "tabpfn-v2.5-regressor": "tabpfn-v2.5-regressor-v2.5_default.ckpt",
+            },
+        ),
+    )
+    t = registry.create_trainer("tabular.tabpfn", "classification", {"n_estimators": 4}, ctx)
+    est = t._estimator()
+    params = est.get_params()
+    assert t.framework == "tabpfn" and type(est).__name__ == "TabPFNClassifier"
+    assert params["model_path"].endswith("tabpfn-v2.5-classifier-v2.5_default.ckpt")
+    assert params["device"] == "cpu" and params["n_estimators"] == 4 and params["n_preprocessing_jobs"] == 3
+    est = registry.create_trainer("tabular.tabpfn", "regression", {}, ctx)._estimator()
+    assert type(est).__name__ == "TabPFNRegressor" and est.get_params()["n_estimators"] == "auto"
+    # no zoo → the usual "weights missing" message, before any download could be attempted
+    bare = Context(work_dir=tmp_path, cpu=1, gpu=0)
+    with pytest.raises(FileNotFoundError, match="model zoo"):
+        registry.create_trainer("tabular.tabpfn", "classification", {}, bare)._estimator()

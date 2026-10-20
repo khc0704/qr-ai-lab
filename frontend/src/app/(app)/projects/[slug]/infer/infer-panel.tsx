@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Dropzone } from "@/components/features/dropzone";
+import { DEFAULT_RETRIEVE, RetrieveOptions, type RetrieveConfig } from "@/components/features/retrieve-options";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -67,6 +68,7 @@ export function InferPanel({
   const modes = (model?.inferenceModes.length ? model.inferenceModes : ["predict"]) as InferenceMode[];
   const [mode, setMode] = useState<string>("");
   const effectiveMode = modes.includes(mode as InferenceMode) ? mode : modes[0];
+  const [retrieve, setRetrieve] = useState<RetrieveConfig>(DEFAULT_RETRIEVE);
   const inlineAllowed = dataType !== "IMAGE";
   const [inputKind, setInputKind] = useState<"upload" | "inline">("upload");
   const [upload, setUpload] = useState<Upload | null>(null);
@@ -93,7 +95,10 @@ export function InferPanel({
         ephemeral: true,
         name: `推論 ${model.name} v${model.version}`,
         artifact_id: model.id,
-        config: { mode: effectiveMode },
+        config:
+          effectiveMode === "retrieve"
+            ? { mode: effectiveMode, order: retrieve.order, k: retrieve.k }
+            : { mode: effectiveMode },
         input: {
           kind: inputKind,
           upload_id: inputKind === "upload" ? upload?.id : undefined,
@@ -184,6 +189,9 @@ export function InferPanel({
                   ))}
                 </SelectContent>
               </Select>
+              {effectiveMode === "retrieve" ? (
+                <RetrieveOptions value={retrieve} onChange={setRetrieve} idPrefix="infer-retrieve" className="pt-1" />
+              ) : null}
             </div>
           ) : null}
         </div>

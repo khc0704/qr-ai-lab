@@ -27,8 +27,10 @@ async function ModelZoo({ searchParams }: { searchParams: Promise<{ verify?: str
         <Info />
         <AlertTitle>離線政策</AlertTitle>
         <AlertDescription>
-          trainer 以 HF_HUB_OFFLINE / YOLO_OFFLINE 執行，不會自行下載任何權重。Hugging Face 類型（DINO、BERT）請提供整個
-          snapshot 資料夾的 zip；單檔權重（YOLO .pt）直接提供檔案。目錄有登記 sha256 的會在匯入時比對。
+          trainer 以 HF_HUB_OFFLINE / YOLO_OFFLINE 執行，不會自行下載任何權重。所有權重的來源都是 Hugging Face
+          Hub：snapshot 類型（DINOv2 / DINOv3、BERT、Qwen3 Embedding）請提供整個資料夾的 zip；單檔類型（YOLO .pt、TabPFN
+          .ckpt）直接提供檔案。有網路的機器可用 scripts/fetch_model_zoo.py 一次抓齊（DINOv3 是 gated 模型，要先在
+          Hugging Face 接受授權並設定 HF_TOKEN）。目錄有登記 sha256 的會在匯入時比對。
         </AlertDescription>
       </Alert>
       <ZooTable entries={entries} verified={verify === "1"} canManage={canManage} />

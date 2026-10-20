@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from collections import Counter
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -24,6 +23,7 @@ from trainer.dataset import Dataset
 from trainer.log import info, warn
 from trainer.models.base import ArtifactOut, BaseInferencer, BaseTrainer, PredictResult
 from trainer.models.tabular import _binary_anomaly_labels
+from trainer.retrieval import neighbour_rows
 
 # ---------------------------------------------------------------------------------------------------
 # YOLO
@@ -372,8 +372,57 @@ class YoloInferencer(BaseInferencer):
 # ---------------------------------------------------------------------------------------------------
 
 
+def special_tokens(config) -> int:
+    """Register tokens that sit between CLS and the patch tokens (DINOv3: 4; DINOv2: 0)."""
+    return int(getattr(config, "num_register_tokens", 0) or 0)
+
+
+ATTENTION_MAX = 2000  # overlays written per inference run (one PNG per image)
+
+
+def _attention_maps(
+    out: Path, ids: list[Any], paths: list[Path], patches: np.ndarray, refs: np.ndarray, processor, enabled: bool
+) -> list[str | None]:
+    """Per image: cosine similarity of every patch token to its reference vector (the matched prototype or
+    neighbour) → RGBA heat overlay under ``out/attention/``; returns the relative path per image (None when off)."""
+    if not enabled:
+        return [None] * len(paths)
+    from PIL import Image
+
+    from trainer import viz
+
+    names: set[str] = set()
+    rels: list[str | None] = []
+    limit = min(len(paths), ATTENTION_MAX)
+    if len(paths) > limit:
+        warn(f"attention maps written for the first {limit} of {len(paths)} images")
+    for n in range(len(paths)):
+        if n >= limit:
+            rels.append(None)
+            continue
+        sims = patches[n].astype(np.float32) @ refs[n].astype(np.float32)
+        with Image.open(paths[n]) as im:
+            size = im.size
+        box = viz.crop_box(size[0], size[1], processor)
+        name = _heatmap_name(ids[n], names)
+        rels.append("attention/" + viz.save_overlay(out / "attention", name, viz.patch_grid(sims), size, box))
+    return rels
+
+
+def _patch_reference(vec: np.ndarray, patch_dim: int) -> np.ndarray:
+    """A CLS+mean-patch embedding (2D) → the mean-patch half, renormalised, so it lives in patch-token space."""
+    v = np.asarray(vec, dtype=np.float32)
+    v = v[-patch_dim:] if len(v) >= 2 * patch_dim else v
+    return v / (np.linalg.norm(v) + 1e-9)
+
+
+def _neighbour_rows(sims: np.ndarray, order: str, k: int, labels: np.ndarray, ids: np.ndarray) -> dict[str, Any]:
+    """retrieve: the k most similar and / or least similar reference items for one query (see trainer.retrieval)."""
+    return neighbour_rows(sims, order, k, labels, ids)
+
+
 class _Dino:
-    """Frozen DINOv2 from the zoo; returns CLS (+ mean patch) embeddings and patch token grids."""
+    """Frozen DINOv2 / v3 from the zoo; returns CLS (+ mean patch) embeddings and patch token grids."""
 
     def __init__(self, ctx, backbone_id: str) -> None:
         import torch
@@ -385,7 +434,9 @@ class _Dino:
         self.model = AutoModel.from_pretrained(str(path), local_files_only=True).to(ctx.device).eval()
         self.torch = torch
         self.backbone_id = backbone_id
-        info(f"dino: loaded {backbone_id} from {path} on {ctx.device}")
+        # token layout: [CLS] [register × n (DINOv3)] [patch × L]; only the patches form the spatial grid
+        self.n_special = 1 + special_tokens(self.model.config)
+        info(f"dino: loaded {backbone_id} from {path} on {ctx.device} (special tokens={self.n_special})")
 
     def _batches(self, paths: list[Path], batch: int):
         from PIL import Image
@@ -399,11 +450,12 @@ class _Dino:
         cls_out, patch_out = [], []
         with torch.no_grad():
             for k, px in enumerate(self._batches(paths, batch)):
-                h = self.model(pixel_values=px).last_hidden_state  # (B, 1 + L, D)
-                cls = torch.cat([h[:, 0], h[:, 1:].mean(dim=1)], dim=1)
+                h = self.model(pixel_values=px).last_hidden_state  # (B, special + L, D)
+                tok = h[:, self.n_special :]
+                cls = torch.cat([h[:, 0], tok.mean(dim=1)], dim=1)
                 cls_out.append(torch.nn.functional.normalize(cls, dim=1).cpu().numpy())
                 if patches:
-                    patch_out.append(torch.nn.functional.normalize(h[:, 1:], dim=-1).cpu().numpy().astype(np.float16))
+                    patch_out.append(torch.nn.functional.normalize(tok, dim=-1).cpu().numpy().astype(np.float16))
                 if progress:
                     progress(min(1.0, (k + 1) * batch / max(1, len(paths))))
         cls_arr = np.concatenate(cls_out) if cls_out else np.zeros((0, 1), np.float32)
@@ -556,7 +608,12 @@ class DinoFewShotInferencer(BaseInferencer):
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
         out.mkdir(parents=True, exist_ok=True)
         ids = ds.ids or [Path(p).name for p in ds.X]
-        emb = self.dino.embed(list(ds.X), progress=lambda f: self.ctx.progress(0.8 * f))
+        paths = [Path(p) for p in ds.X]
+        attention = bool(options.get("attention", True)) and mode in ("predict", "retrieve")
+        if attention:
+            emb, patches = self.dino.embed(paths, patches=True, progress=lambda f: self.ctx.progress(0.8 * f))
+        else:
+            emb, patches = self.dino.embed(paths, progress=lambda f: self.ctx.progress(0.8 * f)), None
         k = int(options.get("k", self.meta.get("k", 5)))
         if mode == "extend":
             return self._extend(ds, emb, out)
@@ -576,32 +633,23 @@ class DinoFewShotInferencer(BaseInferencer):
                 ],
             )
         if mode == "retrieve":
+            order = str(options.get("order", "both"))
+            if order not in ("similar", "dissimilar", "both"):
+                raise ValueError("order 必須是 similar / dissimilar / both")
             sims = emb @ self.support.T
             rows = []
+            ref_idx = []
             for n, i in enumerate(ids):
-                order = np.argsort(-sims[n])
-                rows.append(
-                    {
-                        "id": i,
-                        "max_similarity": float(sims[n][order[0]]),
-                        "most_similar": [
-                            {
-                                "id": str(self.support_ids[j]),
-                                "label": str(self.support_labels[j]),
-                                "similarity": round(float(sims[n][j]), 5),
-                            }
-                            for j in order[:k]
-                        ],
-                        "least_similar": [
-                            {
-                                "id": str(self.support_ids[j]),
-                                "label": str(self.support_labels[j]),
-                                "similarity": round(float(sims[n][j]), 5),
-                            }
-                            for j in order[::-1][:k]
-                        ],
-                    }
-                )
+                nb = _neighbour_rows(sims[n], order, k, self.support_labels, self.support_ids)
+                rows.append({"id": i, **nb})
+                ref_idx.append(int(np.argmin(sims[n]) if order == "dissimilar" else np.argmax(sims[n])))
+            if attention and patches is not None:
+                D = patches.shape[-1]
+                refs = np.stack([_patch_reference(self.support[j], D) for j in ref_idx])
+                for row, rel in zip(
+                    rows, _attention_maps(out, ids, paths, patches, refs, self.dino.processor, True), strict=False
+                ):
+                    row["attention"] = rel
             novel = sorted(rows, key=lambda r: r["max_similarity"])[:20]
             return PredictResult(
                 rows,
@@ -609,6 +657,7 @@ class DinoFewShotInferencer(BaseInferencer):
                     "mode": mode,
                     "n": len(rows),
                     "k": k,
+                    "order": order,
                     "most_novel": [{"id": r["id"], "max_similarity": round(r["max_similarity"], 5)} for r in novel],
                 },
             )
@@ -626,6 +675,19 @@ class DinoFewShotInferencer(BaseInferencer):
             if reject is not None and conf[n] < float(reject):
                 row["prediction"] = "unknown"
             rows.append(row)
+        if attention and patches is not None:
+            D = patches.shape[-1]
+            index = {c: j for j, c in enumerate(self.classes)}
+            refs = np.stack(
+                [
+                    _patch_reference(self.protos[index.get(r["prediction"], int(np.argmax(sims[n])))], D)
+                    for n, r in enumerate(rows)
+                ]
+            )
+            for row, rel in zip(
+                rows, _attention_maps(out, ids, paths, patches, refs, self.dino.processor, True), strict=False
+            ):
+                row["attention"] = rel
         counts = Counter(r["prediction"] for r in rows)
         return PredictResult(rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts), "k": k})
 
@@ -844,17 +906,10 @@ class DinoPatchCoreInferencer(BaseInferencer):
 
 
 def _heatmap_name(image_id: Any, seen: set[str]) -> str:
-    """Heatmap file name from the image's relative path (``a/x.jpg`` → ``a__x.png``) so images with the same
-    base name in different folders do not overwrite each other; ``seen`` breaks any remaining tie."""
-    p = PurePosixPath(str(image_id).replace("\\", "/"))
-    rel = (p.with_suffix("") if p.name else p).as_posix().strip("/")
-    flat = re.sub(r"[^\w.\-]+", "_", rel.replace("/", "__")).strip("._") or "image"
-    name, k = f"{flat}.png", 1
-    while name in seen:
-        k += 1
-        name = f"{flat}_{k}.png"
-    seen.add(name)
-    return name
+    """See ``viz.overlay_name`` (``a/x.jpg`` → ``a__x.png``, ties broken with a counter)."""
+    from trainer import viz
+
+    return viz.overlay_name(image_id, seen)
 
 
 def _save_heatmap(heat_dir: Path, name: str, grid: np.ndarray, threshold: float) -> str:
@@ -870,6 +925,8 @@ def _save_heatmap(heat_dir: Path, name: str, grid: np.ndarray, threshold: float)
 __all__ = [
     "DinoFewShotInferencer",
     "DinoFewShotTrainer",
+    "DinoFinetuneInferencer",
+    "DinoFinetuneTrainer",
     "DinoPatchCoreInferencer",
     "DinoPatchCoreTrainer",
     "YoloInferencer",
@@ -1002,6 +1059,7 @@ class _DinoFinetuneNet:
         self.backbone.to(ctx.device)
         self.head.to(ctx.device)
         self.feature_dim = dim
+        self.n_special = 1 + special_tokens(self.backbone.config)
 
     def pixels(self, paths: list[Path], augment: tuple[str, ...] = ()):
         from PIL import Image
@@ -1016,7 +1074,31 @@ class _DinoFinetuneNet:
 
     def features(self, px):
         h = self.backbone(pixel_values=px).last_hidden_state
-        return self.torch.cat([h[:, 0], h[:, 1:].mean(dim=1)], dim=1)
+        tok = h[:, self.n_special :]
+        return self.torch.cat([h[:, 0], tok.mean(dim=1)], dim=1)
+
+    def tokens(self, px):
+        """(features, L2-normalised patch tokens) for one batch, no gradient."""
+        torch = self.torch
+        with torch.no_grad():
+            h = self.backbone(pixel_values=px).last_hidden_state
+            tok = h[:, self.n_special :]
+            feat = torch.cat([h[:, 0], tok.mean(dim=1)], dim=1)
+        return feat, torch.nn.functional.normalize(tok, dim=-1)
+
+    def grad_cam(self, px, target: np.ndarray) -> np.ndarray:
+        """Token-level Grad-CAM: how much each patch token pushes the logit of ``target`` (B,) up → (B, L)."""
+        torch = self.torch
+        self.train_mode(False)
+        with torch.enable_grad():
+            h = self.backbone(pixel_values=px).last_hidden_state.detach()
+            tok = h[:, self.n_special :].clone().requires_grad_(True)
+            feat = torch.cat([h[:, 0], tok.mean(dim=1)], dim=1)
+            logits = self.head(feat)
+            idx = torch.as_tensor(target, device=logits.device).long()
+            (grads,) = torch.autograd.grad(logits.gather(1, idx[:, None]).sum(), tok)
+        cam = (grads * tok).sum(dim=-1).clamp(min=0)
+        return cam.detach().cpu().numpy()
 
     def train_mode(self, on: bool) -> None:
         # a frozen backbone stays in eval (no dropout / drop-path noise) even while the head trains
@@ -1284,31 +1366,29 @@ class DinoFinetuneInferencer(BaseInferencer):
                 {"mode": mode, "n": len(rows), "dim": int(emb.shape[1])},
                 [ArtifactOut(name="embeddings", kind="report", path="output/embeddings.npy", framework="torch")],
             )
+        attention = bool(options.get("attention", True))
         if mode == "retrieve":
             if self.ref_emb is None:
                 raise ValueError("這個模型沒有參考影像庫，無法 retrieve")
             k = int(options.get("k", 5))
-            emb = self.net.embed(paths, batch, progress=lambda f: self.ctx.progress(0.9 * f))
+            order = str(options.get("order", "similar"))
+            if order not in ("similar", "dissimilar", "both"):
+                raise ValueError("order 必須是 similar / dissimilar / both")
+            emb, patches = self._embed_with_patches(paths, batch, want_patches=attention)
             sims = emb @ self.ref_emb.T
-            rows = []
+            rows, ref_idx = [], []
             for n, i in enumerate(ids):
-                order = np.argsort(-sims[n])
-                rows.append(
-                    {
-                        "id": i,
-                        "max_similarity": float(sims[n][order[0]]),
-                        "most_similar": [
-                            {
-                                "id": str(self.ref_ids[j]),
-                                "label": str(self.ref_labels[j]),
-                                "similarity": round(float(sims[n][j]), 5),
-                            }
-                            for j in order[:k]
-                        ],
-                    }
-                )
-            return PredictResult(rows, {"mode": mode, "n": len(rows), "k": k})
-        proba = self.net.predict_proba(paths, batch, progress=lambda f: self.ctx.progress(0.9 * f))
+                rows.append({"id": i, **_neighbour_rows(sims[n], order, k, self.ref_labels, self.ref_ids)})
+                ref_idx.append(int(np.argmin(sims[n]) if order == "dissimilar" else np.argmax(sims[n])))
+            if attention and patches is not None:
+                D = patches.shape[-1]
+                refs = np.stack([_patch_reference(self.ref_emb[j], D) for j in ref_idx])
+                for row, rel in zip(
+                    rows, _attention_maps(out, ids, paths, patches, refs, self.net.processor, True), strict=False
+                ):
+                    row["attention"] = rel
+            return PredictResult(rows, {"mode": mode, "n": len(rows), "k": k, "order": order})
+        proba = self.net.predict_proba(paths, batch, progress=lambda f: self.ctx.progress(0.8 * f))
         reject = options.get("min_confidence")
         rows = []
         for n, i in enumerate(ids):
@@ -1327,5 +1407,39 @@ class DinoFinetuneInferencer(BaseInferencer):
                     ],
                 }
             )
+        if attention:
+            self._grad_cam_maps(out, ids, paths, proba.argmax(axis=1), batch, rows)
         counts = Counter(r["prediction"] for r in rows)
         return PredictResult(rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts)})
+
+    def _embed_with_patches(self, paths: list[Path], batch: int, want_patches: bool):
+        """Normalised CLS+mean embeddings and (optionally) the L2-normalised patch tokens, batch by batch."""
+        torch = self.net.torch
+        embs, toks = [], []
+        for k in range(0, len(paths), batch):
+            feat, tok = self.net.tokens(self.net.pixels(paths[k : k + batch]))
+            embs.append(torch.nn.functional.normalize(feat, dim=1).cpu().numpy())
+            if want_patches:
+                toks.append(tok.cpu().numpy().astype(np.float16))
+            self.ctx.progress(0.8 * min(1.0, (k + batch) / max(1, len(paths))))
+        emb = np.concatenate(embs) if embs else np.zeros((0, self.net.feature_dim), np.float32)
+        return emb, (np.concatenate(toks) if toks else None)
+
+    def _grad_cam_maps(self, out: Path, ids, paths: list[Path], target: np.ndarray, batch: int, rows) -> None:
+        from PIL import Image
+
+        from trainer import viz
+
+        names: set[str] = set()
+        limit = min(len(paths), ATTENTION_MAX)
+        for k in range(0, limit, batch):
+            chunk = paths[k : k + batch]
+            cam = self.net.grad_cam(self.net.pixels(chunk), target[k : k + batch])
+            for n, p in enumerate(chunk):
+                with Image.open(p) as im:
+                    size = im.size
+                box = viz.crop_box(size[0], size[1], self.net.processor)
+                name = _heatmap_name(ids[k + n], names)
+                rows[k + n]["attention"] = "attention/" + viz.save_overlay(
+                    out / "attention", name, viz.patch_grid(cam[n]), size, box
+                )

@@ -37,13 +37,13 @@
 
 ## D. 模型與方法
 
-1. **影像品質基準**：目前 17 個經典指標 + Mahalanobis；可加 DINOv2 特徵分布距離當語意指標、依區域（中心 / 邊緣）分區統計、對焦序列（through-focus）自動找最佳焦。
-2. **光譜**：MAE 迴歸頭是 Ridge；資料多時改 MLP / 微調；加入波長軸對齊（不同機台波長取樣不同）的前處理。
+1. **影像品質基準**：17 個經典指標 + Mahalanobis，已加逐面向建議、方格偏離圖與配對全參考指標；可再加 DINO 特徵分布距離當語意指標、依區域（中心 / 邊緣）分區統計、對焦序列（through-focus）自動找最佳焦、學習式 NR-IQA（需要人工評分資料）。
+2. **光譜**：小資料已有 PLS / PLS-DA；MAE 迴歸頭是 Ridge，資料多時改 MLP / 微調；加入波長軸對齊（不同機台波長取樣不同）的前處理。
 3. **時序**：只有 patch AE；FDC 多感測器可加 TCN / Transformer 與多變量相關性異常。
 4. **Wafer map**：目前要先轉圖片；可做專用 loader（die map 矩陣 → 影像）與常見失效圖樣的分類範例。
 5. **半監督 / 主動學習**：retrieve 找出的「最不像」樣本送人工標註再 `extend`，形成閉環；平台已有 `extend`，缺標註佇列與介面。
 6. **校正與門檻**：異常門檻用 P99 經驗值；可加依驗證集最佳化 F1 的門檻與 OOD 拒答（few-shot 的 `min_similarity` 已有雛形）。
-7. **模型解釋**：表格有特徵重要度；影像 / 光譜可加 Grad-CAM / patch 貢獻圖，現場更容易接受。
+7. **模型解釋**：表格有特徵重要度、PLS 有 VIP；DINO 已有 patch 相似度 / Grad-CAM 疊圖、影像品質基準有偏離方格圖；光譜 MAE 可再加 patch 貢獻圖。
 8. **評估的可信度**：小資料下驗證集只有幾筆，指標波動大；建議顯示信賴區間或用 repeated CV（表格家族容易做）。
 
 ## E. 這一輪串接測試發現並修掉的問題
@@ -98,4 +98,5 @@
 - ✅ **開發環境配 nginx**：`infra/nginx/qr-ai-lab-dev.conf`（單檔、listen 80、含 Turbopack HMR 的 websocket 設定）+ `qr-ai-lab-dev-http.conf`；在沙盒以 nginx 1.24 + `next dev`（basePath `/ai-lab`）+ 假 Keycloak 實測登入、導覽、`/ai-lab-api/docs`。順帶修掉正式範本的無限重導向（nginx `/ai-lab → /ai-lab/` 與 Next.js `/ai-lab/ → /ai-lab` 互踢；登入後 Auth.js 正好把人送到 `/ai-lab`）。
 - ✅ **MariaDB 遷移修正**：0006 / 0008 只跳過 SQLite，全新 MariaDB 跑到 0006 會 duplicate column；改成以 `sa.inspect()` 判斷欄位存在。在沙盒的 MariaDB 10.11 + Redis 7 上驗證：全新資料庫 `upgrade head`、模擬舊資料庫（砍掉兩欄、stamp 0005）再升級、seed、本地帳號登入、兩程序（API + 排程器）跑真的訓練任務並由 Redis 送出 SSE 事件。
 - ✅ **從別台機器連 dev server 頁面不互動**：Next 16 擋非 localhost 的 `/_next/hmr`，Turbopack client 不 hydrate；`next.config.ts` 的 `allowedDevOrigins` 改由 `NEXT_DEV_ALLOWED_ORIGINS` 設定（沙盒以 192.0.2.2 重現：設定前下拉 0 個選項、設定後 5 個）。
+- ✅ **模型升級批次**：DINOv3（`dinov3-vits16` / `dinov3-vitb16`，register token 正確跳過）加入 few-shot / 微調 / PatchCore；DINO 的 `predict` / `retrieve` 寫「模型關注的區塊」疊圖（few-shot：patch 與原型 / 鄰居的相似度；微調：Grad-CAM），`retrieve` 可選方向（`order = similar / dissimilar / both`）與 `k`，一次性推論頁與精靈有對應選項，結果頁點開樣本以可調透明度疊在瀏覽器本地的原圖上（新端點 `GET /jobs/{id}/output/{path}`）；影像品質基準加 17 指標 → 五個面向的調整建議、每張影像的偏離方格圖、`golden/` 配對時的全參考指標（相位相關對位 + PSNR / SSIM / MS-SSIM / GMSD）；新家族 `text.qwen_embedding`（Qwen3-Embedding-0.6B：分類 / 相似搜尋 / novelty）、`tabular.catboost`、`tabular.tabpfn`（v2.5 權重自模型庫）、`spectrum.pls`（PLS / PLS-DA + VIP）；所有權重來源改為 Hugging Face Hub（YOLO 走 `Ultralytics/YOLOv8`，新 `kind: hf_file`），`fetch_model_zoo.py` 支援 gated 模型的 token。
 - 仍待做：SPC chart（`sequence.spc` 控制界限 + Western Electric / Nelson 規則；合成 pattern 預訓練的 1-D CNN few-shot 分類與相似搜尋）；資料來源任務的樣本顯示（需經後端暫時代理讀取）；工具池的 GPU 共用策略（目前與專案相同）；申請分頁的留言也支援編輯；前處理編輯器的欄位重新命名與型別轉換（datetime）；專案「已結束」後的產物保留期限；微調家族 `full` 的分層學習率；資料增強目前是固定機率 0.5、幅度固定（可改成可調）。

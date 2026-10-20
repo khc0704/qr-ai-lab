@@ -17,6 +17,7 @@ import type {
   ModelFamily,
   ProjectRole,
   ProjectStatus,
+  RetrieveOrder,
   SystemRole,
   TaskType,
 } from "@/types/domain";
@@ -42,15 +43,19 @@ export const modelFamilyLabel: Record<ModelFamily, string> = {
   "tabular.svm": "SVM",
   "tabular.random_forest": "隨機森林",
   "tabular.xgboost": "XGBoost",
+  "tabular.catboost": "CatBoost",
+  "tabular.tabpfn": "TabPFN",
   "tabular.isolation_forest": "Isolation Forest",
   "vision.yolo": "YOLO",
-  "vision.dino_fewshot": "DINOv2 few-shot",
-  "vision.dino_finetune": "DINOv2 微調",
-  "vision.dino_patchcore": "DINOv2 PatchCore",
+  "vision.dino_fewshot": "DINO few-shot",
+  "vision.dino_finetune": "DINO 微調",
+  "vision.dino_patchcore": "DINO PatchCore",
   "vision.image_quality": "影像品質基準",
   "sequence.patch_autoencoder": "Patch Autoencoder",
   "spectrum.masked_autoencoder": "光譜 Masked AE",
+  "spectrum.pls": "PLS / PLS-DA",
   "text.bert_classifier": "BERT 分類器",
+  "text.qwen_embedding": "Qwen3 Embedding",
 };
 
 /** Unknown ids (e.g. a family added to the catalog before the UI) fall back to the id itself. */
@@ -66,6 +71,12 @@ export const inferenceModeLabel: Record<InferenceMode, string> = {
   segment: "分割",
   measure: "分割 + 幾何量測",
   extend: "新增類別（免重訓）",
+};
+
+export const retrieveOrderLabel: Record<RetrieveOrder, string> = {
+  both: "最相似與最不相似都列",
+  similar: "只找最相似",
+  dissimilar: "只找最不相似",
 };
 
 export const jobStatusLabel: Record<JobStatus, string> = {

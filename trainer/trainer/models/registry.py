@@ -15,6 +15,8 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
     "tabular.svm": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "tabular.random_forest": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "tabular.xgboost": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
+    "tabular.catboost": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
+    "tabular.tabpfn": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "tabular.isolation_forest": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "vision.yolo": ("trainer.models.vision", "YoloTrainer", "YoloInferencer"),
     "vision.dino_fewshot": ("trainer.models.vision", "DinoFewShotTrainer", "DinoFewShotInferencer"),
@@ -35,10 +37,16 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
         "SpectrumMAETrainer",
         "SpectrumMAEInferencer",
     ),
+    "spectrum.pls": ("trainer.models.spectrum", "PLSTrainer", "PLSInferencer"),
     "text.bert_classifier": (
         "trainer.models.text",
         "BertClassifierTrainer",
         "BertClassifierInferencer",
+    ),
+    "text.qwen_embedding": (
+        "trainer.models.text",
+        "QwenEmbeddingTrainer",
+        "QwenEmbeddingInferencer",
     ),
 }
 
@@ -46,6 +54,8 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
 # third-party packages a family needs at runtime (checked by `python -m trainer check`)
 REQUIRES: dict[str, list[str]] = {
     "tabular.xgboost": ["xgboost"],
+    "tabular.catboost": ["catboost"],
+    "tabular.tabpfn": ["torch", "tabpfn"],
     "vision.yolo": ["torch", "ultralytics"],
     "vision.dino_fewshot": ["torch", "transformers", "PIL"],
     "vision.dino_finetune": ["torch", "transformers", "PIL"],
@@ -53,6 +63,7 @@ REQUIRES: dict[str, list[str]] = {
     "sequence.patch_autoencoder": ["torch"],
     "spectrum.masked_autoencoder": ["torch"],
     "text.bert_classifier": ["torch", "transformers"],
+    "text.qwen_embedding": ["torch", "transformers"],
 }
 
 

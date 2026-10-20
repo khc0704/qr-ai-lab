@@ -7,6 +7,8 @@ export type ModelFamily =
   | "tabular.svm"
   | "tabular.random_forest"
   | "tabular.xgboost"
+  | "tabular.catboost"
+  | "tabular.tabpfn"
   | "tabular.isolation_forest"
   | "vision.yolo"
   | "vision.dino_fewshot"
@@ -15,9 +17,13 @@ export type ModelFamily =
   | "vision.image_quality"
   | "sequence.patch_autoencoder"
   | "spectrum.masked_autoencoder"
-  | "text.bert_classifier";
+  | "spectrum.pls"
+  | "text.bert_classifier"
+  | "text.qwen_embedding";
 export type InferenceMode =
   "predict" | "score" | "compare" | "embed" | "retrieve" | "detect" | "segment" | "measure" | "extend";
+/** `retrieve` direction (config.order): most similar, least similar, or both lists per query. */
+export type RetrieveOrder = "similar" | "dissimilar" | "both";
 export type SystemRole = "superadmin" | "admin" | "user";
 export type ProjectRole = "owner" | "maintainer" | "member" | "viewer";
 /** pending → in_review → active → completed; pending / in_review → rejected; active / completed → archived */

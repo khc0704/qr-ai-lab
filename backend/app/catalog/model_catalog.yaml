@@ -85,6 +85,40 @@ families:
     weights: []
     sop: 表格資料的預設首選，多數情況最準。
 
+  tabular.catboost:
+    label: CatBoost
+    group: tabular
+    framework: catboost
+    supports: { TABULAR: [classification, regression] }
+    inference_modes: [predict]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 2048 }
+    min_rows: 100
+    defaults: { iterations: 500, learning_rate: 0.05, depth: 6, l2_leaf_reg: 3.0 }
+    search_space:
+      iterations: { type: int, low: 200, high: 1000 }
+      learning_rate: { type: float, low: 0.01, high: 0.3, log: true }
+      depth: { type: int, low: 4, high: 10 }
+      l2_leaf_reg: { type: float, low: 1, high: 10, log: true }
+    weights: []
+    sop: 梯度提升樹的另一個強基準（有序提升、對類別欄與小資料較穩）；與 XGBoost 一起試，取 leaderboard 較好的。
+
+  tabular.tabpfn:
+    label: TabPFN（表格基礎模型，免訓練）
+    group: tabular
+    framework: tabpfn
+    supports: { TABULAR: [classification, regression] }
+    inference_modes: [predict]
+    resources: { gpu: optional, cpu_min: 2, memory_mb_min: 4096 }
+    min_rows: 20
+    max_rows: 50000
+    defaults: { n_estimators: auto }
+    search_space:
+      n_estimators: { type: categorical, choices: [1, 4, 8] }
+    weights:
+      - { id: tabpfn-v2.5-classifier, file: tabpfn-v2.5-classifier-v2.5_default.ckpt, source: "https://huggingface.co/Prior-Labs/tabpfn_2_5/resolve/main/tabpfn-v2.5-classifier-v2.5_default.ckpt", license: PriorLabs-License, sha256: null, kind: hf_file }
+      - { id: tabpfn-v2.5-regressor,  file: tabpfn-v2.5-regressor-v2.5_default.ckpt,  source: "https://huggingface.co/Prior-Labs/tabpfn_2_5/resolve/main/tabpfn-v2.5-regressor-v2.5_default.ckpt",  license: PriorLabs-License, sha256: null, kind: hf_file }
+    sop: 預訓練在大量合成表格上的 transformer，直接把訓練列放進上下文做預測，不用調參、小資料（幾十到幾千列）通常最準；超過 1 萬列改用 XGBoost / CatBoost。權重從模型庫載入（PriorLabs 授權），有 GPU 快很多。
+
   tabular.isolation_forest:
     label: Isolation Forest
     group: tabular
@@ -114,13 +148,13 @@ families:
       lr0: { type: float, low: 0.001, high: 0.02, log: true }
       epochs: { type: int, low: 50, high: 150 }
     weights:
-      - { id: yolov8n,     file: yolov8n.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolov8s,     file: yolov8s.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolov8m,     file: yolov8m.pt,     source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8m.pt",     license: AGPL-3.0, sha256: null }
-      - { id: yolov8n-seg, file: yolov8n-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-seg.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolov8s-seg, file: yolov8s-seg.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-seg.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-cls.pt", license: AGPL-3.0, sha256: null }
-      - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-cls.pt", license: AGPL-3.0, sha256: null }
+      - { id: yolov8n,     file: yolov8n.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8s,     file: yolov8s.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8m,     file: yolov8m.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8m.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8n-seg, file: yolov8n-seg.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n-seg.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8s-seg, file: yolov8s-seg.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s-seg.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n-cls.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
+      - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8s-cls.pt", license: AGPL-3.0, sha256: null, kind: hf_file }
     sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。
 
   vision.dino_fewshot:
@@ -133,11 +167,13 @@ families:
     min_rows: 5
     defaults: { backbone: dinov2-small, head: prototype, k: 5, metric: cosine }
     search_space:
-      backbone: { type: categorical, choices: [dinov2-small, dinov2-base] }
+      backbone: { type: categorical, choices: [dinov2-small, dinov2-base, dinov3-vits16, dinov3-vitb16] }
       k: { type: int, low: 1, high: 20 }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
+      - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
     sop: 凍結 DINOv2 取特徵，每個類別（bin code）存成原型；新增類別只要加幾張範例，不用重訓。適合 TEM / SEM 表面影像分類。
 
   vision.dino_finetune:
@@ -150,6 +186,7 @@ families:
     min_rows: 20
     defaults: { backbone: dinov2-small, method: lora, epochs: 15, lr: 0.001, rank: 8, lora_alpha: 16, batch: 16, backbone_lr: 0.00001, augment: [hflip] }
     search_space:
+      backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
       method: { type: categorical, choices: [linear, lora] }
       lr: { type: float, low: 0.0001, high: 0.01, log: true }
       rank: { type: categorical, choices: [4, 8, 16] }
@@ -157,6 +194,8 @@ families:
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
+      - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
     sop: 真的訓練 DINOv2 做分類：linear 只訓練分類頭（最快、每類 10+ 張）、lora 在注意力層加低秩轉接器一起訓練（領域差異大時用；產物只有幾 MB）、full 全部參數微調（資料多、VRAM 夠時）。類別固定、每類有幾十張以上、few-shot 原型不夠準時選這個；類別會一直增加仍用 few-shot。augment 自己挑（hflip、vflip、rotate90、crop、brightness、contrast），方向有意義的影像不要加翻轉 / 旋轉。
 
   vision.dino_patchcore:
@@ -169,10 +208,12 @@ families:
     min_rows: 20
     defaults: { backbone: dinov2-small, coreset_ratio: 0.1, k: 3 }
     search_space:
+      backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
       coreset_ratio: { type: float, low: 0.02, high: 0.3 }
       k: { type: int, low: 1, high: 9 }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
     sop: 只用正常影像建 patch 特徵記憶庫，異常分數 = 最近鄰距離，並輸出熱圖定位。
 
   vision.image_quality:
@@ -223,6 +264,20 @@ families:
     weights: []
     sop: 把光譜切 patch 隨機遮蔽再重建，學到的 embedding 做光譜鑑別器：與黃金樣本比相似度、找最不相似、追蹤漂移；有標籤時接迴歸頭預測 CD / 厚度。
 
+  spectrum.pls:
+    label: PLS 迴歸 / PLS-DA 分類
+    group: spectrum
+    framework: sklearn
+    supports: { SPECTRUM: [regression, classification] }
+    inference_modes: [predict, embed]
+    resources: { gpu: none, cpu_min: 1, memory_mb_min: 2048 }
+    min_rows: 20
+    defaults: { n_components: 10, scale: false }
+    search_space:
+      n_components: { type: int, low: 2, high: 30 }
+    weights: []
+    sop: 化學計量學的標準做法：光譜 → 量測值（CD / 膜厚 / 濃度）用 PLS 迴歸，光譜分類用 PLS-DA（PLS 分數 + 邏輯迴歸）。幾十筆就能用、秒級、可解釋（report/vip.csv 說哪些波長重要）；有標籤的光譜先用這個，再和 MAE 比。
+
   text.bert_classifier:
     label: BERT 分類器
     group: text
@@ -241,13 +296,30 @@ families:
       - { id: xlm-roberta-base,  file: xlm-roberta-base/,  source: "https://huggingface.co/FacebookAI/xlm-roberta-base", license: MIT, sha256: null, kind: hf_repo }
     sop: 預訓練 BERT 接分類頭，語意理解；權重從模型庫離線載入。
 
+  text.qwen_embedding:
+    label: Qwen3 Embedding（語意向量：相似搜尋、分類、新型問題偵測）
+    group: text
+    framework: transformers
+    supports: { TEXT: [classification, anomaly_detection] }
+    inference_modes: [predict, retrieve, embed, score]
+    resources: { gpu: optional, cpu_min: 4, memory_mb_min: 8192 }
+    min_rows: 20
+    defaults: { model: qwen3-embedding-0.6b, max_len: 512, batch: 16, C: 1.0, instruction: "" }
+    search_space:
+      C: { type: float, low: 0.01, high: 100, log: true }
+      max_len: { type: categorical, choices: [256, 512, 1024] }
+    weights:
+      - { id: qwen3-embedding-0.6b, file: qwen3-embedding-0.6b/, source: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B", license: Apache-2.0, sha256: null, kind: hf_repo }
+    sop: 凍結的 Qwen3-Embedding（多語、含中文）把每段文字變成語意向量，不微調。分類：向量接邏輯迴歸（幾十筆就能用，比 BERT 微調快很多）；retrieve：找最相似 / 最不相似的歷史工單、log（可選方向與筆數）；anomaly_detection：和歷史紀錄都不像的新型問題（novelty 分數）；embed：向量給分群 / 報表。
+
 automl:
   - data_type: TABULAR
     tasks: [classification, regression]
-    candidates: [tabular.xgboost, tabular.random_forest, tabular.linear, tabular.svm]
+    candidates: [tabular.xgboost, tabular.catboost, tabular.tabpfn, tabular.random_forest, tabular.linear, tabular.svm]
     rules:
       - { if: "row_count > 50000", drop: [tabular.svm] }
-      - { if: "row_count < 1000", prefer: [tabular.random_forest] }
+      - { if: "row_count > 10000", drop: [tabular.tabpfn] }
+      - { if: "row_count < 1000", prefer: [tabular.tabpfn, tabular.random_forest] }
     budget: { max_trials: 20, time_budget_minutes: 60 }
   - data_type: TABULAR
     tasks: [anomaly_detection]
@@ -278,11 +350,21 @@ automl:
     budget: { max_trials: 10, time_budget_minutes: 60 }
   - data_type: SPECTRUM
     tasks: [regression]
-    candidates: [spectrum.masked_autoencoder]
+    candidates: [spectrum.pls, spectrum.masked_autoencoder]
+    rules:
+      - { if: "row_count < 500", drop: [spectrum.masked_autoencoder] }
     budget: { max_trials: 10, time_budget_minutes: 60 }
+  - data_type: SPECTRUM
+    tasks: [classification]
+    candidates: [spectrum.pls]
+    budget: { max_trials: 10, time_budget_minutes: 30 }
   - data_type: TEXT
     tasks: [classification]
-    candidates: [text.bert_classifier, tabular.linear]
+    candidates: [text.qwen_embedding, text.bert_classifier, tabular.linear]
     rules:
       - { if: "row_count < 300", drop: [text.bert_classifier] }
     budget: { max_trials: 8, time_budget_minutes: 120 }
+  - data_type: TEXT
+    tasks: [anomaly_detection]
+    candidates: [text.qwen_embedding]
+    budget: { max_trials: 4, time_budget_minutes: 60 }

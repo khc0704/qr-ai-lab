@@ -32,7 +32,9 @@ def test_automl_candidates_support_their_tasks():
                 assert loader.supports(c, entry["data_type"], t), (entry["data_type"], t, c)
         assert entry["budget"]["max_trials"] >= 1
     search = loader.automl_search("TABULAR", "classification", {"row_count": 500})
-    assert search["candidates"][0] == "tabular.random_forest" and search["metric"] == "f1_macro"
+    assert search["candidates"][:2] == ["tabular.tabpfn", "tabular.random_forest"] and search["metric"] == "f1_macro"
+    big = loader.automl_search("TABULAR", "classification", {"row_count": 20_000})
+    assert "tabular.tabpfn" not in big["candidates"]
     search = loader.automl_search("TABULAR", "regression", {"row_count": 100_000})
     assert "tabular.svm" not in search["candidates"] and search["direction"] == "minimize"
 

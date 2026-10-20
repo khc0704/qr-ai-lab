@@ -128,6 +128,27 @@ async def download_output(jv: JobView, background: BackgroundTasks) -> FileRespo
     return FileResponse(path, filename=filename)
 
 
+OUTPUT_FILE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".csv", ".json", ".txt", ".npy"}
+
+
+@router.get("/{job_id}/output/{path:path}", summary="任務輸出資料夾裡的單一檔案（熱圖、關注區塊、報告）")
+async def output_file(path: str, jv: JobView) -> FileResponse:
+    """``path`` 相對於任務的 ``output/`` 資料夾（trainer 回報的相對路徑，例如 ``attention/x.png``）；只給影像 /
+    文字類型，路徑不得離開該資料夾。"""
+    job = jv[0]
+    if not job.output_path or not path or Path(path).suffix.lower() not in OUTPUT_FILE_SUFFIXES:
+        raise not_found("OUTPUT_NOT_FOUND", "沒有這個輸出檔")
+    storage = get_storage()
+    try:
+        base = storage.abs(f"{job.output_path}/output")
+        target = storage.abs(f"{job.output_path}/output/{path}")
+    except ValueError as e:
+        raise not_found("OUTPUT_NOT_FOUND", "沒有這個輸出檔") from e
+    if base not in target.parents or not target.is_file():
+        raise not_found("OUTPUT_NOT_FOUND", "沒有這個輸出檔")
+    return FileResponse(target, filename=target.name)
+
+
 @router.get("/{job_id}/events", summary="SSE：status / progress / metric / log / end")
 async def job_events(jv: JobView, request: Request):
     job = jv[0]

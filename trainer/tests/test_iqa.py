@@ -91,3 +91,80 @@ def test_requires_enough_golden_images(tmp_path, ctx):
     t = registry.create_trainer("vision.image_quality", "anomaly_detection", {}, ctx)
     with pytest.raises(ValueError, match="至少 5 張"):
         t.fit(Dataset("IMAGE", "anomaly_detection", {}, X=few, ids=[p.name for p in few]))
+
+
+def test_score_rows_carry_tile_maps_and_advice(tmp_path, ctx):
+    golden = _tool_images(tmp_path / "train", "good", 30, 0.8, 120, 11)
+    ds = Dataset("IMAGE", "anomaly_detection", {}, X=golden, ids=[p.name for p in golden], root=tmp_path / "train")
+    t = registry.create_trainer("vision.image_quality", "anomaly_detection", {}, ctx)
+    t.fit(ds)
+    arts = t.export(tmp_path / "out")
+    inf = registry.create_inferencer("vision.image_quality", ctx)
+    inf.load(tmp_path / "out" / "model", arts[0].metadata)
+    blurry_dark = _tool_images(tmp_path / "test", "tool_b", 4, 2.5, 70, 12)
+    out = tmp_path / "pred"
+    res = inf.predict(
+        Dataset("IMAGE", None, {}, X=blurry_dark, ids=[f"tool_b/{p.name}" for p in blurry_dark]), "score", {}, out
+    )
+    row = res.rows[0]
+    assert row["is_anomaly"] and row["map"].startswith("maps/") and (out / row["map"]).exists()
+    assert row["map_metric"] in METRICS and set(row["aspects"]) >= {"focus:low", "brightness:low"}
+    assert "對焦" in row["advice"] and "亮度" in row["advice"]
+    im = Image.open(out / row["map"])
+    assert im.mode == "RGBA" and im.size == (96, 96)
+    # maps can be switched off; embed never writes them
+    res = inf.predict(
+        Dataset("IMAGE", None, {}, X=blurry_dark[:1], ids=["x.png"]), "score", {"maps": False}, tmp_path / "p2"
+    )
+    assert "map" not in res.rows[0] and res.rows[0]["map_metric"]
+    # compare summary groups the advice per aspect
+    res = inf.predict(
+        Dataset("IMAGE", None, {}, X=blurry_dark, ids=[p.name for p in blurry_dark]), "compare", {}, tmp_path / "p3"
+    )
+    aspects = {a["aspect"]: a for a in res.summary["advice"]}
+    assert aspects["focus"]["direction"] == "low" and aspects["brightness"]["direction"] == "low"
+    assert "stigmator" in aspects["focus"]["advice"] and aspects["focus"]["metrics"][0] in METRICS
+    assert "paired" not in res.summary  # no reference folder → NR only
+
+
+def test_paired_full_reference_metrics(tmp_path, ctx):
+    golden = _tool_images(tmp_path / "train", "good", 25, 0.8, 120, 21)
+    ds = Dataset("IMAGE", "anomaly_detection", {}, X=golden, ids=[p.name for p in golden], root=tmp_path / "train")
+    t = registry.create_trainer("vision.image_quality", "anomaly_detection", {}, ctx)
+    t.fit(ds)
+    arts = t.export(tmp_path / "out")
+    inf = registry.create_inferencer("vision.image_quality", ctx)
+    inf.load(tmp_path / "out" / "model", arts[0].metadata)
+    # reference set + the same scenes on another tool: shifted by (3, -2) px and blurred; one exact copy
+    ref_dir, tgt_dir = tmp_path / "pairs" / "golden", tmp_path / "pairs" / "target"
+    ref_dir.mkdir(parents=True)
+    tgt_dir.mkdir(parents=True)
+    paths, ids = [], []
+    for k, p in enumerate(golden[:6]):
+        im = Image.open(p)
+        im.save(ref_dir / p.name)
+        if k == 0:
+            moved = im
+        else:
+            a = np.asarray(im)
+            moved = Image.fromarray(np.roll(np.roll(a, 3, axis=0), -2, axis=1)).filter(ImageFilter.GaussianBlur(1.2))
+        moved.save(tgt_dir / p.name)
+        paths += [ref_dir / p.name, tgt_dir / p.name]
+        ids += [f"golden/{p.name}", f"target/{p.name}"]
+    out = tmp_path / "paired"
+    res = inf.predict(Dataset("IMAGE", None, {}, X=paths, ids=ids), "compare", {}, out)
+    rows = {r["id"]: r for r in res.rows}
+    assert set(rows) == {i for i in ids if i.startswith("target/")}  # reference images are not scored
+    exact = rows[ids[1]]
+    assert exact["reference"] == ids[0] and exact["ssim"] > 0.99 and exact["psnr"] == 100.0
+    assert (exact["shift_x"], exact["shift_y"]) == (0, 0)
+    moved = rows[ids[3]]
+    assert (moved["shift_x"], moved["shift_y"]) == (-2, 3), (moved["shift_x"], moved["shift_y"])
+    assert 0.2 < moved["ssim"] < 0.99 and 0 < moved["ms_ssim"] <= 1 and moved["gmsd"] > 0 and moved["psnr"] < 60
+    assert moved["map"].startswith("maps/") and (out / moved["map"]).exists() and moved["map_metric"] == "ssim"
+    paired = res.summary["paired"]
+    assert paired["n"] == 6 and paired["verdict"] in ("pass", "drift", "fail") and 0 < paired["ssim_mean"] <= 1
+    assert (out / "paired.csv").exists() and {a.name for a in res.extra_artifacts} >= {"paired_report"}
+    # explicit opt-out keeps the plain NR behaviour
+    res = inf.predict(Dataset("IMAGE", None, {}, X=paths, ids=ids), "compare", {"paired": False}, tmp_path / "nr")
+    assert len(res.rows) == 12 and "paired" not in res.summary
