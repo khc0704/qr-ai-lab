@@ -171,3 +171,35 @@ def test_cpu_grant_is_rounded_up(tmp_path, monkeypatch, fake_registry):
     _env(monkeypatch, tmp_path / "input", tmp_path / "out", "train")
     assert runtime.run(FakeBackend(spec)) == 0
     assert seen == [2]  # resources.cpu = 1.5 → ceil → 2 (the runner pins ceil(cpu) cores)
+
+
+def test_automl_only_samples_choices_whose_weights_exist(tmp_path):
+    from trainer.automl import available_choices, weight_id
+    from trainer.models.base import Context
+    from trainer.models.zoo import resolver
+
+    zoo = tmp_path / "zoo"
+    (zoo / "dinov2-small").mkdir(parents=True)
+    (zoo / "yolov8n-cls.pt").write_bytes(b"")
+    files = {
+        "dinov2-small": "dinov2-small/",
+        "dinov3-vits16": "dinov3-vits16/",
+        "yolov8n-cls": "yolov8n-cls.pt",
+        "yolov8m-cls": "yolov8m-cls.pt",
+    }
+    ctx = Context(work_dir=tmp_path, zoo=resolver(zoo, files))
+    assert weight_id("vision.yolo", "classification", "model", "yolov8m") == "yolov8m-cls"
+    assert weight_id("vision.dino_fewshot", "classification", "backbone", "dinov3-vits16") == "dinov3-vits16"
+    assert weight_id("vision.yolo", "detection", "imgsz", 640) is None
+    dino = ["dinov2-small", "dinov3-vits16"]
+    assert available_choices(ctx, "vision.dino_fewshot", "classification", "backbone", dino) == ["dinov2-small"]
+    yolo = ["yolov8n", "yolov8s", "yolov8m"]
+    assert available_choices(ctx, "vision.yolo", "classification", "model", yolo) == ["yolov8n"]
+    assert available_choices(ctx, "vision.yolo", "classification", "imgsz", [512, 640]) == [512, 640]
+    # nothing present → keep the list so the trial reports the missing weight itself
+    assert available_choices(ctx, "vision.dino_finetune", "classification", "backbone", ["dinov3-vitb16"]) == [
+        "dinov3-vitb16"
+    ]
+    assert available_choices(Context(work_dir=tmp_path), "vision.yolo", "detection", "model", ["yolov8n"]) == [
+        "yolov8n"
+    ]

@@ -84,7 +84,21 @@ class Context:
 
     @property
     def workers(self) -> int:
-        return max(0, min(self.cpu, int(os.environ.get("MAX_DATALOADER_WORKERS", "8"))))
+        """DataLoader workers: bounded by the CPU grant, MAX_DATALOADER_WORKERS and the memory grant (each
+        forked worker re-imports torch and holds a batch, so a 4 GB cgroup with 6 workers gets OOM-killed)."""
+        return dataloader_workers(self.cpu, os.environ)
+
+
+WORKER_BASE_MB = 2048  # the main process: torch + CUDA context + the model
+WORKER_MB = 512  # per forked DataLoader worker
+
+
+def dataloader_workers(cpu: int, env) -> int:
+    cap = int(env.get("MAX_DATALOADER_WORKERS", "8") or 8)
+    mem = int(env.get("JOB_MEMORY_MB") or 0)
+    if mem > 0:
+        cap = min(cap, max(0, (mem - WORKER_BASE_MB) // WORKER_MB))
+    return max(0, min(int(cpu), cap))
 
 
 @dataclass

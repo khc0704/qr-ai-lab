@@ -19,7 +19,43 @@ from trainer.models.base import BaseTrainer, Cancelled, Context, Pruned, TrialTi
 LABEL_FREE_METRICS = frozenset({"score_mean", "score_std", "flagged_ratio", "threshold", "val_loss", "loss"})
 
 
-def _sample(trial, fid: str, space: dict[str, Any]) -> dict[str, Any]:
+YOLO_SUFFIX = {"detection": "", "segmentation": "-seg", "classification": "-cls"}
+
+
+def weight_id(fid: str, task: str | None, name: str, value: Any) -> str | None:
+    """The zoo weight a categorical choice stands for (``backbone`` → itself; YOLO ``model`` → + task suffix)."""
+    if name == "backbone":
+        return str(value)
+    if name == "model" and fid == "vision.yolo":
+        return f"{value}{YOLO_SUFFIX.get(task or 'detection', '')}"
+    return None
+
+
+def available_choices(ctx: Context, fid: str, task: str | None, name: str, choices: list[Any]) -> list[Any]:
+    """Drop the choices whose pretrained weight is not in the zoo (a family is a candidate as soon as one of its
+    alternatives is present; sampling a missing one would just burn a trial). Everything else passes through;
+    if nothing is left the original list is kept so the trial fails with the usual "weight missing" message."""
+    if ctx.zoo is None:
+        return choices
+    kept = []
+    for c in choices:
+        wid = weight_id(fid, task, name, c)
+        if wid is None:
+            kept.append(c)
+            continue
+        try:
+            ctx.zoo(wid)
+        except FileNotFoundError:
+            continue
+        kept.append(c)
+    if len(kept) < len(choices):
+        info(f"automl: {fid}.{name} limited to {kept or choices} (weights in the zoo)")
+    return kept or choices
+
+
+def _sample(
+    trial, fid: str, space: dict[str, Any], task: str | None = None, ctx: Context | None = None
+) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for name, d in space.items():
         key = f"{fid}.{name}"
@@ -29,7 +65,10 @@ def _sample(trial, fid: str, space: dict[str, Any]) -> dict[str, Any]:
         elif t == "int":
             out[name] = trial.suggest_int(key, int(d["low"]), int(d["high"]), log=bool(d.get("log", False)))
         elif t == "categorical":
-            out[name] = trial.suggest_categorical(key, list(d["choices"]))
+            choices = list(d["choices"])
+            if ctx is not None:
+                choices = available_choices(ctx, fid, task, name, choices)
+            out[name] = trial.suggest_categorical(key, choices)
     return out
 
 
@@ -97,7 +136,7 @@ def run(
             fam = families.get(fid) or {}
             params = {
                 **(fam.get("defaults") or {}),
-                **_sample(trial, fid, fam.get("search_space") or {}),
+                **_sample(trial, fid, fam.get("search_space") or {}, task, ctx),
                 **user_overrides,
             }
             trainer = registry.create_trainer(fid, task, params, ctx)

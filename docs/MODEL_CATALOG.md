@@ -156,10 +156,12 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 
 Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 400 `GPU_REQUIRED`）。
 
+**記憶體**：影像 / 深度學習任務的主程序光是 torch + CUDA context 就要約 2 GB，每個 DataLoader worker 再各約 0.5 GB；trainer 依任務的記憶體配額自動縮減 worker 數（`(記憶體 − 2048) / 512`，再受 CPU 數與 `MAX_DATALOADER_WORKERS` 限制，實際數字印在 log 的 `limits:` 行）。GPU 影像任務建議申請 ≥ 8 GB（目錄 `memory_mb_min`），4 GB 會只剩 4 個 worker、YOLO 多半會被 cgroup OOM kill（log 出現 `DataLoader worker … killed by signal: Killed` 與 `process exited (-9)` 就是這個）。
+
 ## 6. AutoML 流程（trainer 實作）
 
 1. backend 展開候選寫入 `jobs.config.search = {candidates, metric, direction, max_trials, time_budget_minutes}`；spec 同時帶每個候選的 `defaults` / `search_space`。
-2. trainer：Optuna `TPESampler(seed=42)` + `MedianPruner(n_startup_trials=3)`，ask / tell 介面；每個 trial 先抽 `family`，再抽 `family.參數`。
+2. trainer：Optuna `TPESampler(seed=42)` + `MedianPruner(n_startup_trials=3)`，ask / tell 介面；每個 trial 先抽 `family`，再抽 `family.參數`。對應到權重的選項（DINO 的 `backbone`、YOLO 的 `model` + 任務後綴）只會抽模型庫裡有的（`automl.available_choices`），不會為缺權重的選項浪費 trial。
 3. 深度學習家族每個 epoch 回報指標給 pruner（`ctx.epoch`），被剪掉的 trial 記為 pruned。
 4. 每個完成的 trial 回報 leaderboard row `{trial, family, params, metric, metrics, seconds}` → `jobs.metrics.leaderboard`（依指標排序）。
 5. 時間預算（取 `time_budget_minutes` 與 Job timeout 85% 的較小者）或 trial 數到 → 最佳 trainer `finalize`（表格家族以全部資料重訓）→ 匯出產物；`jobs.model_family` 回填最佳家族，`metrics/metrics.json` 含 leaderboard。
@@ -189,7 +191,7 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
 | 權重 | 來源 | 授權 | 類型 |
 |---|---|---|---|
 | `yolov8n/s/m` | Hugging Face `Ultralytics/YOLOv8`（`resolve/main/<file>.pt`） | AGPL-3.0 | `hf_file` |
-| `yolov8n/s-seg`、`yolov8n/s-cls` | GitHub `ultralytics/assets/releases/download/v8.1.0/<file>.pt`（Hugging Face 沒有這幾個檔） | AGPL-3.0 | `file` |
+| `yolov8n/s/m-seg`、`yolov8n/s/m-cls` | GitHub `ultralytics/assets/releases/download/v8.1.0/<file>.pt`（Hugging Face 沒有這幾個檔） | AGPL-3.0 | `file` |
 | `dinov2-small`、`dinov2-base` | `facebook/dinov2-small`、`facebook/dinov2-base` | Apache-2.0 | `hf_repo` |
 | `dinov3-vits16`、`dinov3-vitb16` | `facebook/dinov3-vits16-pretrain-lvd1689m`、`facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 License（gated：先在模型頁接受授權，下載時要 `HF_TOKEN`） | `hf_repo` |
 | `bert-base-chinese`、`xlm-roberta-base` | `google-bert/bert-base-chinese`、`FacebookAI/xlm-roberta-base` | Apache-2.0 / MIT | `hf_repo` |

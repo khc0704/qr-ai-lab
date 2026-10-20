@@ -121,9 +121,19 @@ function overflows(td: HTMLElement): boolean {
   return false;
 }
 
-/** Body cell. A long value that is cut off gets a small toggle on its right edge that expands just this cell
- *  (wrapped, full content); the table-level 「展開內容」toggle does the same for every cell at once. */
-function TableCell({ className, children, onMouseEnter, ...props }: React.ComponentProps<"td">) {
+const DEFAULT_EXPAND_LINES = 5;
+const LINE_EM = 1.5;
+
+/** Body cell. A long value that is cut off gets a small toggle on its right edge that expands just this cell:
+ *  the column keeps its width, the text wraps, and past `expandLines` lines (default 5) the cell scrolls. The
+ *  table-level 「展開內容」toggle instead wraps every cell at once. */
+function TableCell({
+  className,
+  children,
+  onMouseEnter,
+  expandLines = DEFAULT_EXPAND_LINES,
+  ...props
+}: React.ComponentProps<"td"> & { expandLines?: number }) {
   const ref = React.useRef<HTMLTableCellElement>(null);
   const [overflowing, setOverflowing] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
@@ -153,7 +163,17 @@ function TableCell({ className, children, onMouseEnter, ...props }: React.Compon
       )}
       {...props}
     >
-      {children}
+      {expanded ? (
+        <div
+          data-slot="cell-expanded"
+          className="overflow-x-hidden overflow-y-auto whitespace-normal"
+          style={{ maxHeight: `${expandLines * LINE_EM}em`, lineHeight: `${LINE_EM}em` }}
+        >
+          {children}
+        </div>
+      ) : (
+        children
+      )}
       {showToggle ? (
         <button
           type="button"
@@ -166,8 +186,8 @@ function TableCell({ className, children, onMouseEnter, ...props }: React.Compon
           }}
           onKeyDown={(e) => e.stopPropagation()}
           className={cn(
-            "absolute top-1/2 right-0.5 z-10 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded border border-border bg-card text-muted-foreground shadow-xs hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
-            expanded && "text-brand-ink",
+            "absolute right-0.5 z-10 inline-flex size-5 items-center justify-center rounded border border-border bg-card text-muted-foreground shadow-xs hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+            expanded ? "top-2 text-brand-ink" : "top-1/2 -translate-y-1/2",
           )}
           data-testid="cell-expand"
         >

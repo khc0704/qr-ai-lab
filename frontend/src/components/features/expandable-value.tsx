@@ -6,7 +6,10 @@ import { ChevronsLeftRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-export function ExpandableValue({ text, className }: { text: string; className?: string }) {
+const LINE_EM = 1.5;
+
+/** `lines`: how many wrapped lines show before the value scrolls (default 5). */
+export function ExpandableValue({ text, className, lines = 5 }: { text: string; className?: string; lines?: number }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [overflowing, setOverflowing] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -25,7 +28,11 @@ export function ExpandableValue({ text, className }: { text: string; className?:
       <span
         ref={ref}
         data-expanded={expanded || undefined}
-        className={cn("min-w-0", expanded ? "break-all whitespace-pre-wrap" : "truncate")}
+        className={cn(
+          "min-w-0",
+          expanded ? "block overflow-y-auto text-left break-all whitespace-pre-wrap" : "truncate",
+        )}
+        style={expanded ? { maxHeight: `${lines * LINE_EM}em`, lineHeight: `${LINE_EM}em` } : undefined}
         title={expanded ? undefined : text}
       >
         {text}

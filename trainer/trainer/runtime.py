@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import shutil
 import signal
 import time
@@ -96,6 +97,10 @@ def run(backend: Backend | None = None) -> int:
         ctx.cpu = max(1, math.ceil(float(res.get("cpu") or 1)))  # the runner pins ceil(cpu) cores
         ctx.gpu = int(res.get("gpu") or 0)
         lim = limits.apply_from_env(ctx.cpu)  # clamp BLAS / OpenMP / torch pools to the grant, cap shared-GPU memory
+        info(
+            f"limits: dataloader workers={ctx.workers} (cpu={ctx.cpu}, memory={os.environ.get('JOB_MEMORY_MB') or '?'} "
+            "MB; each worker ≈ 512 MB on top of ~2 GB for the main process)"
+        )
         ctx.gpu_memory_mb = lim.gpu_memory_mb
         ctx.zoo = zoo.resolver(env.zoo_root, spec.get("zoo_weights") or {})
         info(

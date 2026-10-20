@@ -265,15 +265,30 @@
   animation: var(--animate-shimmer);
 }
 
-/* 7. Tables: 「展開內容」mode (whole table) and the per-cell toggle (data-expanded) let truncated cells wrap so
-   nothing is hidden behind an ellipsis */
+/* 7. Tables: 「展開內容」mode (whole table) lets truncated cells wrap and grow */
 [data-slot="table-container"][data-wrap] :is(td, th),
-[data-slot="table-container"][data-wrap] :is(td, th) :is(span, a, div, p, code, dd, dt),
-[data-slot="table-cell"][data-expanded],
-[data-slot="table-cell"][data-expanded] :is(span, a, div, p, code, dd, dt) {
+[data-slot="table-container"][data-wrap] :is(td, th) :is(span, a, div, p, code, dd, dt) {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
   max-width: none;
   overflow-wrap: anywhere;
+}
+/* per-cell expand (data-expanded): the column keeps its width, the content wraps inside a scrolling box of at
+   most N lines (TableCell expandLines) */
+[data-slot="table-cell"][data-expanded] {
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: clip;
+  vertical-align: top;
+}
+[data-slot="table-cell"][data-expanded] [data-slot="cell-expanded"],
+[data-slot="table-cell"][data-expanded] [data-slot="cell-expanded"] :is(span, a, div, p, code, dd, dt) {
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  max-width: none;
+}
+[data-slot="table-cell"][data-expanded] [data-slot="cell-expanded"] :is(span, a, div, p, code, dd, dt) {
+  overflow: visible;
 }

@@ -40,3 +40,14 @@ def test_apply_from_env_parses_gpu_cap(monkeypatch):
     assert lim.gpu_memory_mb == 4096 and lim.cpu >= 1
     monkeypatch.setenv("JOB_GPU_MEMORY_MB", "")
     assert limits.apply_from_env(2).gpu_memory_mb is None
+
+
+def test_dataloader_workers_follow_the_memory_grant():
+    from trainer.models.base import dataloader_workers
+
+    assert dataloader_workers(6, {}) == 6
+    assert dataloader_workers(6, {"MAX_DATALOADER_WORKERS": "2"}) == 2
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "4096"}) == 4  # (4096 − 2048) / 512
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "2048"}) == 0
+    assert dataloader_workers(6, {"JOB_MEMORY_MB": "16384"}) == 6
+    assert dataloader_workers(2, {"JOB_MEMORY_MB": "16384", "MAX_DATALOADER_WORKERS": "8"}) == 2
