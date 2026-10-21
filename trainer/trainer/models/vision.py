@@ -1,5 +1,6 @@
-"""Vision families: YOLO (ultralytics), DINOv2 / v3 few-shot (prototype / kNN / heads, optional normal-patch bank),
-DINOv2 / v3 fine-tuning (linear / LoRA / full) and DINO PatchCore anomaly detection.
+"""Vision families: YOLO (ultralytics), DINOv2 / v3 frozen-feature classification (prototype / kNN / linear / SVM
+heads, optional PatchCore two-stage defect classification), DINO LoRA fine-tuning and DINO PatchCore anomaly
+detection.
 
 Weights never come from the network: YOLO checkpoints and DINOv2 folders are resolved through ctx.weight()
 (the model zoo). `pretrained: false` builds YOLO from its architecture yaml (bundled with ultralytics).
@@ -25,17 +26,18 @@ from trainer.dataset import Dataset
 from trainer.log import info, warn
 from trainer.models.base import ArtifactOut, BaseInferencer, BaseTrainer, PredictResult
 from trainer.models.dino_features import (
+    SCORE_AGGS,
     FeatureSpec,
     FewShotHead,
-    apply_center,
+    aggregate_neighborhood,
+    aggregate_scores,
     backbone_kind,
-    center_vector,
     fuse_blocks,
-    pool_layer,
-    remove_cls_component,
+    fuse_tokens,
+    patch_reference,
+    resolve_head,
     resolve_layers,
     select_layers,
-    similarities,
 )
 from trainer.models.tabular import _binary_anomaly_labels
 from trainer.retrieval import neighbour_rows
@@ -130,6 +132,22 @@ YOLO_NO_AUGMENT: dict[str, Any] = {
 }
 
 
+YOLO_FREEZE_BELOW = 200  # freeze=auto: with fewer images than this, train only the neck + head
+
+
+def resolve_freeze(value: Any, n_images: int, n_backbone: int = 10, pretrained: bool = True) -> tuple[int, str]:
+    """``freeze`` param → (modules to freeze, reason). ``auto`` freezes the backbone (its module count comes
+    from the model yaml: 10 for detection / segmentation, 9 for classification) on small datasets; a network
+    trained from scratch has nothing worth freezing."""
+    if value in (None, "", "auto"):
+        if not pretrained:
+            return 0, "from scratch → nothing to freeze"
+        if n_images < YOLO_FREEZE_BELOW:
+            return n_backbone, f"{n_images} images < {YOLO_FREEZE_BELOW} → backbone ({n_backbone} modules) frozen"
+        return 0, f"{n_images} images → whole network trains"
+    return int(value), "chosen by the user"
+
+
 class YoloTrainer(BaseTrainer):
     framework = "ultralytics"
 
@@ -202,10 +220,14 @@ class YoloTrainer(BaseTrainer):
             aug = yolo_augment_kwargs(self.params["augment"])
             info("yolo: augment " + ", ".join(f"{k}={v}" for k, v in aug.items()))
             kwargs.update(aug)
-        freeze = int(self.params.get("freeze") or 0)
+        n_backbone = len((getattr(model.model, "yaml", None) or {}).get("backbone", [])) or 10
+        freeze, why = resolve_freeze(
+            self.params.get("freeze", "auto"), len(ds), n_backbone, bool(self.params.get("pretrained", True))
+        )
         if freeze > 0:  # keep the first N layers (the backbone) at their pretrained values: faster, less overfit
             kwargs["freeze"] = freeze
-            info(f"yolo: freezing the first {freeze} layers")
+        info(f"yolo: freeze={freeze} ({why})")
+        self.meta["resolved"] = {"freeze": freeze}
         try:
             results = model.train(**kwargs)
         except RuntimeError as e:
@@ -431,7 +453,7 @@ class YoloInferencer(BaseInferencer):
 
 
 # ---------------------------------------------------------------------------------------------------
-# DINOv2 / DINOv3 (frozen backbone) — shared encoder with feature options, few-shot heads, PatchCore
+# DINOv2 / DINOv3 (frozen backbone) — patch-token features, few-shot heads, PatchCore patch bank
 # ---------------------------------------------------------------------------------------------------
 
 
@@ -442,21 +464,15 @@ def special_tokens(config) -> int:
 
 ATTENTION_MAX = 2000  # overlays written per inference run (one PNG per image)
 NORMAL_FOLDERS = ("good", "normal", "ok", "pass")  # class folder names that mean "no defect"
-
-
-def _attention_maps(
-    out: Path, ids: list[Any], paths: list[Path], patches: np.ndarray, refs: np.ndarray, processor, enabled: bool
-) -> list[str | None]:
-    """Per image: cosine similarity of every patch token to its reference vector (the matched prototype or
-    neighbour) → RGBA heat overlay under ``out/attention/``; returns the relative path per image (None when off)."""
-    if not enabled:
-        return [None] * len(paths)
-    values = [patches[n].astype(np.float32) @ refs[n].astype(np.float32) for n in range(len(paths))]
-    return _overlays(out, ids, paths, values, processor)
+BANK_MAX_PATCHES = 100_000  # coreset_ratio=auto keeps the memory bank at most this big
+BANK_AUGMENT_BELOW = 20  # bank_augment=auto: flip / rotate the normal images when there are fewer than this
+PROJECT_ABOVE = 1536  # fused patch features wider than this are projected down (random projection) to PROJECT_TO
+PROJECT_TO = 1024
 
 
 def _overlays(out: Path, ids: list[Any], paths: list[Path], values: list[np.ndarray], processor) -> list[str | None]:
-    """One RGBA overlay per image from a per-patch value vector (similarity, anomaly score, Grad-CAM)."""
+    """One RGBA overlay per image from a per-patch value vector (similarity, CAM, anomaly score) under
+    ``out/attention/``; returns the relative path per image (None past ATTENTION_MAX)."""
     from PIL import Image
 
     from trainer import viz
@@ -478,15 +494,25 @@ def _overlays(out: Path, ids: list[Any], paths: list[Path], values: list[np.ndar
     return rels
 
 
+def _attention_maps(
+    out: Path, ids: list[Any], paths: list[Path], patches: np.ndarray, refs: np.ndarray, processor, enabled: bool
+) -> list[str | None]:
+    """Per image: cosine similarity of every patch token to its reference vector (the matched prototype or
+    neighbour, or a linear head's class weights = CAM)."""
+    if not enabled:
+        return [None] * len(paths)
+    values = [patches[n].astype(np.float32) @ refs[n].astype(np.float32) for n in range(len(paths))]
+    return _overlays(out, ids, paths, values, processor)
+
+
 def _neighbour_rows(sims: np.ndarray, order: str, k: int, labels: np.ndarray, ids: np.ndarray) -> dict[str, Any]:
     """retrieve: the k most similar and / or least similar reference items for one query (see trainer.retrieval)."""
     return neighbour_rows(sims, order, k, labels, ids)
 
 
 def _set_image_size(processor, image_size: int | None) -> None:
-    """``image_size`` option: resize the short side to it and centre-crop a square of it (DINO processors are
-    BitImageProcessor-like: ``size.shortest_edge`` + ``crop_size``). 224 is the pretraining size; 336 / 448 give
-    2.25 / 4× more patches for fine texture at 2.25 / 4× the compute."""
+    """``image_size``: resize the short side to it and centre-crop a square of it. 224 is the pretraining size;
+    336 / 448 give 2.25 / 4× more patches for fine texture at 2.25 / 4× the compute."""
     if not image_size:
         return
     s = int(image_size)
@@ -499,34 +525,20 @@ def _set_image_size(processor, image_size: int | None) -> None:
         warn(f"image_size={s} ignored: {e}")
 
 
-def _load_backbone(path: Path, *, eager: bool):
+def _load_backbone(path: Path):
     from transformers import AutoModel
 
-    kwargs: dict[str, Any] = {"local_files_only": True}
-    if eager:  # sdpa attention cannot return the attention weights the ``cls+attn`` pooling needs
-        kwargs["attn_implementation"] = "eager"
-    return AutoModel.from_pretrained(str(path), **kwargs)
+    return AutoModel.from_pretrained(str(path), local_files_only=True)
 
 
-def patch_reference(vec: np.ndarray, hidden: int, spec: FeatureSpec, n_layers_used: int) -> np.ndarray:
-    """A fused global feature (what the bank stores) → a unit vector in the patch grid's space, so every patch
-    token can be scored against it for an attention map. Per layer the patch part of a block is its last
-    ``hidden`` entries (the mean / GeM / attention-pooled patches; for ``pool=cls`` the CLS itself)."""
-    n = n_layers_used if spec.layer_fusion == "concat" else 1
-    block = spec.block_dim(hidden)
-    v = np.asarray(vec, dtype=np.float32)
-    if v.size != n * block:  # a bank from another layout: best effort on the tail
-        v = v[-hidden:] if v.size >= hidden else v
-        return v / (np.linalg.norm(v) + 1e-9)
-    parts = v.reshape(n, block)[:, -hidden:]
-    ref = parts.reshape(-1)
-    return ref / (np.linalg.norm(ref) + 1e-9)
+def _final_norm(model):
+    return getattr(model, "layernorm", None) or getattr(model, "norm", None)
 
 
 class _Dino:
     """Frozen DINOv2 / v3 from the zoo, driven by a FeatureSpec: reads the selected layers (final norm applied
-    to each), pools their tokens, fuses the layers into one vector per image and (optionally) returns the fused,
-    L2-normalised patch grid."""
+    to each), keeps the patch tokens only, averages them per layer for the image vector and concatenates the
+    layers; optionally returns the fused, L2-normalised patch grid (with PatchCore's neighbourhood mean)."""
 
     def __init__(self, ctx, backbone_id: str, spec: FeatureSpec | None = None) -> None:
         import torch
@@ -537,32 +549,31 @@ class _Dino:
         self.ctx = ctx
         self.torch = torch
         self.backbone_id = backbone_id
-        self.spec = spec
         self.processor = AutoImageProcessor.from_pretrained(str(path), local_files_only=True)
         _set_image_size(self.processor, spec.image_size)
-        self.model = _load_backbone(path, eager=spec.wants_attention).to(ctx.device).eval()
+        self.model = _load_backbone(path).to(ctx.device).eval()
         cfg = self.model.config
         self.kind = backbone_kind(backbone_id, getattr(cfg, "model_type", None))
         self.n_layers = int(cfg.num_hidden_layers)
         self.hidden = int(cfg.hidden_size)
-        self.final_norm = getattr(self.model, "layernorm", None) or getattr(self.model, "norm", None)
+        self.final_norm = _final_norm(self.model)
         self.layers = resolve_layers(spec.layers, self.n_layers, self.kind)
-        if spec.layers != "auto":  # the artifact stores the resolved layer ids (a preset depends on the backbone)
-            self.spec = replace(spec, layers=self.layers)
+        # the artifact stores the resolved layer ids (a preset depends on the backbone depth)
+        self.spec = spec if spec.layers == "auto" else replace(spec, layers=self.layers)
         # token layout: [CLS] [register × n (DINOv3)] [patch × L]; only the patches form the spatial grid
         self.n_special = 1 + special_tokens(cfg)
         info(
             f"dino: loaded {backbone_id} ({self.kind}, {self.n_layers} layers, hidden={self.hidden}) from {path} "
-            f"on {ctx.device}; {spec.describe()} → layers {list(self.layers)}, feature dim={self.feature_dim}"
+            f"on {ctx.device}; {self.spec.describe()} → layers {list(self.layers)}, feature dim={self.feature_dim}"
         )
 
     @property
     def feature_dim(self) -> int:
-        return self.spec.feature_dim(self.hidden, len(self.layers))
+        return self.hidden * len(self.layers)
 
     @property
     def patch_dim(self) -> int:
-        return self.hidden * (len(self.layers) if self.spec.layer_fusion == "concat" else 1)
+        return self.hidden * len(self.layers)
 
     def with_layers(self, layers: tuple[int, ...]) -> _Dino:
         """Same model, a narrower layer selection (used after ``layers: auto`` picked)."""
@@ -573,79 +584,58 @@ class _Dino:
         other.spec = replace(self.spec, layers=tuple(layers))
         return other
 
-    def _batches(self, paths: list[Path], batch: int):
+    def _batches(self, items: list[Any], batch: int):
+        """``items`` are paths or already-open PIL images."""
         from PIL import Image
 
-        for s in range(0, len(paths), batch):
-            imgs = [Image.open(p).convert("RGB") for p in paths[s : s + batch]]
+        for s in range(0, len(items), batch):
+            imgs = [
+                x.convert("RGB") if isinstance(x, Image.Image) else Image.open(x).convert("RGB")
+                for x in items[s : s + batch]
+            ]
             yield self.processor(images=imgs, return_tensors="pt")["pixel_values"].to(self.ctx.device)
 
     def forward(self, px):
-        """→ (cls per layer, patch tokens per layer, CLS→patch attention of the last block or None)."""
-        want_attn = self.spec.wants_attention
-        out = self.model(pixel_values=px, output_hidden_states=True, output_attentions=want_attn)
-        hs = out.hidden_states  # index 0 = embeddings, k = after block k
-        attn = None
-        if want_attn and getattr(out, "attentions", None):
-            attn = out.attentions[-1][:, :, 0, self.n_special :].mean(dim=1)  # (B, L)
-        cls_list, tok_list = [], []
+        """→ patch tokens per selected layer (final norm applied; CLS / register tokens dropped)."""
+        hs = self.model(pixel_values=px, output_hidden_states=True).hidden_states  # index k = after block k
+        toks = []
         for layer in self.layers:
             h = hs[layer]
             if self.final_norm is not None:
                 h = self.final_norm(h)
-            cls, tok = h[:, 0], h[:, self.n_special :]
-            if self.spec.background == "project_out_cls":
-                tok = remove_cls_component(tok, cls)
-            cls_list.append(cls)
-            tok_list.append(tok)
-        return cls_list, tok_list, attn
-
-    def blocks(self, px):
-        """(B, n_layers_used, block_dim): one pooled vector per selected layer."""
-        cls_list, tok_list, attn = self.forward(px)
-        return self.torch.stack(
-            [pool_layer(c, t, self.spec.pool, attn) for c, t in zip(cls_list, tok_list, strict=True)], dim=1
-        )
+            toks.append(h[:, self.n_special :])
+        return toks
 
     def fuse_patches(self, tok_list):
-        """Per-layer L2-normalised patch tokens → the fused patch grid (B, L, patch_dim)."""
-        nf = self.torch.nn.functional.normalize
-        toks = [nf(t, dim=-1) for t in tok_list]
-        if self.spec.layer_fusion == "concat":
-            return self.torch.cat(toks, dim=-1)
-        return nf(self.torch.stack(toks).mean(dim=0), dim=-1)
+        """Per-layer patch tokens → the fused, L2-normalised patch grid (B, L, patch_dim), after the
+        neighbourhood mean when the spec asks for it."""
+        return fuse_tokens([aggregate_neighborhood(t, self.spec.neighborhood) for t in tok_list])
 
     def fuse(self, blocks: np.ndarray) -> np.ndarray:
-        return fuse_blocks(blocks, self.spec.layer_fusion)
+        return fuse_blocks(blocks)
 
-    def embed(self, paths: list[Path], *, patches: bool = False, batch: int = 16, progress=None, per_layer=False):
+    def embed(self, items: list[Any], *, patches: bool = False, batch: int = 16, progress=None, per_layer=False):
         """Fused, L2-normalised image vectors (N, feature_dim); with ``patches`` also the fused patch grid
-        (N, L, patch_dim) in float16; with ``per_layer`` the per-layer blocks (N, n_layers_used, block_dim)
-        instead of the fused vector (the caller fuses a subset)."""
+        (N, L, patch_dim) in float16; with ``per_layer`` the per-layer mean-pooled blocks (N, n_layers_used,
+        hidden) instead of the fused vector (the caller fuses a subset)."""
         torch = self.torch
         block_out, patch_out = [], []
         with torch.no_grad():
-            for k, px in enumerate(self._batches(paths, batch)):
-                cls_list, tok_list, attn = self.forward(px)
-                b = torch.stack(
-                    [pool_layer(c, t, self.spec.pool, attn) for c, t in zip(cls_list, tok_list, strict=True)], dim=1
-                )
-                block_out.append(b.float().cpu().numpy())
+            for k, px in enumerate(self._batches(items, batch)):
+                toks = self.forward(px)
+                block_out.append(torch.stack([t.mean(dim=1) for t in toks], dim=1).float().cpu().numpy())
                 if patches:
-                    patch_out.append(self.fuse_patches(tok_list).cpu().numpy().astype(np.float16))
+                    patch_out.append(self.fuse_patches(toks).cpu().numpy().astype(np.float16))
                 if progress:
-                    progress(min(1.0, (k + 1) * batch / max(1, len(paths))))
-        if block_out:
-            blocks = np.concatenate(block_out)
-        else:
-            blocks = np.zeros((0, len(self.layers), self.spec.block_dim(self.hidden)), np.float32)
+                    progress(min(1.0, (k + 1) * batch / max(1, len(items))))
+        blocks = np.concatenate(block_out) if block_out else np.zeros((0, len(self.layers), self.hidden), np.float32)
         emb = blocks if per_layer else self.fuse(blocks)
         if not patches:
             return emb
         return emb, (np.concatenate(patch_out) if patch_out else None)
 
     def patch_reference(self, vec: np.ndarray) -> np.ndarray:
-        return patch_reference(vec, self.hidden, self.spec, len(self.layers))
+        return patch_reference(vec, self.hidden, len(self.layers))
 
 
 def _auto_layers(dino: _Dino, paths: list[Path], labels: np.ndarray, progress=None) -> tuple[_Dino, np.ndarray, list]:
@@ -664,6 +654,9 @@ def _auto_layers(dino: _Dino, paths: list[Path], labels: np.ndarray, progress=No
     )
     narrowed = dino.with_layers(chosen)
     return narrowed, narrowed.fuse(blocks[:, sel, :]), report
+
+
+# --- PatchCore patch bank ---------------------------------------------------------------------------------
 
 
 def _patch_scores(bank_t, patches: np.ndarray, k: int, torch) -> np.ndarray:
@@ -685,6 +678,59 @@ def _coreset(flat: np.ndarray, ratio: float, seed: int = 42) -> np.ndarray:
     return flat[rng.choice(n, size=min(n, size), replace=False)].astype(np.float16)
 
 
+def resolve_coreset_ratio(value: Any, total_patches: int) -> tuple[float, str]:
+    """``coreset_ratio`` → (ratio, reason). ``auto`` keeps the bank at most BANK_MAX_PATCHES patches."""
+    if value in (None, "", "auto"):
+        ratio = min(1.0, BANK_MAX_PATCHES / max(1, total_patches))
+        return ratio, f"{total_patches:,} normal patches → keep {ratio:.0%} (bank ≤ {BANK_MAX_PATCHES:,})"
+    return float(value), "chosen by the user"
+
+
+def resolve_flag(value: Any, auto_value: bool, reason: str) -> tuple[bool, str]:
+    s = str(value if value is not None else "auto").lower()
+    if s in ("auto", ""):
+        return auto_value, reason
+    return s in ("on", "true", "1", "yes"), "chosen by the user"
+
+
+def resolve_score_agg(value: Any, n_patches: int) -> tuple[str, str]:
+    """``score_agg`` → (agg, reason). ``auto`` = ``max`` on coarse grids (≤ 256 patches: one patch is already
+    a large area), ``top1`` on finer ones (robust to a single noisy patch)."""
+    s = str(value or "auto").lower()
+    if s == "auto":
+        if n_patches <= 256:
+            return "max", f"{n_patches} patches per image → max"
+        return "top1", f"{n_patches} patches per image → mean of the top 1 %"
+    if s not in SCORE_AGGS:
+        raise ValueError(f"score_agg 必須是 auto / {' / '.join(SCORE_AGGS)}，不是 {value!r}")
+    return s, "chosen by the user"
+
+
+def _projection(dim_in: int, dim_out: int, seed: int = 0) -> np.ndarray | None:
+    """Fixed Gaussian random projection (Johnson–Lindenstrauss) applied to very wide fused patch features;
+    regenerated from the seed at inference, never stored."""
+    if dim_out <= 0 or dim_out >= dim_in:
+        return None
+    rng = np.random.default_rng(seed)
+    return (rng.standard_normal((dim_in, dim_out)) / np.sqrt(dim_out)).astype(np.float32)
+
+
+def _project(patches: np.ndarray, proj: np.ndarray | None) -> np.ndarray:
+    if proj is None:
+        return patches
+    flat = patches.reshape(-1, patches.shape[-1]).astype(np.float32) @ proj
+    flat /= np.linalg.norm(flat, axis=1, keepdims=True) + 1e-9
+    return flat.reshape(*patches.shape[:-1], proj.shape[1]).astype(np.float16)
+
+
+def _augmented(path: Path) -> list[Any]:
+    """The image plus its flips and a 90° rotation (bank augmentation for very small normal sets)."""
+    from PIL import Image, ImageOps
+
+    im = Image.open(path).convert("RGB")
+    return [im, ImageOps.mirror(im), ImageOps.flip(im), im.rotate(90, expand=True)]
+
+
 def _resolve_normal_class(classes: list[str], wanted: Any) -> str | None:
     """The class that means "no defect": ``normal_class`` if given (must exist), else a folder named like
     good / normal / ok / pass."""
@@ -698,11 +744,11 @@ def _resolve_normal_class(classes: list[str], wanted: Any) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-class _NormalBank:
-    """Stage one of the two-stage defect classifier: a PatchCore memory bank of the normal class's patch
-    tokens. An image whose patches all stay close to the bank is the normal class; otherwise the anomalous
-    patches (above the threshold) are pooled, score-weighted, into a defect descriptor that stage two
-    classifies among the defect classes. Score / overlay also tell *where* the defect is."""
+class _PatchBank:
+    """PatchCore memory bank of the normal images' patch tokens. Patch score = mean distance to the k nearest
+    bank patches; image score = ``max`` or ``top1`` over the patches; threshold = P99 of held-out normal
+    images. Shared by the anomaly-detection family and the two-stage classifier (where the anomalous patches
+    above the threshold are pooled, score-weighted, into a defect descriptor)."""
 
     def __init__(
         self,
@@ -711,19 +757,28 @@ class _NormalBank:
         grid: int,
         *,
         k: int = 3,
-        normal_class: str,
+        score_agg: str = "max",
+        normal_class: str | None = None,
+        coreset_ratio: float = 0.1,
+        projection: dict[str, Any] | None = None,
         defect_global: bool = True,
         percentile: float = 99.0,
-        coreset_ratio: float = 0.1,
     ) -> None:
         self.bank = bank
         self.threshold = threshold
         self.grid = grid
         self.k = k
+        self.score_agg = score_agg
         self.normal_class = normal_class
+        self.coreset_ratio = coreset_ratio
+        self.projection = projection
+        self.proj = (
+            _projection(int(projection["dim_in"]), int(projection["dim_out"]), int(projection.get("seed", 0)))
+            if projection
+            else None
+        )
         self.defect_global = defect_global
         self.percentile = percentile
-        self.coreset_ratio = coreset_ratio
         self._bank_t = None
 
     def meta(self) -> dict[str, Any]:
@@ -731,70 +786,92 @@ class _NormalBank:
             "threshold": self.threshold,
             "grid": self.grid,
             "k": self.k,
+            "score_agg": self.score_agg,
             "normal_class": self.normal_class,
+            "coreset_ratio": self.coreset_ratio,
+            "projection": self.projection,
             "defect_global": self.defect_global,
             "percentile": self.percentile,
-            "coreset_ratio": self.coreset_ratio,
             "patches": len(self.bank),
             "patch_dim": int(self.bank.shape[1]),
         }
 
     @classmethod
-    def from_meta(cls, meta: dict[str, Any], bank: np.ndarray) -> _NormalBank:
+    def from_meta(cls, meta: dict[str, Any], bank: np.ndarray) -> _PatchBank:
         return cls(
             bank,
             float(meta["threshold"]),
             int(meta["grid"]),
             k=int(meta.get("k") or 3),
-            normal_class=str(meta["normal_class"]),
+            score_agg=str(meta.get("score_agg") or "max"),
+            normal_class=meta.get("normal_class"),
+            coreset_ratio=float(meta.get("coreset_ratio") or 0.1),
+            projection=meta.get("projection"),
             defect_global=bool(meta.get("defect_global", True)),
             percentile=float(meta.get("percentile") or 99),
-            coreset_ratio=float(meta.get("coreset_ratio") or 0.1),
         )
 
     @classmethod
     def fit(
         cls,
         dino: _Dino,
-        paths: list[Path],
-        labels: np.ndarray,
-        normal_class: str,
+        normal_paths: list[Path],
         params: dict[str, Any],
-        ctx,
+        *,
+        normal_class: str | None = None,
         progress=None,
-    ):
-        normal_idx = np.flatnonzero(labels == normal_class)
-        if len(normal_idx) < 2:
-            raise ValueError(f"normal_bank 需要至少 2 張正常（{normal_class}）影像來建立記憶庫並估門檻")
+        resolved: dict[str, Any] | None = None,
+    ) -> _PatchBank:
+        """Build the bank from ``normal_paths`` (20 % held out for the threshold; with < 2 images the bank and
+        the threshold come from the same images, which only a user-set threshold can fix)."""
+        if len(normal_paths) < 2:
+            raise ValueError("PatchCore 需要至少 2 張正常影像來建立記憶庫並估門檻")
         rng = np.random.default_rng(42)
-        perm = rng.permutation(normal_idx)
+        perm = rng.permutation(len(normal_paths))
         n_hold = max(1, round(len(perm) * 0.2))
-        hold, train = perm[:n_hold], perm[n_hold:]
-        k = int(params.get("bank_k", 3))
-        ratio = float(params.get("coreset_ratio", 0.1))
+        hold = [normal_paths[i] for i in perm[:n_hold]]
+        train = [normal_paths[i] for i in perm[n_hold:]]
+        k = int(params.get("bank_k", params.get("k", 3)) or 3)
         pct = float(params.get("patch_percentile", 99))
-        _, patches = dino.embed(
-            [paths[i] for i in train], patches=True, progress=lambda f: progress(0.5 * f) if progress else None
+        augment, why_aug = resolve_flag(
+            params.get("bank_augment", "auto"),
+            len(train) < BANK_AUGMENT_BELOW,
+            f"{len(train)} normal images {'<' if len(train) < BANK_AUGMENT_BELOW else '≥'} {BANK_AUGMENT_BELOW}",
         )
+        items: list[Any] = []
+        for p in train:
+            items.extend(_augmented(p) if augment else [p])
+        _, patches = dino.embed(items, patches=True, progress=lambda f: progress(0.5 * f) if progress else None)
         n, L, D = patches.shape
+        projection = None
+        if D > PROJECT_ABOVE:
+            projection = {"dim_in": D, "dim_out": PROJECT_TO, "seed": int(params.get("seed", 0))}
+            patches = _project(patches, _projection(D, PROJECT_TO, projection["seed"]))
+        ratio, why_ratio = resolve_coreset_ratio(params.get("coreset_ratio", "auto"), n * L)
+        agg, why_agg = resolve_score_agg(params.get("score_agg", "auto"), L)
         bank = cls(
-            _coreset(patches.reshape(-1, D), ratio),
+            _coreset(patches.reshape(-1, patches.shape[-1]), ratio),
             0.0,
             round(np.sqrt(L)),
             k=k,
+            score_agg=agg,
             normal_class=normal_class,
+            coreset_ratio=ratio,
+            projection=projection,
             defect_global=bool(params.get("defect_global", True)),
             percentile=pct,
-            coreset_ratio=ratio,
         )
-        scores, _ = bank.score(
-            dino, [paths[i] for i in hold], progress=lambda f: progress(0.5 + 0.5 * f) if progress else None
-        )
+        scores, _ = bank.score(dino, hold, progress=lambda f: progress(0.5 + 0.5 * f) if progress else None)
         bank.threshold = float(np.percentile(scores, pct)) if len(scores) > 1 else float(scores.max() * 1.1 + 1e-6)
         info(
-            f"normal_bank: class={normal_class!r} bank={len(bank.bank):,} patches from {n} images × {L}, D={D}, "
+            f"patchcore: bank={len(bank.bank):,} patches from {len(train)} normal images"
+            f"{' ×4 augmented' if augment else ''} × {L} patches, D={bank.bank.shape[1]}"
+            f"{' (projected from ' + str(D) + ')' if projection else ''}; coreset_ratio={ratio:.3f} ({why_ratio}); "
+            f"score_agg={agg} ({why_agg}); bank_augment={augment} ({why_aug}); "
             f"threshold={bank.threshold:.4f} (P{pct:g} of {len(hold)} held-out normal images)"
         )
+        if resolved is not None:
+            resolved.update({"coreset_ratio": round(ratio, 4), "score_agg": agg, "bank_augment": augment, "bank_k": k})
         return bank
 
     def bank_tensor(self, torch, device):
@@ -803,11 +880,13 @@ class _NormalBank:
         return self._bank_t
 
     def score_patches(self, dino: _Dino, patches: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        maps = _patch_scores(self.bank_tensor(dino.torch, dino.ctx.device), patches, self.k, dino.torch)
-        return maps.max(axis=1).astype(np.float32), maps
+        maps = _patch_scores(
+            self.bank_tensor(dino.torch, dino.ctx.device), _project(patches, self.proj), self.k, dino.torch
+        )
+        return aggregate_scores(maps, self.score_agg), maps
 
     def score(
-        self, dino: _Dino, paths: list[Path], progress=None, chunk: int = 16
+        self, dino: _Dino, paths: list[Any], progress=None, chunk: int = 16
     ) -> tuple[np.ndarray, list[np.ndarray]]:
         scores, maps = [], []
         for s in range(0, len(paths), chunk):
@@ -848,15 +927,17 @@ class _NormalBank:
         return np.asarray(scores, dtype=np.float32), maps, (np.stack(descs) if descs else np.zeros((0, 1), np.float32))
 
 
-class DinoFewShotTrainer(BaseTrainer):
-    """Few-shot classification on frozen DINO features: no backbone training, a head on the support set.
+# --- few-shot classification (frozen features) -------------------------------------------------------------
 
-    Feature options (``layers`` / ``layer_fusion`` / ``pool`` / ``center`` / ``background`` / ``metric`` /
-    ``image_size``) decide how an image becomes a vector; ``head`` decides how the vector becomes a class
-    (nearest prototype, kNN vote, logistic / SVM head, or the prototype + logistic blend). With a normal class
-    (folder good / normal / ok / pass, or ``normal_class``) and ``normal_bank`` on (``auto`` = whenever such a
-    class exists) a PatchCore bank of the normal patches decides normal vs. defect first, and only the anomalous
-    patches are classified among the defect folders (scratch / void / …)."""
+
+class DinoFewShotTrainer(BaseTrainer):
+    """Classification on frozen DINO features: no backbone training, a head on the support set.
+
+    ``layers`` (last / cross / list) and ``image_size`` decide how an image becomes a vector (patch tokens
+    only, mean per layer, layers concatenated); ``head`` (auto / prototype / knn / linear / svm) decides how
+    the vector becomes a class. With a normal class (folder good / normal / ok / pass, or ``normal_class``)
+    and ``patchcore`` on (``auto`` = on whenever such a class exists) a PatchCore bank of the normal patches
+    decides normal vs. defect first, and only the anomalous patches are classified among the defect folders."""
 
     framework = "torch"
     inference_modes = ["predict", "embed", "retrieve", "extend"]
@@ -866,12 +947,12 @@ class DinoFewShotTrainer(BaseTrainer):
             raise ValueError("few-shot 分類需要以類別（bin code）命名的資料夾")
         p = self.params
         self.backbone_id = str(p.get("backbone", "dinov2-small"))
-        self.k = int(p.get("k", 5))
-        self.head_kind = str(p.get("head", "prototype+logistic"))
         spec = FeatureSpec.from_params(p)
         paths = [Path(x) for x in ds.X]
         labels = np.asarray(ds.y).astype(str)
         classes = sorted(set(labels.tolist()))
+        counts = Counter(labels.tolist())
+        resolved: dict[str, Any] = {}
         dino = _Dino(self.ctx, self.backbone_id, spec)
         self.ctx.progress(0.05, "training")
         self.layer_report = None
@@ -882,65 +963,71 @@ class DinoFewShotTrainer(BaseTrainer):
         else:
             emb = dino.embed(paths, progress=lambda f: self.ctx.progress(0.05 + 0.5 * f, "training"))
         self.spec = dino.spec
-        self.center = center_vector(emb) if self.spec.center == "support_mean" else None
-        emb = apply_center(emb, self.center)
+        resolved["layers"] = list(dino.layers)
         self.emb, self.labels, self.ids = emb, labels, np.asarray(ds.ids).astype(str)
-        counts = Counter(labels.tolist())
 
-        # --- normal bank (two-stage) --------------------------------------------------------------
+        # --- PatchCore (two-stage) ----------------------------------------------------------------
         self.normal_class = _resolve_normal_class(classes, p.get("normal_class"))
-        mode = str(p.get("normal_bank", "auto")).lower()
-        want_bank = mode in ("on", "true", "1", "yes") or (
-            mode == "auto" and self.normal_class is not None and len(classes) >= 2
+        want_bank, why_bank = resolve_flag(
+            p.get("patchcore", "auto"),
+            self.normal_class is not None and len(classes) >= 2,
+            f"normal class {self.normal_class!r}"
+            if self.normal_class
+            else "no normal folder (good / normal / ok / pass)",
         )
-        self.bank: _NormalBank | None = None
+        self.bank: _PatchBank | None = None
         self.defect_head: FewShotHead | None = None
         self.defect_desc: np.ndarray | None = None
         if want_bank:
             if self.normal_class is None:
                 raise ValueError(
-                    "normal_bank 需要正常類別：資料夾取名 good / normal / ok / pass，或在參數設定 normal_class"
+                    "patchcore=on 需要正常類別：資料夾取名 good / normal / ok / pass，或在參數設定 normal_class"
                 )
             if len(classes) < 2:
-                raise ValueError("normal_bank 需要正常類別之外至少一個缺陷類別資料夾（例：scratch、void）")
-            self.bank = _NormalBank.fit(
+                raise ValueError(
+                    "正常類別之外至少要有一個缺陷類別資料夾（例：scratch、void）；只有正常影像請用異常偵測任務"
+                )
+            normal_paths = [paths[i] for i in np.flatnonzero(labels == self.normal_class)]
+            self.bank = _PatchBank.fit(
                 dino,
-                paths,
-                labels,
-                self.normal_class,
+                normal_paths,
                 p,
-                self.ctx,
+                normal_class=self.normal_class,
                 progress=lambda f: self.ctx.progress(0.55 + 0.2 * f, "training"),
+                resolved=resolved,
             )
             self.support_scores, _, self.defect_desc = self.bank.analyse(
                 dino, paths, emb, progress=lambda f: self.ctx.progress(0.75 + 0.15 * f, "training")
             )
+        resolved["patchcore"] = want_bank
+        info(f"patchcore={want_bank} ({why_bank})")
 
-        # --- evaluation + final heads ----------------------------------------------------------
-        head_kw = {"k": self.k, "metric": self.spec.metric, "C": float(p.get("C", 1.0))}
+        # --- head: evaluation + final fit ---------------------------------------------------------
+        head_kind, why_head = resolve_head(p.get("head", "auto"), min(counts.values()))
+        self.head_kind = head_kind
+        head_kw = {"k": p.get("k", "auto"), "C": float(p.get("C", 1.0))}
         self.metrics = self._evaluate(emb, labels, counts, head_kw)
         self.head = FewShotHead(self.head_kind, **head_kw).fit(emb, labels)
         self.classes, self.protos = self.head.classes, self.head.protos
+        resolved.update({"head": head_kind, "k": self.head.k if head_kind == "knn" else None})
         if self.bank is not None:
             self.defect_head = self._fit_defect_head(head_kw)
         self.meta.update(
             {
                 "classes": self.classes,
                 "backbone": self.backbone_id,
-                "k": self.k,
-                "head": self.head_kind,
-                "C": head_kw["C"],
                 "features": self.spec.to_dict(),
                 "feature_dim": int(emb.shape[1]),
                 "layer_report": self.layer_report,
                 "support_per_class": dict(counts),
                 "normal_class": self.normal_class,
-                "normal_bank": self.bank.meta() if self.bank else None,
+                "patchcore": self.bank.meta() if self.bank else None,
+                "resolved": resolved,
             }
         )
         info(
-            f"{self.family}: classes={len(self.classes)} support={len(labels)} head={self.head_kind} "
-            + (f"normal_bank(threshold={self.bank.threshold:.4f}) " if self.bank else "")
+            f"{self.family}: classes={len(self.classes)} support={len(labels)} head={head_kind} ({why_head}) "
+            + (f"patchcore(threshold={self.bank.threshold:.4f}) " if self.bank else "")
             + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items())
         )
 
@@ -969,11 +1056,10 @@ class DinoFewShotTrainer(BaseTrainer):
         return M.classification(labels, preds)
 
     def _two_stage_eval(self, tr, va, labels, head_kw) -> list[str]:
-        """Holdout estimate of the two-stage classifier: the bank's threshold (fitted on normal images, some
-        of which may be in ``va``) decides normal vs. defect, a head fitted on the training defects classifies
-        the rest."""
-        assert self.bank is not None and self.defect_desc is not None
-        assert self.normal_class is not None
+        """Holdout estimate of the two-stage classifier: the bank's threshold (fitted on normal images, some of
+        which may be in ``va``) decides normal vs. defect, a head fitted on the training defects classifies the
+        rest."""
+        assert self.bank is not None and self.defect_desc is not None and self.normal_class is not None
         scores = self.support_scores
         defect_tr = [i for i in tr if labels[i] != self.normal_class]
         head = (
@@ -999,7 +1085,6 @@ class DinoFewShotTrainer(BaseTrainer):
                 self.ids,
                 self.meta,
                 self.metrics,
-                center=self.center,
                 bank=self.bank,
                 defect_head=self.defect_head,
                 defect_desc=self.defect_desc,
@@ -1016,8 +1101,7 @@ def _save_bank(
     meta: dict[str, Any],
     metrics: dict[str, float],
     *,
-    center: np.ndarray | None = None,
-    bank: _NormalBank | None = None,
+    bank: _PatchBank | None = None,
     defect_head: FewShotHead | None = None,
     defect_desc: np.ndarray | None = None,
     set_default: bool = False,
@@ -1029,12 +1113,10 @@ def _save_bank(
     arrays: dict[str, np.ndarray] = {
         "classes": np.asarray(head.classes, dtype=str),
         "prototypes": np.asarray(head.protos, dtype=np.float32),
-        "support": np.asarray(emb, dtype=np.float32),
+        "support": np.asarray(emb, dtype=np.float32),  # raw (uncentred) fused vectors; the head centres them
         "support_labels": np.asarray(labels, dtype=str),
         "support_ids": np.asarray(ids, dtype=str),
     }
-    if center is not None:
-        arrays["center"] = np.asarray(center, dtype=np.float32)
     if bank is not None:
         arrays["normal_bank"] = bank.bank.astype(np.float16)
         if defect_desc is not None:
@@ -1045,9 +1127,6 @@ def _save_bank(
         heads["head"] = head.model
     if defect_head is not None and defect_head.model is not None:
         heads["defect_head"] = defect_head.model
-    if defect_head is not None:
-        heads["defect_classes"] = defect_head.classes
-        heads["defect_prototypes"] = defect_head.protos
     if heads:
         joblib.dump(heads, model_dir / "head.joblib")
     elif (model_dir / "head.joblib").exists():
@@ -1084,7 +1163,6 @@ class DinoFewShotInferencer(BaseInferencer):
         self.support = bank["support"].astype(np.float32)
         self.support_labels = bank["support_labels"].astype(str)
         self.support_ids = bank["support_ids"].astype(str)
-        self.center = bank["center"].astype(np.float32) if "center" in bank.files else None
         self.spec = FeatureSpec.from_dict(self.meta.get("features"))
         heads = joblib.load(model_path / "head.joblib") if (model_path / "head.joblib").exists() else {}
         self.head = FewShotHead.from_meta(self.meta).fit(self.support, self.support_labels)
@@ -1092,11 +1170,12 @@ class DinoFewShotInferencer(BaseInferencer):
             self.head.model = heads["head"]
         self.classes, self.protos = self.head.classes, self.head.protos
         self.normal_class = self.meta.get("normal_class")
-        self.bank: _NormalBank | None = None
+        self.bank: _PatchBank | None = None
         self.defect_head: FewShotHead | None = None
         self.defect_support: np.ndarray | None = None
-        if self.meta.get("normal_bank") and "normal_bank" in bank.files:
-            self.bank = _NormalBank.from_meta(self.meta["normal_bank"], bank["normal_bank"])
+        bank_meta = self.meta.get("patchcore") or self.meta.get("normal_bank")
+        if bank_meta and "normal_bank" in bank.files:
+            self.bank = _PatchBank.from_meta(bank_meta, bank["normal_bank"])
             self.defect_support = bank["defect_support"].astype(np.float32) if "defect_support" in bank.files else None
             defect = self.support_labels != self.normal_class
             if self.defect_support is not None and defect.any():
@@ -1109,24 +1188,20 @@ class DinoFewShotInferencer(BaseInferencer):
         self.model_path = model_path
         info(
             f"dino_fewshot: {len(self.classes)} classes, head={self.head.kind}, "
-            + (f"normal_bank threshold={self.bank.threshold:.4f}" if self.bank else "no normal bank")
+            + (f"patchcore threshold={self.bank.threshold:.4f}" if self.bank else "no patchcore")
         )
-
-    def _embed(self, paths: list[Path], patches: bool, progress):
-        if patches:
-            emb, grid = self.dino.embed(paths, patches=True, progress=progress)
-        else:
-            emb, grid = self.dino.embed(paths, progress=progress), None
-        return apply_center(emb, self.center), grid
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
         out.mkdir(parents=True, exist_ok=True)
         ids = ds.ids or [Path(p).name for p in ds.X]
         paths = [Path(p) for p in ds.X]
         attention = bool(options.get("attention", True)) and mode in ("predict", "retrieve")
-        two_stage = mode == "predict" and self.bank is not None and str(options.get("normal_bank", "on")) != "off"
-        emb, patches = self._embed(paths, attention and not two_stage, progress=lambda f: self.ctx.progress(0.6 * f))
-        k = int(options.get("k", self.meta.get("k", 5)))
+        two_stage = mode == "predict" and self.bank is not None and str(options.get("patchcore", "on")) != "off"
+        if attention and not two_stage:
+            emb, patches = self.dino.embed(paths, patches=True, progress=lambda f: self.ctx.progress(0.6 * f))
+        else:
+            emb, patches = self.dino.embed(paths, progress=lambda f: self.ctx.progress(0.6 * f)), None
+        k = int(options.get("k", self.head.k))
         if mode == "extend":
             return self._extend(ds, emb, paths, out)
         if mode == "embed":
@@ -1141,12 +1216,10 @@ class DinoFewShotInferencer(BaseInferencer):
             order = str(options.get("order", "both"))
             if order not in ("similar", "dissimilar", "both"):
                 raise ValueError("order 必須是 similar / dissimilar / both")
-            sims = similarities(emb, self.support, self.spec.metric)
-            rows = []
-            ref_idx = []
+            sims = self.head.transform(emb) @ self.head.transform(self.support).T
+            rows, ref_idx = [], []
             for n, i in enumerate(ids):
-                nb = _neighbour_rows(sims[n], order, k, self.support_labels, self.support_ids)
-                rows.append({"id": i, **nb})
+                rows.append({"id": i, **_neighbour_rows(sims[n], order, k, self.support_labels, self.support_ids)})
                 ref_idx.append(int(np.argmin(sims[n]) if order == "dissimilar" else np.argmax(sims[n])))
             if attention and patches is not None:
                 refs = np.stack([self.dino.patch_reference(self.support[j]) for j in ref_idx])
@@ -1167,7 +1240,8 @@ class DinoFewShotInferencer(BaseInferencer):
             )
         if two_stage:
             return self._predict_two_stage(ids, paths, emb, options, out, attention)
-        self.head.k = k
+        if self.head.kind == "knn":
+            self.head.k = k
         preds, conf, proba, sims = self.head.predict(emb)
         reject = options.get("min_similarity", options.get("min_confidence"))
         rows = []
@@ -1190,21 +1264,28 @@ class DinoFewShotInferencer(BaseInferencer):
                 row["prediction"] = "unknown"
             rows.append(row)
         if attention and patches is not None:
-            index = {c: j for j, c in enumerate(self.classes)}
-            refs = np.stack(
-                [
-                    self.dino.patch_reference(self.protos[index.get(r["prediction"], int(np.argmax(sims[n])))])
-                    for n, r in enumerate(rows)
-                ]
-            )
+            refs = self._explain_refs(rows, sims)
             for row, rel in zip(
                 rows, _attention_maps(out, ids, paths, patches, refs, self.dino.processor, True), strict=False
             ):
                 row["attention"] = rel
         counts = Counter(r["prediction"] for r in rows)
         return PredictResult(
-            rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts), "k": k, "head": self.head.kind}
+            rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts), "head": self.head.kind}
         )
+
+    def _explain_refs(self, rows, sims: np.ndarray) -> np.ndarray:
+        """Per image, the patch-space vector the overlay scores every patch against: a linear / svm head's class
+        weights (CAM: logit = mean over patches of w · patch, so w · patch is each patch's contribution), else
+        the predicted class's prototype."""
+        index = {c: j for j, c in enumerate(self.classes)}
+        weights = self.head.class_weights()
+        refs = []
+        for n, r in enumerate(rows):
+            j = index.get(r["prediction"], int(np.argmax(sims[n])))
+            vec = weights[j] if weights is not None else self.protos[j]
+            refs.append(self.dino.patch_reference(vec))
+        return np.stack(refs)
 
     def _predict_two_stage(self, ids, paths: list[Path], emb: np.ndarray, options, out: Path, attention: bool):
         assert self.bank is not None and self.normal_class is not None
@@ -1261,14 +1342,15 @@ class DinoFewShotInferencer(BaseInferencer):
                 "head": self.head.kind,
                 "normal_class": self.normal_class,
                 "threshold": threshold,
+                "score_agg": self.bank.score_agg,
                 "flagged": len(defect_rows),
             },
         )
 
     def _extend(self, ds: Dataset, emb: np.ndarray, paths: list[Path], out: Path) -> PredictResult:
-        """Add new classes (bin codes) or more examples to the bank without retraining the backbone: the
-        support set grows, the heads are re-fitted on the cached features (seconds), the normal bank gains the
-        new normal images' patches and the defect head the new defects' descriptors."""
+        """Add new classes (bin codes) or more examples without retraining the backbone: the support set grows,
+        the heads are re-fitted on the cached features (seconds), the PatchCore bank gains the new normal
+        images' patches and the defect head the new defects' descriptors."""
         if not ds.has_labels:
             raise ValueError("extend 需要以類別命名的資料夾（新 bin code 的範例影像）")
         labels = np.asarray(ds.y).astype(str)
@@ -1286,6 +1368,7 @@ class DinoFewShotInferencer(BaseInferencer):
             new_normal = labels == self.normal_class
             if new_normal.any():
                 _, patches = self.dino.embed([p for p, n in zip(paths, new_normal, strict=True) if n], patches=True)
+                patches = _project(patches, self.bank.proj)
                 extra = _coreset(patches.reshape(-1, patches.shape[-1]), self.bank.coreset_ratio)
                 self.bank.bank = np.concatenate([self.bank.bank, extra])
                 self.bank._bank_t = None
@@ -1293,7 +1376,7 @@ class DinoFewShotInferencer(BaseInferencer):
             defect = all_labels != self.normal_class
             if defect.any():
                 defect_head = FewShotHead.from_meta(self.meta).fit(defect_desc[defect], all_labels[defect])
-            meta["normal_bank"] = self.bank.meta()
+            meta["patchcore"] = self.bank.meta()
         art = _save_bank(
             out.parent,
             head,
@@ -1302,7 +1385,6 @@ class DinoFewShotInferencer(BaseInferencer):
             all_ids,
             meta,
             self.meta.get("metrics") or {},
-            center=self.center,
             bank=self.bank,
             defect_head=defect_head,
             defect_desc=defect_desc,
@@ -1317,45 +1399,12 @@ class DinoFewShotInferencer(BaseInferencer):
         )
 
 
-# --- PatchCore -------------------------------------------------------------------------------------------
-
-
-def _projection(dim_in: int, dim_out: int, seed: int = 0) -> np.ndarray | None:
-    """Fixed Gaussian random projection (Johnson–Lindenstrauss) that keeps multi-layer patch features at the
-    backbone's width; regenerated from the seed at inference, never stored."""
-    if dim_out <= 0 or dim_out >= dim_in:
-        return None
-    rng = np.random.default_rng(seed)
-    return (rng.standard_normal((dim_in, dim_out)) / np.sqrt(dim_out)).astype(np.float32)
-
-
-def _project(patches: np.ndarray, proj: np.ndarray | None) -> np.ndarray:
-    if proj is None:
-        return patches
-    flat = patches.reshape(-1, patches.shape[-1]).astype(np.float32) @ proj
-    flat /= np.linalg.norm(flat, axis=1, keepdims=True) + 1e-9
-    return flat.reshape(*patches.shape[:-1], proj.shape[1]).astype(np.float16)
-
-
-def patchcore_scores(dino: _Dino, bank: np.ndarray, k: int, paths: list[Path], ctx, progress=None, proj=None):
-    """Per image: max over patches of the mean distance to the k nearest memory-bank patches; plus the patch map."""
-    torch = dino.torch
-    bank_t = torch.from_numpy(bank.astype(np.float32)).to(ctx.device)
-    scores, maps = [], []
-    for s in range(0, len(paths), 8):
-        _, patches = dino.embed(paths[s : s + 8], patches=True, batch=8)
-        patch_scores = _patch_scores(bank_t, _project(patches, proj), k, torch)
-        scores.extend(patch_scores.max(axis=1).tolist())
-        maps.extend(list(patch_scores))
-        if progress:
-            progress(min(1.0, (s + 8) / max(1, len(paths))))
-    return np.asarray(scores, dtype=np.float32), maps
+# --- anomaly detection (PatchCore) ------------------------------------------------------------------------
 
 
 class DinoPatchCoreTrainer(BaseTrainer):
-    """PatchCore on frozen DINO patch tokens. ``layers`` (default ``mid``: a few middle-to-late blocks, the
-    classic PatchCore choice) are fused per patch; ``patch_dim`` (default ``auto`` = the backbone width) keeps
-    the memory bank small with a fixed random projection when several layers are concatenated."""
+    """PatchCore on frozen DINO patch tokens (normal images only). ``layers`` last / cross / list,
+    ``neighborhood`` 1 / 3, ``score_agg`` auto / max / top1, ``coreset_ratio`` auto, ``bank_augment`` auto."""
 
     framework = "torch"
     inference_modes = ["score", "embed"]
@@ -1363,70 +1412,55 @@ class DinoPatchCoreTrainer(BaseTrainer):
     def fit(self, ds: Dataset) -> None:
         p = self.params
         self.backbone_id = str(p.get("backbone", "dinov2-small"))
-        self.k = int(p.get("k", 3))
-        ratio = float(p.get("coreset_ratio", 0.1))
-        self.spec = FeatureSpec.from_params(p, layers=p.get("layers", "mid"))
-        if self.spec.layers == "auto":
-            raise ValueError("PatchCore 沒有標籤可挑層，layers 請用 last / last4 / mid / spread 或層數列表")
-        dino = _Dino(self.ctx, self.backbone_id, self.spec)
-        want = p.get("patch_dim", "auto")
-        target = dino.hidden if str(want).lower() in ("auto", "") else int(want)
-        self.proj_seed = int(p.get("seed", 0))
-        self.proj = _projection(dino.patch_dim, target, self.proj_seed)
-        self.patch_dim = target if self.proj is not None else dino.patch_dim
-        self.spec = dino.spec  # resolved layer ids
-        paths = list(ds.X)
+        spec = FeatureSpec.from_params(p)
+        if spec.layers == "auto":
+            raise ValueError("PatchCore 沒有標籤可挑層，layers 請用 last / cross 或層數列表")
+        dino = _Dino(self.ctx, self.backbone_id, spec)
+        self.spec = dino.spec
+        paths = [Path(x) for x in ds.X]
         y = _binary_anomaly_labels(ds.y) if ds.has_labels else None
         normal_idx = np.flatnonzero(y == 0) if y is not None else np.arange(len(paths))
         if len(normal_idx) == 0:
             raise ValueError("需要正常（good / normal）影像來建立記憶庫")
-        tr, va_n = holdout(len(normal_idx), None, None)
-        train_idx = normal_idx[tr]
-        val_idx = np.concatenate([normal_idx[va_n], np.flatnonzero(y == 1)]) if y is not None else normal_idx[va_n]
-        _, patches = dino.embed(
-            [paths[i] for i in train_idx],
-            patches=True,
-            progress=lambda f: self.ctx.progress(0.05 + 0.5 * f, "training"),
+        resolved: dict[str, Any] = {"layers": list(dino.layers)}
+        self.bank = _PatchBank.fit(
+            dino,
+            [paths[i] for i in normal_idx],
+            p,
+            progress=lambda f: self.ctx.progress(0.05 + 0.7 * f, "training"),
+            resolved=resolved,
         )
-        patches = _project(patches, self.proj)
-        n_img, L, D = patches.shape
-        self.grid = round(np.sqrt(L))
-        self.bank = _coreset(patches.reshape(-1, D), ratio)
-        info(
-            f"patchcore: memory bank {len(self.bank):,} patches (from {n_img} images × {L}), D={D}"
-            + (f" (projected from {dino.patch_dim})" if self.proj is not None else "")
-        )
-        train_scores = self._image_scores(
-            dino, [paths[i] for i in train_idx], progress=lambda f: self.ctx.progress(0.55 + 0.2 * f, "training")
-        )[0]
-        self.threshold = float(np.percentile(train_scores, 99))
-        val_scores = self._image_scores(
-            dino, [paths[i] for i in val_idx], progress=lambda f: self.ctx.progress(0.75 + 0.15 * f, "training")
-        )[0]
-        labels = y[val_idx] if (y is not None and len(np.unique(y[val_idx])) == 2) else None
-        self.metrics = M.anomaly(val_scores, labels, self.threshold)
+        # validation: every anomalous image (never in the bank) + the held-out normals are inside the normal set
+        # the bank was built from only partially, so the score of the normals is optimistic; the anomalies decide
+        val_idx = np.flatnonzero(y == 1) if y is not None else np.array([], dtype=int)
+        hold = [paths[i] for i in normal_idx[: max(1, len(normal_idx) // 5)]]
+        scores_n, _ = self.bank.score(dino, hold, progress=lambda f: self.ctx.progress(0.75 + 0.1 * f, "training"))
+        if len(val_idx):
+            scores_a, _ = self.bank.score(
+                dino, [paths[i] for i in val_idx], progress=lambda f: self.ctx.progress(0.85 + 0.1 * f, "training")
+            )
+            val_scores = np.concatenate([scores_n, scores_a])
+            labels = np.concatenate([np.zeros(len(scores_n), int), np.ones(len(scores_a), int)])
+        else:
+            val_scores, labels = scores_n, None
+        self.metrics = M.anomaly(val_scores, labels, self.bank.threshold)
         self.meta.update(
             {
                 "backbone": self.backbone_id,
-                "k": self.k,
-                "threshold": self.threshold,
-                "grid": self.grid,
                 "features": self.spec.to_dict(),
-                "patch_dim": self.patch_dim,
-                "projection": {"dim_in": dino.patch_dim, "dim_out": self.patch_dim, "seed": self.proj_seed}
-                if self.proj is not None
-                else None,
+                "patchcore": self.bank.meta(),
+                "threshold": self.bank.threshold,
+                "grid": self.bank.grid,
+                "k": self.bank.k,
+                "resolved": resolved,
             }
         )
         info(f"{self.family}: " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
 
-    def _image_scores(self, dino: _Dino, paths: list[Path], progress=None):
-        return patchcore_scores(dino, self.bank, self.k, paths, self.ctx, progress, proj=self.proj)
-
     def export(self, out: Path) -> list[ArtifactOut]:
         model_dir = out / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(model_dir / "memory_bank.npz", bank=self.bank)
+        np.savez_compressed(model_dir / "memory_bank.npz", bank=self.bank.bank)
         meta = {**self.meta, "metrics": self.metrics}
         (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
@@ -1443,7 +1477,7 @@ class DinoPatchCoreTrainer(BaseTrainer):
 
 class DinoPatchCoreInferencer(BaseInferencer):
     def load(self, model_path: Path, metadata: dict[str, Any]) -> None:
-        self.bank = np.load(model_path / "memory_bank.npz", allow_pickle=False)["bank"]
+        bank = np.load(model_path / "memory_bank.npz", allow_pickle=False)["bank"]
         local = model_path / "metadata.json"
         self.meta = {
             **(json.loads(local.read_text(encoding="utf-8")) if local.exists() else {}),
@@ -1451,13 +1485,18 @@ class DinoPatchCoreInferencer(BaseInferencer):
         }
         self.spec = FeatureSpec.from_dict(self.meta.get("features") or {"layers": "last"})
         self.dino = _Dino(self.ctx, str(self.meta.get("backbone", "dinov2-small")), self.spec)
-        pj = self.meta.get("projection")
-        self.proj = _projection(int(pj["dim_in"]), int(pj["dim_out"]), int(pj.get("seed", 0))) if pj else None
+        bank_meta = self.meta.get("patchcore") or {
+            "threshold": self.meta.get("threshold") or 0.0,
+            "grid": self.meta.get("grid") or 16,
+            "k": self.meta.get("k") or 3,
+            "projection": self.meta.get("projection"),
+        }
+        self.bank = _PatchBank.from_meta(bank_meta, bank)
 
     def predict(self, ds: Dataset, mode: str, options: dict[str, Any], out: Path) -> PredictResult:
         out.mkdir(parents=True, exist_ok=True)
         ids = ds.ids or [Path(p).name for p in ds.X]
-        paths = list(ds.X)
+        paths = [Path(p) for p in ds.X]
         if mode == "embed":
             emb = self.dino.embed(paths, progress=self.ctx.progress)
             np.save(out / "embeddings.npy", emb)
@@ -1467,15 +1506,12 @@ class DinoPatchCoreInferencer(BaseInferencer):
                 {"mode": mode, "n": len(rows)},
                 [ArtifactOut(name="embeddings", kind="report", path="output/embeddings.npy", framework="torch")],
             )
-        k = int(options.get("k", self.meta.get("k", 3)))
-        scores, maps = patchcore_scores(
-            self.dino, self.bank, k, paths, self.ctx, progress=lambda f: self.ctx.progress(0.9 * f), proj=self.proj
-        )
+        if options.get("k"):
+            self.bank.k = int(options["k"])
+        scores, maps = self.bank.score(self.dino, paths, progress=lambda f: self.ctx.progress(0.9 * f))
         override = options.get("threshold")
-        threshold = float(
-            override if override is not None else (self.meta.get("threshold") or np.percentile(scores, 99))
-        )
-        grid = int(self.meta.get("grid") or round(np.sqrt(len(maps[0]))))
+        threshold = float(override) if override is not None else float(self.bank.threshold or np.percentile(scores, 99))
+        grid = self.bank.grid or round(np.sqrt(len(maps[0])))
         rows = []
         heat_dir = out / "heatmaps"
         save_heat = bool(options.get("save_heatmaps", True))
@@ -1492,6 +1528,11 @@ class DinoPatchCoreInferencer(BaseInferencer):
             if save_heat:
                 row["heatmap"] = _save_heatmap(heat_dir, _heatmap_name(i, seen), m.reshape(grid, grid), threshold)
             rows.append(row)
+        if save_heat:
+            for row, rel in zip(
+                rows, _overlays(out, ids, paths, [np.asarray(m) for m in maps], self.dino.processor), strict=False
+            ):
+                row["attention"] = rel
         extra = (
             [ArtifactOut(name="heatmaps", kind="report", path="output/heatmaps", framework="torch")]
             if save_heat and heat_dir.exists()
@@ -1505,6 +1546,7 @@ class DinoPatchCoreInferencer(BaseInferencer):
                 "n": len(rows),
                 "flagged": int(sum(r["is_anomaly"] for r in rows)),
                 "threshold": threshold,
+                "score_agg": self.bank.score_agg,
                 "most_anomalous": [{"id": r["id"], "anomaly_score": r["anomaly_score"]} for r in ranked],
             },
             extra,
@@ -1542,11 +1584,14 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------------------------------
-# DINOv2 / v3 fine-tuning — linear probe, LoRA adapters (hand-written, no peft) or full fine-tune
+# DINOv2 / v3 LoRA fine-tuning — low-rank adapters on the attention projections + a linear head
 # ---------------------------------------------------------------------------------------------------
 
 # transformers ≥ 5 names the DINOv2 projections q_proj / k_proj / v_proj; 4.x used query / key / value
 LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "query", "key", "value")
+FINETUNE_STEPS = 400  # epochs=auto: enough epochs for about this many optimiser steps
+FINETUNE_EPOCHS = (5, 40)  # epochs=auto bounds
+FINETUNE_BATCH = {224: 16, 336: 8, 448: 4}  # batch=auto by image size (VRAM)
 
 
 def _lora_linear_class():  # built lazily: torch is only imported inside the trainers
@@ -1648,10 +1693,27 @@ def lora_state(model) -> dict[str, Any]:
     return {k: v.detach().cpu() for k, v in model.state_dict().items() if ".lora_" in k}
 
 
+def resolve_epochs(value: Any, n_train: int, batch: int) -> tuple[int, str]:
+    if value in (None, "", "auto"):
+        steps_per_epoch = max(1, int(np.ceil(n_train / batch)))
+        e = int(np.clip(int(np.ceil(FINETUNE_STEPS / steps_per_epoch)), *FINETUNE_EPOCHS))
+        return e, f"{n_train} images / batch {batch} → {e} epochs ≈ {FINETUNE_STEPS} steps"
+    return int(value), "chosen by the user"
+
+
+def resolve_batch(value: Any, image_size: int | None) -> tuple[int, str]:
+    if value in (None, "", "auto"):
+        size = int(image_size or 224)
+        b = FINETUNE_BATCH.get(size, 16 if size <= 224 else 8 if size <= 336 else 4)
+        return b, f"image_size {size} → batch {b}"
+    return int(value), "chosen by the user"
+
+
 class _DinoFinetuneNet:
-    """Backbone (from the zoo) + feature head shared by the trainer and the inferencer. The same FeatureSpec
-    as the frozen encoder decides which layers / pooling feed the head, so a LoRA / full fine-tune can also
-    train on multi-layer features."""
+    """Backbone (from the zoo) + linear head shared by the trainer and the inferencer. The same FeatureSpec as
+    the frozen encoder decides which layers feed the head (patch tokens only, mean per layer, layers
+    concatenated, L2-normalised), so the LoRA adapters train on the same features the frozen family uses and
+    the head's weights double as a class activation map (logit = mean over patches of w · patch)."""
 
     def __init__(
         self,
@@ -1663,6 +1725,7 @@ class _DinoFinetuneNet:
         alpha: float,
         backbone_dir=None,
         spec: FeatureSpec | None = None,
+        legacy_head: bool = False,
     ):
         import torch
         from transformers import AutoImageProcessor
@@ -1675,7 +1738,7 @@ class _DinoFinetuneNet:
         self.processor = AutoImageProcessor.from_pretrained(str(zoo_path), local_files_only=True)
         _set_image_size(self.processor, spec.image_size)
         src = backbone_dir if backbone_dir is not None else zoo_path
-        self.backbone = _load_backbone(Path(src), eager=spec.wants_attention)
+        self.backbone = _load_backbone(Path(src))
         self.lora_layers = 0
         if method == "lora":
             self.lora_layers = inject_lora(self.backbone, rank, alpha)
@@ -1686,13 +1749,18 @@ class _DinoFinetuneNet:
         self.kind = backbone_kind(backbone_id, getattr(cfg, "model_type", None))
         self.n_layers = int(cfg.num_hidden_layers)
         self.hidden = int(cfg.hidden_size)
-        self.final_norm = getattr(self.backbone, "layernorm", None) or getattr(self.backbone, "norm", None)
+        self.final_norm = _final_norm(self.backbone)
         if spec.layers == "auto":
-            raise ValueError("微調不支援 layers=auto（沒有凍結的支援集可以挑層）；請用 last / last4 / mid / spread")
+            raise ValueError("微調不支援 layers=auto（沒有凍結的支援集可以挑層）；請用 last / cross 或層數列表")
         self.layers = resolve_layers(spec.layers, self.n_layers, self.kind)
         self.spec = replace(spec, layers=self.layers)
-        dim = self.spec.feature_dim(self.hidden, len(self.layers))
-        self.head = torch.nn.Sequential(torch.nn.LayerNorm(dim), torch.nn.Linear(dim, n_classes))
+        dim = self.hidden * len(self.layers)
+        self.legacy_head = legacy_head
+        self.head = (
+            torch.nn.Sequential(torch.nn.LayerNorm(dim), torch.nn.Linear(dim, n_classes))
+            if legacy_head
+            else torch.nn.Linear(dim, n_classes)
+        )
         self.backbone.to(ctx.device)
         self.head.to(ctx.device)
         self.feature_dim = dim
@@ -1709,73 +1777,39 @@ class _DinoFinetuneNet:
             imgs.append(im)
         return self.processor(images=imgs, return_tensors="pt")["pixel_values"].to(self.ctx.device)
 
-    def _layers(self, px):
-        """→ (cls per layer, patch tokens per layer, last-block CLS→patch attention or None); the final norm is
-        applied to every selected layer; gradients flow when the backbone trains."""
-        want = self.spec.wants_attention
-        out = self.backbone(pixel_values=px, output_hidden_states=True, output_attentions=want)
-        hs = out.hidden_states
-        attn = None
-        if want and getattr(out, "attentions", None):
-            attn = out.attentions[-1][:, :, 0, self.n_special :].mean(dim=1)
-        cls_list, tok_list = [], []
+    def _tokens(self, px):
+        """Patch tokens per selected layer (final norm applied; gradients flow when the adapters train)."""
+        hs = self.backbone(pixel_values=px, output_hidden_states=True).hidden_states
+        toks = []
         for layer in self.layers:
             h = self.final_norm(hs[layer]) if self.final_norm is not None else hs[layer]
-            cls_list.append(h[:, 0])
-            tok_list.append(h[:, self.n_special :])
-        return cls_list, tok_list, attn
+            toks.append(h[:, self.n_special :])
+        return toks
 
-    def _fuse(self, cls_list, tok_list, attn):
+    def _fuse(self, tok_list):
         nf = self.torch.nn.functional.normalize
-        blocks = []
-        for c, t in zip(cls_list, tok_list, strict=True):
-            if self.spec.background == "project_out_cls":
-                t = remove_cls_component(t, c)
-            blocks.append(nf(pool_layer(c, t, self.spec.pool, attn), dim=-1))
-        if self.spec.layer_fusion == "concat":
-            return self.torch.cat(blocks, dim=1)
-        return self.torch.stack(blocks).mean(dim=0)
+        return nf(self.torch.cat([nf(t.mean(dim=1), dim=-1) for t in tok_list], dim=1), dim=-1)
 
     def features(self, px):
-        return self._fuse(*self._layers(px))
+        return self._fuse(self._tokens(px))
 
     def tokens(self, px):
         """(features, L2-normalised fused patch grid) for one batch, no gradient."""
-        torch = self.torch
-        nf = torch.nn.functional.normalize
-        with torch.no_grad():
-            cls_list, tok_list, attn = self._layers(px)
-            feat = self._fuse(cls_list, tok_list, attn)
-            toks = []
-            for c, t in zip(cls_list, tok_list, strict=True):
-                if self.spec.background == "project_out_cls":
-                    t = remove_cls_component(t, c)
-                toks.append(nf(t, dim=-1))
-            grid = (
-                torch.cat(toks, dim=-1) if self.spec.layer_fusion == "concat" else nf(torch.stack(toks).mean(0), dim=-1)
-            )
-        return feat, grid
+        with self.torch.no_grad():
+            toks = self._tokens(px)
+            return self._fuse(toks), fuse_tokens(toks)
 
-    def grad_cam(self, px, target: np.ndarray) -> np.ndarray:
-        """Token-level Grad-CAM on the last selected layer: how much each patch token pushes the logit of
-        ``target`` (B,) up → (B, L). ``pool=cls`` has no patch path to the head, so its map is flat."""
+    def cam(self, px, target: np.ndarray) -> np.ndarray:
+        """Class activation map on the patch grid: w[target] · patch for every patch (B, L). Exact up to a
+        positive scale for a linear head on mean-pooled, per-layer-normalised tokens; no gradients needed."""
         torch = self.torch
         self.train_mode(False)
-        with torch.enable_grad():
-            cls_list, tok_list, attn = self._layers(px)
-            cls_list = [c.detach() for c in cls_list]
-            tok_list = [t.detach() for t in tok_list]
-            leaf = tok_list[-1].clone().requires_grad_(True)
-            tok_list[-1] = leaf
-            if attn is not None:
-                attn = attn.detach()
-            logits = self.head(self._fuse(cls_list, tok_list, attn))
-            idx = torch.as_tensor(target, device=logits.device).long()
-            (grads,) = torch.autograd.grad(logits.gather(1, idx[:, None]).sum(), leaf, allow_unused=True)
-        if grads is None:
-            return np.zeros((int(px.shape[0]), int(leaf.shape[1])), np.float32)
-        cam = (grads * leaf).sum(dim=-1).clamp(min=0)
-        return cam.detach().cpu().numpy()
+        with torch.no_grad():
+            _, grid = self.tokens(px)
+            linear = self.head[-1] if self.legacy_head else self.head
+            w = linear.weight[torch.as_tensor(target, device=grid.device).long()]  # (B, Dp)
+            cam = (grid * w[:, None, :]).sum(dim=-1).clamp(min=0)
+        return cam.cpu().numpy()
 
     def train_mode(self, on: bool) -> None:
         # a frozen backbone stays in eval (no dropout / drop-path noise) even while the head trains
@@ -1791,8 +1825,7 @@ class _DinoFinetuneNet:
         out = []
         with torch.no_grad():
             for k in range(0, len(paths), batch):
-                f = self.features(self.pixels(paths[k : k + batch]))
-                out.append(torch.nn.functional.normalize(f, dim=1).cpu().numpy())
+                out.append(self.features(self.pixels(paths[k : k + batch])).cpu().numpy())
                 if progress:
                     progress(min(1.0, (k + batch) / max(1, len(paths))))
         return np.concatenate(out) if out else np.zeros((0, self.feature_dim), np.float32)
@@ -1810,18 +1843,15 @@ class _DinoFinetuneNet:
         return np.concatenate(out)
 
     def patch_reference(self, vec: np.ndarray) -> np.ndarray:
-        return patch_reference(vec, self.hidden, self.spec, len(self.layers))
+        return patch_reference(vec, self.hidden, len(self.layers))
 
 
 class DinoFinetuneTrainer(BaseTrainer):
-    """Supervised fine-tuning of DINOv2 / v3 for image classification.
-
-    ``method``: ``linear`` trains only a head on frozen features (fast, needs ~10+ images per class),
-    ``lora`` adds low-rank adapters to the attention projections and trains them with the head (adapts the
-    features to the domain while the base weights stay untouched; artifact = adapters + head, a few MB),
-    ``full`` updates every parameter with a small ``backbone_lr`` (most capacity, most data and VRAM, artifact
-    = a whole backbone). Pretrained weights always come from the zoo (``ctx.weight``). The feature options
-    (``layers`` / ``pool`` / ``background`` / ``image_size``) are the same as the few-shot family."""
+    """Supervised LoRA fine-tuning of DINOv2 / v3 for image classification: low-rank adapters on the attention
+    projections train together with a linear head (the base weights stay untouched; artifact = adapters +
+    head, a few MB). The feature options (``layers`` / ``image_size``) are the same as the frozen family;
+    ``epochs`` / ``batch`` default to ``auto`` (data size / image size). Pretrained weights always come from the
+    zoo (``ctx.weight``)."""
 
     framework = "torch"
     inference_modes = ["predict", "embed", "retrieve"]
@@ -1834,16 +1864,14 @@ class DinoFinetuneTrainer(BaseTrainer):
         p = self.params
         self.backbone_id = str(p.get("backbone", "dinov2-small"))
         self.method = str(p.get("method", "lora"))
-        if self.method not in ("linear", "lora", "full"):
-            raise ValueError(f"method 必須是 linear / lora / full，不是 {self.method!r}")
+        if self.method != "lora":
+            raise ValueError("微調只提供 lora（linear 分類頭請用 vision.dino_fewshot 的 head=linear，full 已取消）")
         self.rank = int(p.get("rank", 8))
         self.alpha = float(p.get("lora_alpha", 2 * self.rank))
-        epochs = int(p.get("epochs", 15))
-        batch = int(p.get("batch", 16))
-        lr = float(p.get("lr", 1e-3))
-        backbone_lr = float(p.get("backbone_lr", 1e-5))
-        augment = parse_augment(p.get("augment", DEFAULT_AUGMENT))
         spec = FeatureSpec.from_params(p)
+        batch, why_batch = resolve_batch(p.get("batch", "auto"), spec.image_size)
+        lr = float(p.get("lr", 1e-3))
+        augment = parse_augment(p.get("augment", DEFAULT_AUGMENT))
         torch.manual_seed(int(p.get("seed", 42)))
         np.random.seed(int(p.get("seed", 42)))
 
@@ -1853,23 +1881,24 @@ class DinoFinetuneTrainer(BaseTrainer):
         index = {c: i for i, c in enumerate(self.classes)}
         y = np.array([index[v] for v in labels])
         tr, va = holdout(len(paths), labels, "classification")
+        epochs, why_epochs = resolve_epochs(p.get("epochs", "auto"), len(tr), batch)
         self.net = _DinoFinetuneNet(
             self.ctx, self.backbone_id, self.method, len(self.classes), self.rank, self.alpha, spec=spec
         )
         bb_params, _head_params = self.net.trainable_parameters()
         n_bb = sum(int(q.numel()) for q in bb_params)
         info(
-            f"{self.family}: backbone={self.backbone_id} method={self.method} classes={len(self.classes)} "
-            f"train={len(tr)} val={len(va)} trainable backbone params={n_bb} "
-            f"(lora layers={self.net.lora_layers}) augment={list(augment) or 'none'} {self.net.spec.describe()} "
-            f"feature dim={self.net.feature_dim} device={self.ctx.device}"
+            f"{self.family}: backbone={self.backbone_id} lora rank={self.rank} classes={len(self.classes)} "
+            f"train={len(tr)} val={len(va)} trainable backbone params={n_bb} (lora layers={self.net.lora_layers}) "
+            f"augment={list(augment) or 'none'} {self.net.spec.describe()} feature dim={self.net.feature_dim} "
+            f"epochs={epochs} ({why_epochs}) batch={batch} ({why_batch}) lr={lr:g} device={self.ctx.device}"
         )
         self.ctx.progress(0.02, "training")
 
         best: tuple[float, dict[str, Any], dict[str, Any], int] | None = None
         for attempt in range(2):
             try:
-                best = self._train(paths, y, tr, va, epochs, batch, lr, backbone_lr, augment)
+                best = self._train(paths, y, tr, va, epochs, batch, lr, augment)
                 break
             except torch.cuda.OutOfMemoryError:
                 if attempt == 1 or batch <= 1:
@@ -1891,25 +1920,28 @@ class DinoFinetuneTrainer(BaseTrainer):
                 "classes": self.classes,
                 "backbone": self.backbone_id,
                 "method": self.method,
-                "rank": self.rank if self.method == "lora" else None,
-                "lora_alpha": self.alpha if self.method == "lora" else None,
+                "rank": self.rank,
+                "lora_alpha": self.alpha,
                 "feature_dim": self.net.feature_dim,
                 "features": self.net.spec.to_dict(),
+                "head": "linear",
                 "augment": list(augment),
                 "best_epoch": best_epoch,
+                "batch": batch,
                 "train_per_class": dict(Counter(labels[tr].tolist())),
+                "resolved": {"layers": list(self.net.layers), "epochs": epochs, "batch": batch, "lr": lr},
             }
         )
         info(f"{self.family}: best epoch {best_epoch} " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
 
-    def _train(self, paths, y, tr, va, epochs, batch, lr, backbone_lr, augment):
+    def _train(self, paths, y, tr, va, epochs, batch, lr, augment):
         import torch
 
         net = self.net
         bb_params, head_params = net.trainable_parameters()
         groups = [{"params": head_params, "lr": lr}]
         if bb_params:
-            groups.append({"params": bb_params, "lr": backbone_lr if self.method == "full" else lr})
+            groups.append({"params": bb_params, "lr": lr})
         opt = torch.optim.AdamW(groups, weight_decay=float(self.params.get("weight_decay", 0.01)))
         steps = epochs * max(1, int(np.ceil(len(tr) / batch)))
         sched = torch.optim.lr_scheduler.LambdaLR(
@@ -1917,14 +1949,6 @@ class DinoFinetuneTrainer(BaseTrainer):
         )
         loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=0.05)
         rng = np.random.default_rng(0)
-        cached = None
-        if self.method == "linear":  # frozen features never change: compute once, train the head on them
-            feats = []
-            with torch.no_grad():
-                net.train_mode(False)
-                for k in range(0, len(paths), batch):
-                    feats.append(net.features(net.pixels(paths[k : k + batch])).cpu())
-            cached = torch.cat(feats)
         best = None
         for epoch in range(1, epochs + 1):
             net.train_mode(True)
@@ -1933,10 +1957,7 @@ class DinoFinetuneTrainer(BaseTrainer):
             for s in range(0, len(order), batch):
                 idx = order[s : s + batch]
                 yb = torch.as_tensor(y[idx]).to(self.ctx.device)
-                if cached is not None:
-                    logits = net.head(cached[idx].to(self.ctx.device))
-                else:
-                    logits = net.head(net.features(net.pixels([paths[i] for i in idx], augment=augment)))
+                logits = net.head(net.features(net.pixels([paths[i] for i in idx], augment=augment)))
                 loss = loss_fn(logits, yb)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -1945,12 +1966,7 @@ class DinoFinetuneTrainer(BaseTrainer):
                 sched.step()
                 total += float(loss.detach()) * len(idx)
                 self.ctx.progress(0.02 + 0.9 * ((epoch - 1) + (s + len(idx)) / len(order)) / epochs, "training")
-            if cached is not None:
-                with torch.no_grad():
-                    net.train_mode(False)
-                    proba = torch.softmax(net.head(cached[va].to(self.ctx.device)), dim=-1).cpu().numpy()
-            else:
-                proba = net.predict_proba([paths[i] for i in va], batch)
+            proba = net.predict_proba([paths[i] for i in va], batch)
             preds = proba.argmax(axis=1)
             self.metrics = M.classification(y[va], preds, proba)
             ep = {"loss": total / max(1, len(order)), **self.metrics}
@@ -1958,14 +1974,7 @@ class DinoFinetuneTrainer(BaseTrainer):
             score = self.metrics.get("f1_macro", 0.0)
             if best is None or score > best[0]:
                 head_state = {k: v.detach().cpu().clone() for k, v in net.head.state_dict().items()}
-                bb_state = (
-                    lora_state(net.backbone)
-                    if self.method == "lora"
-                    else {k: v.detach().cpu().clone() for k, v in net.backbone.state_dict().items()}
-                    if self.method == "full"
-                    else {}
-                )
-                best = (score, head_state, bb_state, epoch)
+                best = (score, head_state, lora_state(net.backbone), epoch)
             self.ctx.epoch(epoch, ep)
         assert best is not None
         self.metrics = {k: v for k, v in self.metrics.items()}
@@ -1977,10 +1986,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         model_dir = out / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
         torch.save(self.net.head.state_dict(), model_dir / "head.pt")
-        if self.method == "lora":
-            torch.save(lora_state(self.net.backbone), model_dir / "lora.pt")
-        elif self.method == "full":
-            self.net.backbone.save_pretrained(model_dir / "backbone")
+        torch.save(lora_state(self.net.backbone), model_dir / "lora.pt")
         np.savez_compressed(
             model_dir / "reference.npz",
             embeddings=self.ref_emb.astype(np.float32),
@@ -1991,7 +1997,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
             ArtifactOut(
-                name=f"dino_{self.method}",
+                name="dino_lora",
                 kind="model",
                 path="model",
                 framework=self.framework,
@@ -2012,6 +2018,8 @@ class DinoFinetuneInferencer(BaseInferencer):
         }
         self.classes = [str(c) for c in self.meta["classes"]]
         method = str(self.meta.get("method", "lora"))
+        head_state = torch.load(model_path / "head.pt", map_location="cpu", weights_only=True)
+        legacy = any(k.startswith("0.") or k.startswith("1.") for k in head_state)  # LayerNorm + Linear (older)
         self.net = _DinoFinetuneNet(
             self.ctx,
             str(self.meta.get("backbone", "dinov2-small")),
@@ -2021,6 +2029,7 @@ class DinoFinetuneInferencer(BaseInferencer):
             float(self.meta.get("lora_alpha") or 16),
             backbone_dir=model_path / "backbone" if method == "full" else None,
             spec=FeatureSpec.from_dict(self.meta.get("features")),
+            legacy_head=legacy,
         )
         if method == "lora":
             _missing, unexpected = self.net.backbone.load_state_dict(
@@ -2028,7 +2037,7 @@ class DinoFinetuneInferencer(BaseInferencer):
             )
             if unexpected:
                 raise ValueError(f"LoRA 權重與骨幹不符：{unexpected[:3]}")
-        self.net.head.load_state_dict(torch.load(model_path / "head.pt", map_location="cpu", weights_only=True))
+        self.net.head.load_state_dict(head_state)
         self.net.head.to(self.ctx.device)
         ref = model_path / "reference.npz"
         if ref.exists():
@@ -2094,38 +2103,29 @@ class DinoFinetuneInferencer(BaseInferencer):
                 }
             )
         if attention:
-            self._grad_cam_maps(out, ids, paths, proba.argmax(axis=1), batch, rows)
+            self._cam_maps(out, ids, paths, proba.argmax(axis=1), batch, rows)
         counts = Counter(r["prediction"] for r in rows)
         return PredictResult(rows, {"mode": "predict", "n": len(rows), "class_counts": dict(counts)})
 
     def _embed_with_patches(self, paths: list[Path], batch: int, want_patches: bool):
         """Normalised fused embeddings and (optionally) the L2-normalised fused patch grid, batch by batch."""
-        torch = self.net.torch
         embs, toks = [], []
         for k in range(0, len(paths), batch):
             feat, tok = self.net.tokens(self.net.pixels(paths[k : k + batch]))
-            embs.append(torch.nn.functional.normalize(feat, dim=1).cpu().numpy())
+            embs.append(feat.cpu().numpy())
             if want_patches:
                 toks.append(tok.cpu().numpy().astype(np.float16))
             self.ctx.progress(0.8 * min(1.0, (k + batch) / max(1, len(paths))))
         emb = np.concatenate(embs) if embs else np.zeros((0, self.net.feature_dim), np.float32)
         return emb, (np.concatenate(toks) if toks else None)
 
-    def _grad_cam_maps(self, out: Path, ids, paths: list[Path], target: np.ndarray, batch: int, rows) -> None:
-        from PIL import Image
-
-        from trainer import viz
-
-        names: set[str] = set()
+    def _cam_maps(self, out: Path, ids, paths: list[Path], target: np.ndarray, batch: int, rows) -> None:
+        values: list[np.ndarray] = []
         limit = min(len(paths), ATTENTION_MAX)
         for k in range(0, limit, batch):
             chunk = paths[k : k + batch]
-            cam = self.net.grad_cam(self.net.pixels(chunk), target[k : k + batch])
-            for n, p in enumerate(chunk):
-                with Image.open(p) as im:
-                    size = im.size
-                box = viz.crop_box(size[0], size[1], self.net.processor)
-                name = _heatmap_name(ids[k + n], names)
-                rows[k + n]["attention"] = "attention/" + viz.save_overlay(
-                    out / "attention", name, viz.patch_grid(cam[n]), size, box
-                )
+            values.extend(list(self.net.cam(self.net.pixels(chunk), target[k : k + batch])))
+        for row, rel in zip(
+            rows[:limit], _overlays(out, ids[:limit], paths[:limit], values, self.net.processor), strict=False
+        ):
+            row["attention"] = rel

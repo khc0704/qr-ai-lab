@@ -67,19 +67,19 @@
 ### 3.3 TEM / SEM 表面影像 bin code（few-shot，新類別免重訓）
 
 - **資料**：zip，`<bin_code>/*.png`，每類 ≥ 3 張即可開始（建議 10+）。
-- **訓練**：`vision.dino_fewshot`（`backbone=dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`）。凍結 DINO 取特徵，再接分類頭；評估用分層切分或 leave-one-out。DINOv3 的 patch 更細（16 px、含 register token），SEM / TEM 紋理通常較穩；權重是 gated，管理員要先在 Hugging Face 接受授權。
-- **特徵怎麼產生、怎麼分類**（`docs/MODEL_CATALOG.md` §4.1b）：`layers`（最後一層 / `mid` 跨層：DINOv2 6/8/10/12、DINOv3 8/10/12 / `auto` 用支援集自動挑層）、`pool`（CLS ⊕ patch 平均、GeM、注意力加權）、`center=support_mean`（去中心化）、`background=project_out_cls`（patch 投影掉 CLS 方向 = 濾背景）、`metric=hyperbolic`、`image_size=336 / 448`；`head` 選特徵直接比對（`prototype` / `knn`）或接分類器（`logistic` / `svm` / 預設 `prototype+logistic`）。
-- **有正常類別時（good / normal / ok / pass 資料夾，或 `normal_class`）** 自動走兩階段：正常影像的 patch 建記憶庫先判「正常 / 異常」，異常影像只拿超過門檻的 patch（缺陷區塊）加權成描述子，再分 scratch / void … 這些缺陷資料夾；`predict` 多回 `anomaly_score`、`is_anomaly`、缺陷位置，疊圖就是 patch 異常分數。要暫時關掉：推論 `config.normal_bank=off`。
+- **訓練**：`vision.dino_fewshot`（`backbone=dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`）。凍結 DINO 讀幾層 patch 特徵（`layers=cross` 跨層 9 / 10 / 11，或 `last`）做成每張一個向量，再接分類頭；評估用分層切分或 leave-one-out。DINOv3 的 patch 更細（16 px、含 register token），SEM / TEM 紋理通常較穩；權重是 gated，管理員要先在 Hugging Face 接受授權。
+- **怎麼分類**（`head`，`docs/MODEL_CATALOG.md` §4.1b）：`auto` 預設在每類不到 10 張時用最近原型（prototype：每類一個平均向量比 cosine）、夠多時用線性分類頭；同一類有多種長相用 `knn`；也可選 `svm`。`image_size=336 / 448` 看小瑕疵。
+- **有正常類別時（good / normal / ok / pass 資料夾，或 `normal_class` 指定任何名字）** 自動走 PatchCore 兩階段：正常影像的 patch 建記憶庫先判「正常 / 異常」，異常影像只拿超過門檻的 patch（缺陷區塊）加權成描述子，再分 scratch / void … 這些缺陷資料夾；`predict` 多回 `anomaly_score`、`is_anomaly`、缺陷位置，疊圖就是 patch 異常分數；`score_agg` / `coreset_ratio` / `bank_augment` 預設 `auto`，實際選了什麼寫在 log 與 metadata 的 `resolved`。good 其實只是另一種圖樣時設 `patchcore=off`。
 - **新增 bin code**：建推論 Job，`config.mode="extend"`，輸入是新類別的資料夾 zip → 產生新版本模型並設為預設，原本的類別都保留。
 - **推論**：`predict`（`config.min_similarity` 低於門檻回 `unknown`，避免硬塞進既有類別）、`retrieve`（`order` 選只找最相似 / 只找最不相似 / 兩者，`k` 選幾個；最不相似用來找離群或挑下一批要標註的）。
 - **看模型在看哪裡**：`predict` / `retrieve` 每張影像都寫一張「模型關注的區塊」疊圖（每個 patch 與匹配到的原型 / 鄰居的相似度），結果頁點開樣本就疊在原圖上（可關、可調透明度）；紅色區域就是這張圖被判成該類別的依據，和你的直覺不合時通常是背景或資訊列在主導 → 先用 `image.crop` 前處理切掉。
-- **何時改用微調**：類別固定、每類有幾十張以上、原型分類不夠準 → `vision.dino_finetune`：`method=linear` 只訓練分類頭（最快）、`lora` 在 DINO 的注意力層加低秩轉接器一起訓練（影像和自然影像差很多時，例如 SEM / TEM 紋理，特徵會真的適應你的資料；產物只有幾 MB）、`full` 全參數微調（每類上百張、VRAM 夠時）。推論同樣有 `predict`（`config.min_confidence` 低於門檻回 `unknown`；附 Grad-CAM 疊圖 = 分類頭對每個 patch 的梯度貢獻）、`retrieve`（同樣可選方向）、`embed`。
+- **何時改用微調**：類別固定、每類有幾十張以上、凍結特徵不夠準 → `vision.dino_finetune`（LoRA：在 DINO 的注意力層加低秩轉接器和線性頭一起訓練，產物只有幾 MB；`epochs` / `batch` 預設 auto）。推論同樣有 `predict`（`config.min_confidence` 低於門檻回 `unknown`；附 CAM 疊圖 = 線性頭權重對每個 patch 的貢獻）、`retrieve`（同樣可選方向）、`embed`。
 - **何時改用 YOLO 分類**：類別固定、每類有數百張、要更高準確度 → `vision.yolo`（`model=yolov8s`、`pretrained=true` 用模型庫的 `yolov8s-cls.pt` 微調；`pretrained=false` 從頭訓練）。
 
 ### 3.4 只有良品影像：PatchCore 異常 + 熱圖
 
 - 資料夾 `good/`（或 `normal/`、`ok/`）為正常；其他資料夾視為異常（只用來評估）。
-- `vision.dino_patchcore`：DINO patch 特徵建記憶庫（`coreset_ratio` 抽樣），分數 = patch 到記憶庫的最近距離，影像分數 = 最大 patch 分數；門檻 = 正常訓練影像的 P99。預設讀中後段幾層拼接（`layers=mid`；DINOv2 6/8/10/12、DINOv3 8/10/12）再以固定隨機投影壓回骨幹寬度（`patch_dim=auto`）；小瑕疵把 `image_size` 拉到 336 / 448；背景都一樣時試 `background=project_out_cls`。
+- `vision.dino_patchcore`：DINO patch 特徵建記憶庫（`coreset_ratio=auto` 讓庫不超過 10 萬個 patch），分數 = patch 到記憶庫的最近鄰距離，影像分數 = 最大值或前 1% 平均（`score_agg=auto`）；門檻 = 保留的正常影像分數 P99。預設讀 `layers=cross`（9 / 10 / 11）拼接，`last` 只讀最後一層；正常影像少於 20 張時 `bank_augment=auto` 把翻轉 / 旋轉後的影像也放進庫；小瑕疵把 `image_size` 拉到 336 / 448；瑕疵比 patch 大時 `neighborhood=3`。
 - 推論 `score`：每張回分數、`hot_patch_row/col`，`output/heatmaps/*.png` 熱圖（`config.save_heatmaps=false` 可關）。
 
 ### 3.5 SEM 線寬 / 顆粒量測

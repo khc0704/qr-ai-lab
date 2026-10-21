@@ -193,6 +193,7 @@ def test_dino_fewshot_extend_and_patchcore(tmp_path, ctx):
     t = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov2-small", "k": 3}, ctx)
     t.fit(ds)
     assert t.evaluate()["accuracy"] >= 0.5 and t.meta["classes"] == ["BIN_A", "BIN_B"]
+    assert t.meta["resolved"]["head"] == "prototype" and t.meta["resolved"]["patchcore"] is False
     arts = t.export(tmp_path / "out")
     inf = registry.create_inferencer("vision.dino_fewshot", ctx)
     inf.load(tmp_path / "out" / "model", arts[0].metadata)
@@ -257,8 +258,8 @@ def test_dino_fewshot_extend_and_patchcore(tmp_path, ctx):
     assert json.dumps(res.summary)  # serialisable
 
 
-@pytest.mark.parametrize("method", ["linear", "lora", "full"])
-def test_dino_finetune_roundtrip(tmp_path, ctx, method):
+def test_dino_finetune_roundtrip(tmp_path, ctx):
+    method = "lora"
     pytest.importorskip("transformers")
     pytest.importorskip("PIL")
     from trainer.models.vision import inject_lora, lora_state
@@ -278,20 +279,21 @@ def test_dino_finetune_roundtrip(tmp_path, ctx, method):
     t = registry.create_trainer("vision.dino_finetune", "classification", params, ctx)
     t.fit(ds)
     assert epochs == [1, 2, 3, 4] and t.meta["classes"] == ["BIN_A", "BIN_B"] and t.meta["method"] == method
-    assert t.evaluate()["accuracy"] >= 0.5
-    if method == "lora":
-        assert t.net.lora_layers == 3  # one layer × query / key / value
-        assert all(".lora_" in k for k in lora_state(t.net.backbone)) and lora_state(t.net.backbone)
-        # the base projections never train; only adapters and the head do
-        assert all(not p.requires_grad for n, p in t.net.backbone.named_parameters() if ".lora_" not in n)
-    if method == "linear":
-        assert not any(p.requires_grad for p in t.net.backbone.parameters())
+    assert t.evaluate()["accuracy"] >= 0.5 and t.meta["resolved"]["epochs"] == 4
+    assert t.net.lora_layers == 3  # one layer × query / key / value
+    assert all(".lora_" in k for k in lora_state(t.net.backbone)) and lora_state(t.net.backbone)
+    # the base projections never train; only adapters and the head do
+    assert all(not p.requires_grad for n, p in t.net.backbone.named_parameters() if ".lora_" not in n)
     arts = t.export(tmp_path / "out")
     model_dir = tmp_path / "out" / "model"
-    assert (model_dir / "head.pt").exists() and (model_dir / "reference.npz").exists()
-    assert (model_dir / "lora.pt").exists() == (method == "lora")
-    assert (model_dir / "backbone").is_dir() == (method == "full")
-    assert arts[0].name == f"dino_{method}" and arts[0].metadata["inference_modes"] == ["predict", "embed", "retrieve"]
+    assert (
+        (model_dir / "head.pt").exists() and (model_dir / "reference.npz").exists() and (model_dir / "lora.pt").exists()
+    )
+    assert arts[0].name == "dino_lora" and arts[0].metadata["inference_modes"] == ["predict", "embed", "retrieve"]
+    # linear / full are no longer training options (linear = the frozen family's head=linear)
+    for gone in ("linear", "full"):
+        with pytest.raises(ValueError, match="lora"):
+            registry.create_trainer("vision.dino_finetune", "classification", {**params, "method": gone}, ctx).fit(ds)
 
     inf = registry.create_inferencer("vision.dino_finetune", ctx)
     inf.load(model_dir, arts[0].metadata)
@@ -306,13 +308,12 @@ def test_dino_finetune_roundtrip(tmp_path, ctx, method):
     assert res.rows[0]["most_similar"][0]["label"] == "BIN_A" and len(res.rows[0]["most_similar"]) == 2
     assert res.rows[0]["neighbors"] == res.rows[0]["most_similar"] and res.rows[0]["attention"]
     res = inf.predict(probe, "embed", {}, tmp_path / "pred")
-    assert len(res.rows[0]["embedding"]) == 64 and (tmp_path / "pred" / "embeddings.npy").exists()
-    if method == "lora":
-        # inject_lora is idempotent in count: a fresh backbone gets exactly the three wrapped layers
-        from transformers import AutoModel
+    assert len(res.rows[0]["embedding"]) == 32 and (tmp_path / "pred" / "embeddings.npy").exists()
+    # inject_lora is idempotent in count: a fresh backbone gets exactly the three wrapped layers
+    from transformers import AutoModel
 
-        m = AutoModel.from_pretrained(str(zoo / "dinov2-small"), local_files_only=True)
-        assert inject_lora(m, 2, 4.0) == 3
+    m = AutoModel.from_pretrained(str(zoo / "dinov2-small"), local_files_only=True)
+    assert inject_lora(m, 2, 4.0) == 3
 
 
 def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16", layers: int = 1) -> None:

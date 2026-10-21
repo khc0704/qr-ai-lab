@@ -520,7 +520,7 @@ function LayerReport({ layers }: { layers: J }) {
           <p className="text-sm">
             {analysisCopy.suggestedLayers}：<span className="font-mono">{suggested.join(",")}</span>
             <span className="ml-2 text-xs text-muted-foreground">
-              （{String(layers.kind)} mid 預設 = {arr<number>(layers.mid_preset).join(",")}）
+              （{String(layers.kind)} cross 預設 = {arr<number>(layers.cross_preset).join(",")}）
             </span>
           </p>
         ) : null}

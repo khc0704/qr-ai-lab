@@ -5,7 +5,8 @@ With a DINO backbone (``embedding="dino"``) the report also reads every transfor
 ``label_check`` — a leave-one-out nearest-centroid prediction of each image's folder from the last-layer
 features and from the cross-layer features, flagging images both views would file elsewhere (likely
 mislabelled or atypical); ``layers`` — per layer, how separable the folders are and which image-quality
-aspect its main components track, with a suggested ``layers`` setting for the DINO families."""
+aspect its main components track, with a suggested ``layers`` setting for the DINO families (the default
+``cross`` preset reads blocks 9 / 10 / 11 of a 12-layer backbone)."""
 
 from __future__ import annotations
 
@@ -78,17 +79,17 @@ FLAG_CONFIDENCE = 0.6  # a view has to be at least this sure of another folder b
 
 def dino_views(ctx, backbone: str, paths: list[Path], progress: Callable[[float], None] | None = None):
     """Read every layer once → (per-layer blocks (N, n_layers, F), layer ids, last-layer vectors, cross-layer
-    vectors (the backbone's ``mid`` preset), backbone kind)."""
+    vectors (the ``cross`` preset: 9 / 10 / 11 of 12), backbone kind, the preset)."""
     from trainer.models.dino_features import FeatureSpec, fuse_blocks, resolve_layers
     from trainer.models.vision import _Dino
 
     dino = _Dino(ctx, backbone, FeatureSpec(layers="all"))
     blocks = dino.embed(paths, per_layer=True, progress=progress)
-    mid = resolve_layers("mid", dino.n_layers, dino.kind)
-    mid_idx = [dino.layers.index(layer) for layer in mid]
+    preset = resolve_layers("cross", dino.n_layers, dino.kind)
+    idx = [dino.layers.index(layer) for layer in preset]
     last = fuse_blocks(blocks[:, -1:, :])
-    cross = fuse_blocks(blocks[:, mid_idx, :])
-    return blocks, dino.layers, last, cross, dino.kind, mid
+    cross = fuse_blocks(blocks[:, idx, :])
+    return blocks, dino.layers, last, cross, dino.kind, preset
 
 
 def _aspect_values(M: np.ndarray) -> dict[str, np.ndarray]:
@@ -158,7 +159,7 @@ def label_check(views: dict[str, np.ndarray], groups: np.ndarray, ids: list[str]
 
 
 def layer_report(
-    blocks: np.ndarray, layer_ids: tuple[int, ...], groups: np.ndarray, M: np.ndarray, kind: str, mid: tuple[int, ...]
+    blocks: np.ndarray, layer_ids: tuple[int, ...], groups: np.ndarray, M: np.ndarray, kind: str, cross: tuple[int, ...]
 ) -> dict[str, Any]:
     """Per layer: folder separability (Fisher ratio + LOO accuracy when there are ≥ 2 folders with ≥ 2 images)
     and the image-quality aspect its first principal components track (Spearman ρ), with a plain-language
@@ -211,7 +212,7 @@ def layer_report(
     return {
         "kind": kind,
         "n_layers": len(layer_ids),
-        "mid_preset": list(mid),
+        "cross_preset": list(cross),
         "separability": separable,
         "rows": rows,
         "suggested": suggested,
@@ -354,14 +355,14 @@ def quality_report(
         try:
             if ctx is None:
                 raise RuntimeError("no context")
-            blocks, layer_ids, last, cross, kind, mid = dino_views(
+            blocks, layer_ids, last, cross, kind, preset = dino_views(
                 ctx, backbone, paths, progress=lambda f: tick(0.7 + 0.12 * f)
             )
             E = last
             emb_kind = f"dino:{backbone}"
             rel_ids = [str(p.relative_to(root)) for p in paths]
             label_report = label_check({"last": last, "cross": cross}, g, rel_ids)
-            layers_report = layer_report(blocks, layer_ids, g, M, kind, mid)
+            layers_report = layer_report(blocks, layer_ids, g, M, kind, preset)
             if label_report:
                 info(
                     f"label check: LOO accuracy last={label_report['accuracy']['last']:.3f} "
@@ -533,12 +534,12 @@ def quality_report(
             )
     if layers_report and layers_report.get("suggested"):
         sug = ",".join(str(v) for v in layers_report["suggested"])
-        mid = ",".join(str(v) for v in layers_report["mid_preset"])
+        cross_txt = ",".join(str(v) for v in layers_report["cross_preset"])
         recs.append(
             {
                 "level": "info",
-                "text": f"這份資料最能分群組的層：{sug}；few-shot / PatchCore 的 layers 參數可填 {sug}"
-                f"（骨幹 {backbone}，mid 預設 = {mid}）。",
+                "text": f"這份資料最能分群組的層：{sug}；DINO 家族的 layers 參數可填 {sug}"
+                f"（骨幹 {backbone}，cross 預設 = {cross_txt}）。",
             }
         )
     tick(1.0)

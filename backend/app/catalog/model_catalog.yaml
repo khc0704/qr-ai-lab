@@ -144,14 +144,14 @@ families:
     inference_modes: [detect, segment, predict]
     resources: { gpu: required, cpu_min: 4, memory_mb_min: 8192 }
     min_rows: 200
-    defaults: { model: yolov8s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true, freeze: 0, augment: [hflip, crop, brightness] }
+    defaults: { model: yolov8s, imgsz: 640, epochs: 100, lr0: 0.01, batch: -1, pretrained: true, freeze: auto, augment: [hflip, crop, brightness] }
     augment_choices: [hflip, vflip, rotate90, crop, brightness]
     search_space:
       model: { type: categorical, choices: [yolov8n, yolov8s, yolov8m] }
       imgsz: { type: categorical, choices: [512, 640, 800] }
       lr0: { type: float, low: 0.001, high: 0.02, log: true }
       epochs: { type: int, low: 50, high: 150 }
-      freeze: { type: categorical, choices: [0, 10] }
+      freeze: { type: categorical, choices: [auto, 0, 10] }
       augment: { type: categorical, choices: [default, none] }
     weights:
       - { id: yolov8n,     file: yolov8n.pt,     source: "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n.pt",     license: AGPL-3.0, sha256: null, kind: hf_file }
@@ -163,63 +163,56 @@ families:
       - { id: yolov8n-cls, file: yolov8n-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
       - { id: yolov8s-cls, file: yolov8s-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
       - { id: yolov8m-cls, file: yolov8m-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8m-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
-    sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。freeze=10 凍結骨幹只訓練頸部與頭（資料少時較穩）；augment 全部不勾時連 YOLO 內建的 mosaic / 色相 / RandAugment 也關掉；自動模式會各試「預設增強」與「完全不增強」。
+    sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。freeze=auto：影像少於 200 張時凍結骨幹只訓練頸部與頭（較穩），多的話整個網路一起訓練；augment 全部不勾時連 YOLO 內建的 mosaic / 色相 / RandAugment 也關掉；自動模式會各試「預設增強」與「完全不增強」。
 
   vision.dino_fewshot:
-    label: DINO few-shot 分類（特徵比對 / 分類頭 / 正常 patch 庫）
+    label: DINO 特徵分類（凍結骨幹；可接 PatchCore 兩階段）
     group: vision
     framework: torch
     supports: { IMAGE: [classification] }
     inference_modes: [predict, embed, retrieve]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 5
-    # feature options: layers (last / last4 / mid / spread / auto / "6,9,12"), layer_fusion (concat / mean),
-    # pool (cls+mean / cls / mean / cls+gem / cls+attn), center (none / support_mean), background (none /
-    # project_out_cls), metric (cosine / hyperbolic), image_size (224 / 336 / 448); head (prototype / knn /
-    # logistic / svm / prototype+logistic); normal_bank (auto / on / off) + normal_class for two-stage defects
-    defaults: { backbone: dinov2-small, head: prototype+logistic, k: 5, layers: last, layer_fusion: concat, pool: cls+mean, center: none, background: none, metric: cosine, image_size: 224, normal_bank: auto, normal_class: "", coreset_ratio: 0.1, C: 1.0 }
+    # features: patch tokens only (no CLS), mean per layer, layers concatenated. layers: last / cross (9,10,11 of
+    # 12, scaled by depth) / a list. head: auto (prototype below 10 images per class, else linear) / prototype /
+    # knn / linear / svm. patchcore: auto (on when a normal folder good / normal / ok / pass or normal_class
+    # exists) / on / off → PatchCore bank decides normal vs defect, the anomalous patches are classified.
+    defaults: { backbone: dinov2-small, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto }
     search_space:
       backbone: { type: categorical, choices: [dinov2-small, dinov2-base, dinov3-vits16, dinov3-vitb16] }
-      head: { type: categorical, choices: [prototype, knn, logistic, svm, prototype+logistic] }
-      layers: { type: categorical, choices: [last, last4, mid, spread, auto] }
-      pool: { type: categorical, choices: [cls+mean, cls, mean, cls+gem, cls+attn] }
-      center: { type: categorical, choices: [none, support_mean] }
-      background: { type: categorical, choices: [none, project_out_cls] }
-      metric: { type: categorical, choices: [cosine, hyperbolic] }
+      layers: { type: categorical, choices: [last, cross] }
+      head: { type: categorical, choices: [prototype, knn, linear, svm] }
       image_size: { type: categorical, choices: [224, 336, 448] }
-      k: { type: int, low: 1, high: 20 }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
       - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
-    sop: 凍結 DINOv2 / v3 取特徵，每個類別（bin code）存成原型；新增類別只要加幾張範例（extend），不用重訓。特徵怎麼產生（哪些層、怎麼 pooling、去中心化、濾背景、cosine 或雙曲距離、解析度）與怎麼分類（最近原型、kNN、邏輯迴歸 / SVM 頭、原型 + 邏輯迴歸）都是參數；資料夾裡有 good / normal / ok / pass 時自動啟用「正常 patch 庫」：先判正常或異常，再只拿異常的區塊去分缺陷類別（scratch、void…）。適合 TEM / SEM 表面影像分類。
+    sop: 凍結 DINOv2 / v3，讀幾層 patch 特徵（layers = last 或 cross 跨層）做成每張影像一個向量，再接分類：head = auto 會在每類不到 10 張時用最近原型、夠多時用線性分類頭；也可選 knn / svm。新增類別只要加幾張範例（extend），不用重訓。資料夾裡有正常類別（good / normal / ok / pass，或 normal_class 指定）時自動開 PatchCore：先用正常影像的 patch 庫判正不正常，異常的只拿異常區塊去分缺陷類別（scratch、void…），沒看過的缺陷會回 unknown。
 
   vision.dino_finetune:
-    label: DINO 微調分類（線性探針 / LoRA / 全參數）
+    label: DINO LoRA 微調分類
     group: vision
     framework: torch
     supports: { IMAGE: [classification] }
     inference_modes: [predict, embed, retrieve]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 20
-    defaults: { backbone: dinov2-small, method: lora, epochs: 15, lr: 0.001, rank: 8, lora_alpha: 16, batch: 16, backbone_lr: 0.00001, augment: [crop, hflip], layers: last, layer_fusion: concat, pool: cls+mean, background: none, image_size: 224 }
+    defaults: { backbone: dinov2-small, image_size: 224, layers: cross, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, augment: [crop, hflip] }
     augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
     search_space:
       backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
-      method: { type: categorical, choices: [linear, lora] }
+      layers: { type: categorical, choices: [last, cross] }
       lr: { type: float, low: 0.0001, high: 0.01, log: true }
       rank: { type: categorical, choices: [4, 8, 16] }
-      epochs: { type: int, low: 5, high: 30 }
-      layers: { type: categorical, choices: [last, last4, mid] }
-      pool: { type: categorical, choices: [cls+mean, cls+gem] }
       augment: { type: categorical, choices: [default, none] }
+      image_size: { type: categorical, choices: [224, 336] }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
       - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
-    sop: 真的訓練 DINOv2 / v3 做分類：linear 只訓練分類頭（最快、每類 10+ 張）、lora 在注意力層加低秩轉接器一起訓練（領域差異大時用；產物只有幾 MB）、full 全部參數微調（資料多、VRAM 夠時）。類別固定、每類有幾十張以上、few-shot 原型不夠準時選這個；類別會一直增加仍用 few-shot。augment 預設 crop + hflip，自己挑（hflip、vflip、rotate90、crop、brightness、contrast），方向有意義的影像不要加翻轉 / 旋轉；自動模式會各試「預設增強」與「完全不增強」。layers / pool / background / image_size 與 few-shot 相同，微調時跨層特徵也一起訓練。
+    sop: 真的訓練 DINOv2 / v3：在注意力層加 LoRA 低秩轉接器，和線性分類頭一起訓練（基底權重不動，產物只有幾 MB）。類別固定、每類有幾十張以上、凍結特徵不夠準時選這個；類別會一直增加仍用凍結特徵分類。epochs / batch 預設 auto（依資料量與解析度決定）；augment 預設 crop + hflip（方向有意義的影像不要加翻轉 / 旋轉；全部不勾 = 不增強），自動模式會各試「預設增強」與「完全不增強」。layers / image_size 與凍結家族相同。
 
   vision.dino_patchcore:
     label: DINO PatchCore 異常偵測
@@ -229,18 +222,17 @@ families:
     inference_modes: [score, embed]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 20
-    defaults: { backbone: dinov2-small, coreset_ratio: 0.1, k: 3, layers: mid, layer_fusion: concat, background: none, image_size: 224, patch_dim: auto }
+    defaults: { backbone: dinov2-small, image_size: 224, layers: cross, neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto, k: 3 }
     search_space:
       backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
-      coreset_ratio: { type: float, low: 0.02, high: 0.3 }
-      k: { type: int, low: 1, high: 9 }
-      layers: { type: categorical, choices: [last, last4, mid, spread] }
-      background: { type: categorical, choices: [none, project_out_cls] }
+      layers: { type: categorical, choices: [last, cross] }
       image_size: { type: categorical, choices: [224, 336, 448] }
+      neighborhood: { type: categorical, choices: [1, 3] }
+      k: { type: int, low: 1, high: 9 }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
-    sop: 只用正常影像建 patch 特徵記憶庫，異常分數 = 最近鄰距離，並輸出熱圖定位。預設讀中後段幾層（layers=mid；DINOv2 取 6/8/10/12、DINOv3 取 8/10/12）拼接成 patch 特徵，再以固定隨機投影壓回骨幹寬度（patch_dim=auto）；image_size 拉到 336 / 448 可抓更小的瑕疵。
+    sop: 只用正常影像的 patch 特徵建記憶庫，異常分數 = 每個 patch 到記憶庫的最近鄰距離，影像分數 = 最大值或前 1% 平均（score_agg=auto 依 patch 數決定），並輸出熱圖定位。layers = cross（9/10/11）或 last；coreset_ratio=auto 讓記憶庫不超過 10 萬個 patch；正常影像少於 20 張時 bank_augment=auto 會把翻轉 / 旋轉後的影像也放進庫；小瑕疵把 image_size 拉到 336 / 448；neighborhood=3 做 PatchCore 的鄰域池化。
 
   vision.image_quality:
     label: 影像品質基準（機台比對）
@@ -288,11 +280,11 @@ families:
       dim: { type: categorical, choices: [32, 64, 128] }
       depth: { type: int, low: 2, high: 6 }
       lr: { type: float, low: 0.0001, high: 0.005, log: true }
-      embed_layers: { type: categorical, choices: [last, mid, all] }
-      embed_pool: { type: categorical, choices: [mean, max, gem, meanmax] }
+      embed_layers: { type: categorical, choices: [last, all] }
+      embed_pool: { type: categorical, choices: [mean, meanmax] }
       score_method: { type: categorical, choices: [recon, patch_bank] }
     weights: []
-    sop: 把光譜切 patch 隨機遮蔽再重建，學到的 embedding 做光譜鑑別器：與黃金樣本比相似度、找最不相似、追蹤漂移；有標籤時接迴歸頭預測 CD / 厚度。embedding 可選讀哪些編碼層（embed_layers：最後一層 / 後半段 / 全部拼接）與怎麼 pooling（embed_pool：mean / max / gem / meanmax）；score 回每個 patch 的分數與最偏離的波段（hot_band_start / end），score_method=patch_bank 改用正常 patch token 庫的最近鄰距離。
+    sop: 把光譜切 patch 隨機遮蔽再重建，學到的 embedding 做光譜鑑別器：與黃金樣本比相似度、找最不相似、追蹤漂移；有標籤時接迴歸頭預測 CD / 厚度。embedding 可選讀哪些編碼層（embed_layers：最後一層 / 全部拼接）與怎麼 pooling（embed_pool：mean / meanmax）；score 回每個 patch 的分數與最偏離的波段（hot_band_start / end），score_method=patch_bank 改用正常 patch token 庫的最近鄰距離。
 
   spectrum.pls:
     label: PLS 迴歸 / PLS-DA 分類
@@ -334,15 +326,14 @@ families:
     inference_modes: [predict, retrieve, embed, score]
     resources: { gpu: optional, cpu_min: 4, memory_mb_min: 8192 }
     min_rows: 20
-    defaults: { model: qwen3-embedding-0.6b, max_len: 512, batch: 16, C: 1.0, instruction: "", pool: last_token, layers: last }
+    defaults: { model: qwen3-embedding-0.6b, max_len: 512, batch: 16, C: 1.0, instruction: "", pool: last_token }
     search_space:
       C: { type: float, low: 0.01, high: 100, log: true }
       max_len: { type: categorical, choices: [256, 512, 1024] }
       pool: { type: categorical, choices: [last_token, mean] }
-      layers: { type: categorical, choices: [last, last4] }
     weights:
       - { id: qwen3-embedding-0.6b, file: qwen3-embedding-0.6b/, source: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B", license: Apache-2.0, sha256: null, kind: hf_repo }
-    sop: 凍結的 Qwen3-Embedding（多語、含中文）把每段文字變成語意向量，不微調。分類：向量接邏輯迴歸（幾十筆就能用，比 BERT 微調快很多）；retrieve：找最相似 / 最不相似的歷史工單、log（可選方向與筆數）；anomaly_detection：和歷史紀錄都不像的新型問題（novelty 分數）；embed：向量給分群 / 報表。pool=mean（對長 log 較穩）與 layers=last4（偏字面、找近重複更準）是可選的特徵產生方式。
+    sop: 凍結的 Qwen3-Embedding（多語、含中文）把每段文字變成語意向量，不微調。分類：向量接邏輯迴歸（幾十筆就能用，比 BERT 微調快很多）；retrieve：找最相似 / 最不相似的歷史工單、log（可選方向與筆數）；anomaly_detection：和歷史紀錄都不像的新型問題（novelty 分數）；embed：向量給分群 / 報表。pool=mean（對長 log、條列式工單較穩）是可選的特徵產生方式。
 
 automl:
   - data_type: TABULAR

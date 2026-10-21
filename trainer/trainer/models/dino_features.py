@@ -1,9 +1,11 @@
-"""Feature-generation options shared by the DINO families (few-shot, fine-tune, PatchCore) and the image
-analysis tool: which transformer layers to read, how to pool the tokens of a layer, how to fuse layers,
-centring / background removal, the distance metric, and the few-shot heads that sit on top.
+"""Feature generation shared by the DINO families (frozen few-shot / PatchCore, LoRA fine-tune) and the image
+analysis tool.
 
-Everything here is framework-light (numpy; torch only inside ``pool_layer`` / ``remove_cls_component``, which
-receive tensors) so the backend tests and the analysis tool can import it without a GPU.
+The pipeline is deliberately small: pick the transformer layers to read (``last`` or the ``cross`` preset),
+use the patch tokens only (no CLS), average them per layer for an image-level vector, concatenate the layers
+along the feature axis, L2-normalise. Heads sit on top of that vector; PatchCore sits on the per-patch grid.
+Everything here is numpy except the two token helpers, so the backend tests and the analysis tool can import
+it without a GPU.
 """
 
 from __future__ import annotations
@@ -13,53 +15,40 @@ from typing import Any
 
 import numpy as np
 
-# 1-based layer indices for a 12-layer ViT-S / ViT-B. Other depths are scaled proportionally (ViT-L 24 layers →
-# ``mid`` = 12 / 16 / 20 / 24). DINOv2 keeps a useful amount of local detail down to layer 6; DINOv3's register
-# tokens and Gram anchoring make its later blocks the stable ones, so its ``mid`` preset starts higher.
-LAYER_PRESETS: dict[str, dict[str, tuple[int, ...]]] = {
-    "dinov2": {"last": (12,), "last4": (9, 10, 11, 12), "mid": (6, 8, 10, 12), "spread": (3, 6, 9, 12)},
-    "dinov3": {"last": (12,), "last4": (9, 10, 11, 12), "mid": (8, 10, 12), "spread": (3, 6, 9, 12)},
-}
-LAYER_CHOICES = ("last", "last4", "mid", "spread", "auto", "all")
-POOLS = ("cls+mean", "cls", "mean", "cls+gem", "cls+attn")
-FUSIONS = ("concat", "mean")
-CENTERS = ("none", "support_mean")
-BACKGROUNDS = ("none", "project_out_cls")
-METRICS = ("cosine", "hyperbolic")
+# ``cross`` = the three blocks at 9/12, 10/12 and 11/12 of the depth (9, 10, 11 on a 12-layer ViT-S / B;
+# 18, 20, 22 on a 24-layer ViT-L). ``last`` = the final block only.
+CROSS_FRACTIONS = (9 / 12, 10 / 12, 11 / 12)
+LAYER_CHOICES = ("last", "cross", "all", "auto")
 IMAGE_SIZES = (224, 336, 448)
 AUTO_MAX_LAYERS = 3
-GEM_P = 3.0
 COSINE_TEMPERATURE = 0.1  # softmax(sims / T) turns cosine similarities into prototype probabilities
+NEIGHBORHOODS = (1, 3)
+SCORE_AGGS = ("max", "top1")
 
 
 def backbone_kind(backbone_id: str, model_type: str | None = None) -> str:
-    """``dinov3`` when the weights / config say so, else ``dinov2`` (DINOv1 checkpoints also load as dinov2)."""
+    """``dinov3`` when the weights / config say so, else ``dinov2``."""
     text = f"{backbone_id} {model_type or ''}".lower()
     return "dinov3" if "dinov3" in text else "dinov2"
 
 
-def _scale(preset: tuple[int, ...], n_layers: int) -> tuple[int, ...]:
-    out: list[int] = []
-    for layer in preset:
-        k = max(1, min(n_layers, round(layer * n_layers / 12)))
-        if k not in out:
-            out.append(k)
-    return tuple(sorted(out))
+def cross_layers(n_layers: int) -> tuple[int, ...]:
+    return tuple(sorted({max(1, min(n_layers, round(f * n_layers))) for f in CROSS_FRACTIONS}))
 
 
 def resolve_layers(value: Any, n_layers: int, kind: str = "dinov2") -> tuple[int, ...]:
-    """``layers`` param → 1-based layer indices to read. A preset name is scaled to this backbone's depth,
-    ``all`` is every layer (also what ``auto`` reads before it picks), a list / comma string is used as-is
-    (negative = from the end)."""
+    """``layers`` param → 1-based layer indices to read. ``last`` = the final block, ``cross`` = the preset
+    scaled to this backbone's depth, ``all`` = every block (also what ``auto`` reads before it picks), a list
+    or comma string is used as-is (negative = from the end)."""
+    del kind  # the presets are depth-based; kept for call-site symmetry with backbone_kind()
     if n_layers < 1:
         raise ValueError("backbone has no layers")
     if value is None or value == "" or value == "last":
         return (n_layers,)
     if isinstance(value, str) and value.strip().lower() in ("all", "auto"):
         return tuple(range(1, n_layers + 1))
-    if isinstance(value, str) and value.strip().lower() in LAYER_PRESETS["dinov2"]:
-        presets = LAYER_PRESETS.get(kind) or LAYER_PRESETS["dinov2"]
-        return _scale(presets[value.strip().lower()], n_layers)
+    if isinstance(value, str) and value.strip().lower() == "cross":
+        return cross_layers(n_layers)
     items = value.split(",") if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else [value]
     out: list[int] = []
     for item in items:
@@ -69,7 +58,7 @@ def resolve_layers(value: Any, n_layers: int, kind: str = "dinov2") -> tuple[int
         try:
             k = int(s)
         except ValueError as e:
-            raise ValueError(f"layers 不認得 {s!r}：可用 {', '.join(LAYER_CHOICES)} 或層數列表（例：6,9,12）") from e
+            raise ValueError(f"layers 不認得 {s!r}：可用 last / cross 或層數列表（例：9,10,11）") from e
         if k < 0:
             k = n_layers + 1 + k
         if not 1 <= k <= n_layers:
@@ -85,114 +74,77 @@ def resolve_layers(value: Any, n_layers: int, kind: str = "dinov2") -> tuple[int
 class FeatureSpec:
     """How one image becomes one vector (and one patch grid)."""
 
-    layers: Any = "last"  # preset name, "auto", or a tuple of 1-based layer indices
-    layer_fusion: str = "concat"
-    pool: str = "cls+mean"
-    center: str = "none"
-    background: str = "none"
-    metric: str = "cosine"
+    layers: Any = "cross"  # "last" / "cross" / "auto" / a tuple of 1-based layer indices
     image_size: int | None = None
+    neighborhood: int = 1  # PatchCore-style local aggregation of the patch grid (1 = off, 3 = 3×3 mean)
 
     @classmethod
     def from_params(cls, p: dict[str, Any], **overrides: Any) -> FeatureSpec:
         src = {**p, **overrides}
-        layers = src.get("layers", "last")
+        layers = src.get("layers", "cross")
         if isinstance(layers, (list, tuple)):
             layers = tuple(int(v) for v in layers)
         elif layers is not None and not isinstance(layers, str):
             layers = (int(layers),)
         elif isinstance(layers, str):
-            layers = layers.strip().lower() or "last"
+            layers = layers.strip().lower() or "cross"
             if layers not in LAYER_CHOICES and not any(ch.isdigit() for ch in layers):
-                raise ValueError(f"layers 不認得 {layers!r}，可用：{', '.join(LAYER_CHOICES)} 或層數列表")
-        spec = cls(
-            layers=layers,
-            layer_fusion=str(src.get("layer_fusion") or "concat").lower(),
-            pool=str(src.get("pool") or "cls+mean").lower(),
-            center=str(src.get("center") or "none").lower(),
-            background=str(src.get("background") or "none").lower(),
-            metric=str(src.get("metric") or "cosine").lower(),
-            image_size=int(src["image_size"]) if src.get("image_size") not in (None, "", 0, "0") else None,
-        )
-        for name, value, allowed in (
-            ("layer_fusion", spec.layer_fusion, FUSIONS),
-            ("pool", spec.pool, POOLS),
-            ("center", spec.center, CENTERS),
-            ("background", spec.background, BACKGROUNDS),
-            ("metric", spec.metric, METRICS),
-        ):
-            if value not in allowed:
-                raise ValueError(f"{name} 必須是 {' / '.join(allowed)}，不是 {value!r}")
-        if spec.image_size is not None and not 32 <= spec.image_size <= 1024:
+                raise ValueError(f"layers 不認得 {layers!r}，可用：last / cross 或層數列表（例：9,10,11）")
+        image_size = src.get("image_size")
+        image_size = int(image_size) if image_size not in (None, "", 0, "0", "auto") else None
+        if image_size is not None and not 32 <= image_size <= 1024:
             raise ValueError("image_size 必須在 32 … 1024 之間（建議 224 / 336 / 448）")
-        return spec
+        neighborhood = int(src.get("neighborhood") or 1)
+        if neighborhood not in NEIGHBORHOODS:
+            raise ValueError(f"neighborhood 必須是 {' / '.join(str(v) for v in NEIGHBORHOODS)}")
+        return cls(layers=layers, image_size=image_size, neighborhood=neighborhood)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "layers": list(self.layers) if isinstance(self.layers, tuple) else self.layers,
-            "layer_fusion": self.layer_fusion,
-            "pool": self.pool,
-            "center": self.center,
-            "background": self.background,
-            "metric": self.metric,
             "image_size": self.image_size,
+            "neighborhood": self.neighborhood,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> FeatureSpec:
-        return cls.from_params(dict(d or {}))
-
-    @property
-    def has_patch_part(self) -> bool:
-        return self.pool != "cls"
-
-    @property
-    def wants_attention(self) -> bool:
-        return self.pool == "cls+attn"
-
-    def block_dim(self, hidden: int) -> int:
-        """Size of one layer's pooled vector."""
-        return hidden * (2 if self.pool in ("cls+mean", "cls+gem", "cls+attn") else 1)
+        """Artifacts written by earlier versions carry extra keys (pool / center / …); they are ignored."""
+        d = dict(d or {})
+        return cls.from_params({k: d[k] for k in ("layers", "image_size", "neighborhood") if k in d})
 
     def feature_dim(self, hidden: int, n_layers_used: int) -> int:
-        return self.block_dim(hidden) * (n_layers_used if self.layer_fusion == "concat" else 1)
+        return hidden * n_layers_used
 
     def describe(self) -> str:
         layers = ",".join(str(v) for v in self.layers) if isinstance(self.layers, tuple) else str(self.layers)
-        return (
-            f"layers={layers} fusion={self.layer_fusion} pool={self.pool} center={self.center} "
-            f"background={self.background} metric={self.metric} image_size={self.image_size or 'default'}"
-        )
+        return f"layers={layers} image_size={self.image_size or 'default'} neighborhood={self.neighborhood}"
 
 
 # --- token level (torch) -------------------------------------------------------------------------------
 
 
-def remove_cls_component(tok, cls):
-    """Background removal: drop the component of every patch token that lies along its image's CLS direction
-    (``tok − (tok·ĉ) ĉ``); what remains is what makes the patch differ from the image-level summary."""
+def aggregate_neighborhood(tok, size: int):
+    """PatchCore's locally aware patch features: each patch token becomes the mean of its ``size × size``
+    neighbourhood on the grid (``size`` = 1 leaves the tokens untouched). ``tok`` is (B, L, D) with L a square."""
     import torch
 
-    c = torch.nn.functional.normalize(cls, dim=-1)[:, None, :]  # (B, 1, D)
-    return tok - (tok * c).sum(dim=-1, keepdim=True) * c
+    if size <= 1:
+        return tok
+    B, L, D = tok.shape
+    g = round(L**0.5)
+    if g * g != L:
+        return tok
+    grid = tok.transpose(1, 2).reshape(B, D, g, g)
+    pooled = torch.nn.functional.avg_pool2d(grid, size, stride=1, padding=size // 2, count_include_pad=False)
+    return pooled.reshape(B, D, L).transpose(1, 2)
 
 
-def pool_layer(cls, tok, pool: str, attn=None):
-    """One layer's tokens → one vector per image. ``cls`` (B, D), ``tok`` (B, L, D), ``attn`` (B, L) CLS→patch
-    attention weights (only for ``cls+attn``)."""
+def fuse_tokens(tok_list, normalize=None):
+    """Per-layer patch tokens → the fused, L2-normalised patch grid (B, L, hidden × n_layers)."""
     import torch
 
-    if pool == "cls":
-        return cls
-    if pool == "mean":
-        return tok.mean(dim=1)
-    if pool == "cls+gem":
-        gem = tok.clamp(min=1e-6).pow(GEM_P).mean(dim=1).pow(1.0 / GEM_P)
-        return torch.cat([cls, gem], dim=1)
-    if pool == "cls+attn" and attn is not None:
-        w = attn / (attn.sum(dim=1, keepdim=True) + 1e-9)
-        return torch.cat([cls, (w[:, :, None] * tok).sum(dim=1)], dim=1)
-    return torch.cat([cls, tok.mean(dim=1)], dim=1)
+    nf = normalize or torch.nn.functional.normalize
+    return torch.cat([nf(t, dim=-1) for t in tok_list], dim=-1)
 
 
 # --- vector level (numpy) ------------------------------------------------------------------------------
@@ -203,14 +155,12 @@ def l2n(x: np.ndarray) -> np.ndarray:
     return x / (np.linalg.norm(x, axis=-1, keepdims=True) + 1e-9)
 
 
-def fuse_blocks(blocks: np.ndarray, fusion: str = "concat") -> np.ndarray:
-    """(N, n_layers, F) per-layer pooled vectors → (N, F') fused, L2-normalised. Each block is normalised first
-    so a layer with a larger activation scale does not dominate."""
+def fuse_blocks(blocks: np.ndarray) -> np.ndarray:
+    """(N, n_layers, D) per-layer mean-pooled vectors → (N, n_layers × D), each block normalised first so a layer
+    with a larger activation scale does not dominate, then the whole vector normalised."""
     b = l2n(np.asarray(blocks, dtype=np.float32))
     if b.ndim == 2:
         return l2n(b)
-    if fusion == "mean":
-        return l2n(b.mean(axis=1))
     return l2n(b.reshape(b.shape[0], -1))
 
 
@@ -226,39 +176,14 @@ def apply_center(emb: np.ndarray, mu: np.ndarray | None) -> np.ndarray:
     return l2n(np.asarray(emb, dtype=np.float32) - np.asarray(mu, dtype=np.float32))
 
 
-def to_ball(x: np.ndarray, c: float = 1.0) -> np.ndarray:
-    """Exponential map at the origin of the Poincaré ball: ``tanh(√c‖x‖) x / (√c‖x‖)``."""
-    x = np.asarray(x, dtype=np.float64)
-    n = np.linalg.norm(x, axis=-1, keepdims=True) + 1e-9
-    return np.tanh(np.sqrt(c) * n) * x / (np.sqrt(c) * n)
-
-
-def poincare_dist(u: np.ndarray, v: np.ndarray, c: float = 1.0, chunk: int = 256) -> np.ndarray:
-    """Pairwise hyperbolic distance between rows of ``u`` (N, D) and ``v`` (K, D), both already in the ball."""
-    u = np.asarray(u, dtype=np.float64)
-    v = np.asarray(v, dtype=np.float64)
-    sc = np.sqrt(c)
-    vv = (v * v).sum(axis=1)  # (K,)
-    out = np.zeros((len(u), len(v)), dtype=np.float32)
-    for s in range(0, len(u), chunk):
-        a = u[s : s + chunk]
-        uu = (a * a).sum(axis=1)[:, None]  # (n, 1)
-        uv = a @ v.T  # (n, K)
-        # Möbius addition (−a) ⊕ v, then ‖·‖
-        num_a = (1 - 2 * c * uv + c * vv[None, :])[:, :, None] * (-a)[:, None, :]
-        num_v = (1 - c * uu)[:, :, None] * v[None, :, :]
-        den = 1 - 2 * c * uv + c * c * uu * vv[None, :]
-        m = (num_a + num_v) / den[:, :, None]
-        norm = np.clip(sc * np.linalg.norm(m, axis=-1), 0, 1 - 1e-7)
-        out[s : s + chunk] = (2 / sc) * np.arctanh(norm)
-    return out
-
-
-def similarities(emb: np.ndarray, ref: np.ndarray, metric: str = "cosine") -> np.ndarray:
-    """(N, K) "higher = closer" scores: cosine similarity, or minus the Poincaré distance."""
-    if metric == "hyperbolic":
-        return -poincare_dist(to_ball(emb), to_ball(ref))
-    return np.asarray(emb, dtype=np.float32) @ np.asarray(ref, dtype=np.float32).T
+def patch_reference(vec: np.ndarray, hidden: int, n_layers_used: int) -> np.ndarray:
+    """A fused image vector (what the bank stores) → a unit vector in the patch grid's space: per layer the block
+    is renormalised so it matches the per-layer-normalised patch tokens."""
+    v = np.asarray(vec, dtype=np.float32)
+    if v.size != hidden * n_layers_used:
+        return v / (np.linalg.norm(v) + 1e-9)
+    parts = l2n(v.reshape(n_layers_used, hidden)).reshape(-1)
+    return parts / (np.linalg.norm(parts) + 1e-9)
 
 
 def softmax(x: np.ndarray, axis: int = 1) -> np.ndarray:
@@ -268,12 +193,21 @@ def softmax(x: np.ndarray, axis: int = 1) -> np.ndarray:
     return (e / e.sum(axis=axis, keepdims=True)).astype(np.float32)
 
 
-# --- layer diagnostics -------------------------------------------------------------------------------
+def aggregate_scores(maps: np.ndarray, agg: str) -> np.ndarray:
+    """Patch anomaly maps (N, L) → image scores: ``max`` (one patch over the threshold is enough) or ``top1``
+    (mean of the top 1 % patches, robust to a single noisy patch; what AnomalyDINO-style scoring uses)."""
+    maps = np.asarray(maps, dtype=np.float32)
+    if agg == "top1":
+        k = max(1, round(0.01 * maps.shape[1]))
+        return np.sort(maps, axis=1)[:, -k:].mean(axis=1)
+    return maps.max(axis=1)
+
+
+# --- layer diagnostics (analysis tool, layers=auto) ------------------------------------------------------
 
 
 def fisher_ratio(x: np.ndarray, labels: np.ndarray) -> float:
-    """Between-class scatter / within-class scatter (trace form) on L2-normalised features; larger = the
-    classes sit further apart than their own spread."""
+    """Between-class scatter / within-class scatter (trace form) on L2-normalised features."""
     x = l2n(x)
     classes = np.unique(labels)
     mu = x.mean(axis=0)
@@ -287,7 +221,7 @@ def fisher_ratio(x: np.ndarray, labels: np.ndarray) -> float:
     return float(sb / (sw + 1e-9))
 
 
-def loo_nearest_centroid(x: np.ndarray, labels: np.ndarray, metric: str = "cosine") -> tuple[np.ndarray, np.ndarray]:
+def loo_nearest_centroid(x: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Leave-one-out nearest-centroid prediction per sample: (predicted label, probability of that label)."""
     x = l2n(x)
     labels = np.asarray(labels)
@@ -305,9 +239,9 @@ def loo_nearest_centroid(x: np.ndarray, labels: np.ndarray, metric: str = "cosin
         k[i] -= 1
         valid = k > 0
         protos = l2n(s[valid] / np.maximum(k[valid], 1)[:, None])
-        sims = similarities(x[n : n + 1], protos, metric)[0]
-        p = softmax(sims[None, :] / (COSINE_TEMPERATURE if metric == "cosine" else 1.0))[0]
-        j = int(np.argmax(sims))
+        sims = x[n : n + 1] @ protos.T
+        p = softmax(sims / COSINE_TEMPERATURE)[0]
+        j = int(np.argmax(sims[0]))
         preds[n] = classes[valid][j]
         conf[n] = float(p[j])
     return preds, conf
@@ -345,7 +279,23 @@ def select_layers(
 
 # --- heads -------------------------------------------------------------------------------------------
 
-HEADS = ("prototype", "knn", "logistic", "svm", "prototype+logistic")
+HEADS = ("prototype", "knn", "linear", "svm")
+HEAD_ALIASES = {"logistic": "linear", "prototype+logistic": "linear"}  # artifacts from earlier versions
+LINEAR_MIN_PER_CLASS = 10  # head=auto: a trained head needs this many images per class, else prototypes
+
+
+def resolve_head(value: Any, min_per_class: int) -> tuple[str, str]:
+    """``head`` param → (kind, reason). ``auto`` = nearest prototype with few images per class, a linear head
+    once every class has LINEAR_MIN_PER_CLASS or more."""
+    kind = str(value or "auto").lower()
+    kind = HEAD_ALIASES.get(kind, kind)
+    if kind == "auto":
+        if min_per_class >= LINEAR_MIN_PER_CLASS:
+            return "linear", f"every class has ≥ {LINEAR_MIN_PER_CLASS} images → linear head"
+        return "prototype", f"smallest class has {min_per_class} images (< {LINEAR_MIN_PER_CLASS}) → prototypes"
+    if kind not in HEADS:
+        raise ValueError(f"head 必須是 auto / {' / '.join(HEADS)}，不是 {value!r}")
+    return kind, "chosen by the user"
 
 
 def class_prototypes(emb: np.ndarray, labels: np.ndarray) -> tuple[list[str], np.ndarray]:
@@ -356,105 +306,110 @@ def class_prototypes(emb: np.ndarray, labels: np.ndarray) -> tuple[list[str], np
 
 
 class FewShotHead:
-    """Classifier on top of frozen features. ``prototype``: nearest class mean (confidence = similarity);
-    ``knn``: majority vote of the k nearest support images; ``logistic`` / ``svm``: a trained head on the
-    support features; ``prototype+logistic``: average of the prototype probabilities and the logistic head
-    (robust with 1–3 images per class, sharper once there are more). Re-fitting on cached features is cheap,
-    which is what ``extend`` does."""
+    """Classifier on top of frozen features. ``prototype``: nearest class mean (confidence = cosine
+    similarity); ``knn``: majority vote of the k nearest support images; ``linear``: a logistic-regression
+    (linear-probe) head trained on the support features; ``svm``: a linear SVM. prototype / knn centre the
+    features on the support mean first (SimpleShot); the trained heads do not need it. Re-fitting on cached
+    features is cheap, which is what ``extend`` does."""
 
-    def __init__(self, kind: str = "prototype", k: int = 5, metric: str = "cosine", C: float = 1.0) -> None:
+    def __init__(self, kind: str = "prototype", k: int | str = "auto", C: float = 1.0) -> None:
+        kind = HEAD_ALIASES.get(str(kind), str(kind))
         if kind not in HEADS:
             raise ValueError(f"head 必須是 {' / '.join(HEADS)}，不是 {kind!r}")
         self.kind = kind
-        self.k = max(1, int(k))
-        self.metric = metric
+        self.k_param = k
+        self.k = 5
         self.C = float(C)
         self.classes: list[str] = []
         self.protos: np.ndarray | None = None
+        self.center: np.ndarray | None = None
         self.support: np.ndarray | None = None
         self.support_labels: np.ndarray | None = None
         self.model = None
+
+    @property
+    def centred(self) -> bool:
+        return self.kind in ("prototype", "knn")
 
     # -- fit ------------------------------------------------------------------------------------
     def fit(self, emb: np.ndarray, labels: np.ndarray) -> FewShotHead:
         emb = l2n(emb)
         labels = np.asarray(labels).astype(str)
-        self.classes, self.protos = class_prototypes(emb, labels)
-        self.support, self.support_labels = emb, labels
+        counts = np.unique(labels, return_counts=True)[1]
+        self.center = center_vector(emb) if self.centred else None
+        x = apply_center(emb, self.center)
+        self.classes, self.protos = class_prototypes(x, labels)
+        self.support, self.support_labels = x, labels
+        k = self.k_param
+        self.k = max(1, min(int(k) if str(k) != "auto" else 5, int(counts.min()))) if self.kind == "knn" else 5
         self.model = None
-        trainable = self.kind in ("logistic", "svm", "prototype+logistic")
-        if trainable and len(self.classes) >= 2:
+        if self.kind in ("linear", "svm") and len(self.classes) >= 2:
             index = {c: i for i, c in enumerate(self.classes)}
             y = np.array([index[v] for v in labels])
             if self.kind == "svm":
-                from sklearn.svm import SVC
+                from sklearn.svm import LinearSVC
 
-                self.model = SVC(kernel="linear", C=self.C).fit(emb, y)
+                self.model = LinearSVC(C=self.C, max_iter=5000).fit(x, y)
             else:
                 from sklearn.linear_model import LogisticRegression
 
-                self.model = LogisticRegression(C=self.C, max_iter=3000).fit(emb, y)
+                self.model = LogisticRegression(C=self.C, max_iter=3000).fit(x, y)
         return self
 
     # -- predict --------------------------------------------------------------------------------
-    def proto_scores(self, emb: np.ndarray) -> np.ndarray:
-        assert self.protos is not None
-        return similarities(l2n(emb), self.protos, self.metric)
+    def transform(self, emb: np.ndarray) -> np.ndarray:
+        return apply_center(l2n(emb), self.center)
 
-    def _proto_proba(self, sims: np.ndarray) -> np.ndarray:
-        return softmax(sims / (COSINE_TEMPERATURE if self.metric == "cosine" else 1.0))
-
-    def _model_proba(self, emb: np.ndarray) -> np.ndarray:
+    def _model_proba(self, x: np.ndarray) -> np.ndarray:
         if hasattr(self.model, "predict_proba"):
-            return np.asarray(self.model.predict_proba(emb), dtype=np.float32)
-        d = np.asarray(self.model.decision_function(emb), dtype=np.float32)
-        if d.ndim == 1:  # binary SVM: one margin
+            return np.asarray(self.model.predict_proba(x), dtype=np.float32)
+        d = np.asarray(self.model.decision_function(x), dtype=np.float32)
+        if d.ndim == 1:  # binary: one margin
             d = np.stack([-d, d], axis=1)
         return softmax(d)
 
     def predict(self, emb: np.ndarray) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
         """→ (predictions, confidence, probabilities (N, K), prototype similarities (N, K))."""
-        emb = l2n(emb)
-        sims = self.proto_scores(emb)
+        x = self.transform(emb)
+        assert self.protos is not None
+        sims = x @ self.protos.T
         K = len(self.classes)
         if self.kind == "knn" and self.support is not None and len(self.support) >= 1:
-            ssims = similarities(emb, self.support, self.metric)
+            ssims = x @ self.support.T
             k = min(self.k, len(self.support))
             nn = np.argsort(-ssims, axis=1)[:, :k]
             index = {c: i for i, c in enumerate(self.classes)}
-            proba = np.zeros((len(emb), K), dtype=np.float32)
-            for n in range(len(emb)):
+            proba = np.zeros((len(x), K), dtype=np.float32)
+            for n in range(len(x)):
                 for j in nn[n]:
                     proba[n, index[str(self.support_labels[j])]] += 1.0 / k
-            # ties fall back to the nearest prototype
             best = proba.max(axis=1, keepdims=True)
             tie = (proba == best).sum(axis=1) > 1
-            if tie.any():
-                proba[tie] += 1e-3 * self._proto_proba(sims[tie])
+            if tie.any():  # ties fall back to the nearest prototype
+                proba[tie] += 1e-3 * softmax(sims[tie] / COSINE_TEMPERATURE)
             conf = proba.max(axis=1)
-        elif self.kind in ("logistic", "svm") and self.model is not None:
-            proba = self._model_proba(emb)
+        elif self.kind in ("linear", "svm") and self.model is not None:
+            proba = self._model_proba(x)
             conf = proba.max(axis=1)
-        elif self.kind == "prototype+logistic" and self.model is not None:
-            proba = 0.5 * (self._proto_proba(sims) + self._model_proba(emb))
-            conf = proba.max(axis=1)
-        else:  # prototype (or a trainable head with a single class)
-            proba = self._proto_proba(sims)
-            # cosine: the similarity itself is the natural confidence; hyperbolic: a distance → use the probability
-            conf = sims.max(axis=1) if self.metric == "cosine" else proba.max(axis=1)
+        else:  # prototype (or a trained head with a single class)
+            proba = softmax(sims / COSINE_TEMPERATURE)
+            conf = sims.max(axis=1)
         pred_idx = proba.argmax(axis=1)
-        preds = [self.classes[i] for i in pred_idx]
-        return preds, conf.astype(np.float32), proba, sims
+        return [self.classes[i] for i in pred_idx], conf.astype(np.float32), proba, sims
+
+    def class_weights(self) -> np.ndarray | None:
+        """(K, D) weight rows of a linear / svm head (CAM: per-patch contribution = w · patch); None otherwise."""
+        if self.model is None or not hasattr(self.model, "coef_"):
+            return None
+        w = np.asarray(self.model.coef_, dtype=np.float32)
+        if w.shape[0] == 1 and len(self.classes) == 2:  # binary: one row for class 1, its negative for class 0
+            w = np.concatenate([-w, w])
+        return w
 
     # -- state ----------------------------------------------------------------------------------
     def meta(self) -> dict[str, Any]:
-        return {"head": self.kind, "k": self.k, "metric": self.metric, "C": self.C}
+        return {"head": self.kind, "k": self.k, "C": self.C}
 
     @classmethod
     def from_meta(cls, meta: dict[str, Any], default_kind: str = "prototype") -> FewShotHead:
-        return cls(
-            str(meta.get("head") or default_kind),
-            int(meta.get("k") or 5),
-            str(meta.get("metric") or "cosine"),
-            float(meta.get("C") or 1.0),
-        )
+        return cls(str(meta.get("head") or default_kind), meta.get("k") or "auto", float(meta.get("C") or 1.0))

@@ -40,6 +40,7 @@ import {
   inferenceModeLabel,
   jobCopy,
   paramChoiceLabel,
+  paramChoices,
   paramHint,
   taskTypeLabel,
 } from "@/i18n/zh-TW";
@@ -223,15 +224,19 @@ function ParamField({
   const { kind } = paramKind(family, name);
   const choiceLabel = (v: string) => paramChoiceLabel[name]?.[v];
   const hint = paramHint[name];
-  const options: { value: string; label: string }[] | null =
-    space?.type === "categorical" && space.choices?.length
-      ? space.choices.map((c) => ({ value: String(c), label: String(c) }))
-      : kind === "boolean"
-        ? [
-            { value: "true", label: "true" },
-            { value: "false", label: "false" },
-          ]
-        : null;
+  // the wizard's choices = the UI list (may include "auto") ∪ the AutoML search space, in that order
+  const listed = [
+    ...(paramChoices[name] ?? []),
+    ...(space?.type === "categorical" && space.choices?.length ? space.choices.map((c) => String(c)) : []),
+  ].filter((v, i, all) => all.indexOf(v) === i);
+  const options: { value: string; label: string }[] | null = listed.length
+    ? listed.map((v) => ({ value: v, label: v }))
+    : kind === "boolean"
+      ? [
+          { value: "true", label: "true" },
+          { value: "false", label: "false" },
+        ]
+      : null;
   if (options) {
     return (
       <div className="grid gap-2">
@@ -278,6 +283,18 @@ function ParamField({
     </div>
   );
 }
+
+/** Hyper-parameters that only matter together with another setting are hidden until that setting is chosen:
+ *  `k` with `head = knn`; the PatchCore knobs of the frozen DINO family only while `patchcore` is not off. */
+function paramVisible(family: string, key: string, params: Record<string, string>, fam?: CatalogFamily): boolean {
+  const effective = (name: string) => params[name] || String(fam?.defaults?.[name] ?? "");
+  if (key === "k" && fam?.defaults?.head !== undefined) return effective("head") === "knn";
+  if (family === "vision.dino_fewshot" && PATCHCORE_PARAMS.has(key)) return effective("patchcore") !== "off";
+  return true;
+}
+
+const PATCHCORE_PARAMS = new Set(["normal_class", "neighborhood", "score_agg", "coreset_ratio", "bank_augment"]);
+const NORMAL_FOLDERS = new Set(["good", "normal", "ok", "pass"]); // what the trainer treats as "no defect"
 
 /** What type a hyper-parameter has: the search space's declared type first, then the default value's type. */
 function paramKind(family: CatalogFamily | undefined, key: string): { kind: FieldKind; nullable: boolean } {
@@ -713,10 +730,14 @@ export function NewJobWizard({
   );
 
   const familyParams = (f: string) =>
-    Object.entries(catalog.families[f]?.defaults ?? {}).map(([key, def]) => ({
-      key,
-      def: def === null ? "" : String(def),
-    }));
+    Object.entries(catalog.families[f]?.defaults ?? {})
+      .map(([key, def]) => ({ key, def: def === null ? "" : String(def) }))
+      .filter((p) => paramVisible(f, p.key, params, catalog.families[f]));
+  const uploadClasses = Array.isArray((upload?.detectedSpec as { classes?: unknown })?.classes)
+    ? ((upload?.detectedSpec as { classes: unknown[] }).classes.map(String) as string[])
+    : [];
+  const normalFolder =
+    (params.normal_class || "").trim() || uploadClasses.find((c) => NORMAL_FOLDERS.has(c.toLowerCase())) || "";
 
   const modelStep =
     mode === "auto" ? (
@@ -818,6 +839,15 @@ export function NewJobWizard({
               />
             ))}
           </div>
+          {family === "vision.dino_fewshot" && uploadClasses.length ? (
+            <p className="text-xs text-muted-foreground" data-testid="normal-folder-hint">
+              上傳的 zip 有 {uploadClasses.length} 個類別資料夾
+              {normalFolder
+                ? `，「${normalFolder}」會被當成正常類別（PatchCore 兩階段）`
+                : "，沒有叫 good / normal / ok / pass 的資料夾；要走兩階段請在 normal_class 填正常資料夾的名字"}
+              。
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     );
