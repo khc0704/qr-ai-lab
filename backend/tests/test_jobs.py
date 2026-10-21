@@ -183,3 +183,33 @@ def test_deprecated_families_cannot_be_trained_but_still_load():
     # the legacy ids stay in the catalog (old artifacts, job rows) but the public listing marks them
     assert loader.public_catalog()["families"]["vision.dino_finetune"]["deprecated"] is True
     assert "deprecated" not in loader.public_catalog()["families"]["vision.dino"]
+
+
+def test_auto_mode_pins_the_dino_backbone_and_finetune(monkeypatch):
+    """The wizard decides backbone / finetune on its 骨幹 step before the mode; auto mode sends them pinned in the
+    config, and they are validated at creation (not in the fifth trial)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app.services import jobs as jobs_svc
+
+    monkeypatch.setattr(jobs_svc.zoo_svc, "weight_present", lambda wid: wid == "dinov2-small")
+    check = jobs_svc._check_pinned_dino
+    check("classification", {}, ["vision.dino", "vision.yolo"])
+    check("classification", {"backbone": "dinov2-small", "finetune": "lora"}, ["vision.dino"])
+    check("classification", {"backbone": "resnet50", "finetune": "bad"}, ["vision.yolo"])  # DINO not a candidate
+    with pytest.raises(HTTPException) as e:
+        check("classification", {"finetune": "bad"}, ["vision.dino"])
+    assert e.value.detail["code"] == "BAD_FINETUNE"
+    with pytest.raises(HTTPException) as e:
+        check("classification", {"backbone": "dinov3-vitb16", "finetune": "none"}, ["vision.dino"])
+    assert e.value.detail["code"] == "WEIGHTS_MISSING"
+    with pytest.raises(HTTPException) as e:
+        check("classification", {"backbone": "resnet50"}, ["vision.dino"])
+    assert e.value.detail["code"] == "WEIGHT_UNKNOWN"
+    # the search space no longer carries what the wizard pins; the fine-tune knobs are gated on it
+    from app.catalog import loader
+
+    space = loader.family("vision.dino")["search_space"]
+    assert "backbone" not in space and "finetune" not in space
+    assert space["lr"]["when"] == {"finetune": ["lora", "full"]} and space["rank"]["when"] == {"finetune": ["lora"]}

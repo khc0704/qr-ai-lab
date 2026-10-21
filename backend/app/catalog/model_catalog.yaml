@@ -180,15 +180,15 @@ families:
     # normal_class exists) / on / off → the bank decides normal vs defect, the anomalous patches are classified.
     defaults: { backbone: dinov2-small, finetune: none, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, backbone_lr: 0.00001, augment: [crop, hflip] }
     augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
+    # backbone and finetune are decided on the wizard's 骨幹 step before the training mode and arrive pinned in
+    # config (never searched); the fine-tune knobs are only sampled while a fine-tune is on (`when`)
     search_space:
-      backbone: { type: categorical, choices: [dinov2-small, dinov2-base, dinov3-vits16, dinov3-vitb16] }
-      finetune: { type: categorical, choices: [none, lora] }
       layers: { type: categorical, choices: [last, cross] }
       head: { type: categorical, choices: [prototype, knn, linear, svm] }
       image_size: { type: categorical, choices: [224, 336] }
-      augment: { type: categorical, choices: [default, none] }
-      lr: { type: float, low: 0.0001, high: 0.01, log: true }
-      rank: { type: categorical, choices: [4, 8, 16] }
+      augment: { type: categorical, choices: [default, none], when: { finetune: [lora, full] } }
+      lr: { type: float, low: 0.0001, high: 0.01, log: true, when: { finetune: [lora, full] } }
+      rank: { type: categorical, choices: [4, 8, 16], when: { finetune: [lora] } }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }

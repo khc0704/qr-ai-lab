@@ -105,7 +105,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 
 ### 4.1b DINO 家族（`vision.dino`）：微調 → 特徵 → 分類（`jobs.config`）
 
-訓練一個影像模型拆成六步：**前處理**（§4.2）→ **資料增強**（`augment`，只在微調時有意義）→ **骨幹要不要微調**（精靈獨立一步：`finetune` = `none` 凍結、`lora`、`full`）→ **特徵**（從凍結或微調過的骨幹讀）→ **評分 / 分類** → **結果圖**。所有參數（實作在 `trainer/trainer/models/dino_features.py` 與 `vision.py`）：
+訓練一個影像模型拆成六步：**前處理**（§4.2）→ **資料增強**（`augment`，只在微調時有意義）→ **骨幹**（精靈在「模式」之前獨立一步：`backbone` 選哪個權重、`finetune` = `none` 凍結、`lora`、`full`）→ **特徵**（從凍結或微調過的骨幹讀）→ **評分 / 分類** → **結果圖**。「模式」步驟說的是下游：手動 = 自己填特徵 / 分類頭 / PatchCore 參數，自動 = 把 `backbone` / `finetune` 固定（`config` 直接帶、不搜尋）、只對 `layers` / `head` / `image_size`（微調時再加 `lr` / `rank` / `augment`，搜尋空間的 `when` 條件）做 Optuna 搜尋。所有參數（實作在 `trainer/trainer/models/dino_features.py` 與 `vision.py`）：
 
 | 參數 | 選項 | 意義與使用時機 |
 |---|---|---|

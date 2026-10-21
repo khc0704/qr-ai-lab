@@ -222,9 +222,9 @@ const children = [
     ["detection / segmentation", "zip：YOLO 格式 images/、labels/、data.yaml", "分割用多邊形標註"],
     ["anomaly_detection", "zip：good/（或 normal/、ok/）為正常；其他資料夾視為異常（只用於評估）", "PatchCore 與影像品質基準都用這個格式"],
   ], [26, 40, 34]),
-  h2("5.2 影像分類 → DINO（先決定要不要微調骨幹）"),
+  h2("5.2 影像分類 → DINO（先選骨幹、決定要不要微調，再選模式）"),
   ...ul([
-    "家族 vision.dino：精靈會先問「要不要微調骨幹」（不微調 = 凍結預訓練 DINOv2 / DINOv3，每類幾張就能用、幾分鐘完成；LoRA = 在注意力層加低秩轉接器一起訓練，每類幾十張以上、影像和自然影像差很多時用；全參數 = 每類上百張、VRAM 夠時），再選特徵與分類方式（config.backbone = dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16，權重來自模型庫）。需要 GPU 1。DINOv3 的 patch 較細、SEM / TEM 紋理通常較穩，但權重是 gated（管理員要先在 Hugging Face 接受授權）。",
+    "家族 vision.dino：精靈在「模式」之前多一步「骨幹與微調」：先選骨幹權重（dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16，權重來自模型庫；DINOv3 的 patch 較細、SEM / TEM 紋理通常較穩，但權重是 gated，管理員要先在 Hugging Face 接受授權後匯入），再決定要不要微調（不微調 = 凍結預訓練骨幹，每類幾張就能用、幾分鐘完成；LoRA = 在注意力層加低秩轉接器一起訓練，每類幾十張以上、影像和自然影像差很多時用；全參數 = 每類上百張、VRAM 夠時）。接著的「模式」說的是下游：手動 = 自己填特徵與分類方式，自動 = 骨幹與微調固定、只對特徵層 / 分類頭 / 解析度（微調時再加學習率、rank、增強）做搜尋。需要 GPU 1。",
     "推論 predict：回最近的類別與相似度；config.min_similarity 可讓低相似度的回 unknown。retrieve：找最相似 / 最不相似的範例影像，表單可選方向（只找最相似、只找最不相似、兩者都列）與每筆回幾個；最不相似用來找離群或挑下一批要標註的。",
     "看模型在看哪裡：predict / retrieve 每張影像都會多一張「模型關注的區塊」疊圖；在結果列點開樣本，疊圖會以可調透明度覆蓋在你瀏覽器裡的原圖上（紅 = 影響判斷最多的位置；只覆蓋模型實際看到的中央區域）。紅色落在背景或資訊列時，先用前處理 image.crop 切掉再訓練。",
     "新增 bin code 不用重訓：建立推論任務，config.mode = extend，輸入新類別的資料夾 zip，平台產生新版本模型並設為預設（分類頭也在快取特徵上重新 fit）。",
@@ -235,7 +235,7 @@ const children = [
   h2("5.3 微調的參數"),
   ...ul([
     "選了 LoRA 或全參數之後，模型與參數步驟多出 epochs 與 batch（預設 auto，依資料量與解析度決定）、lr、rank（LoRA 秩）、augment（訓練時的隨機增強，預設 crop + hflip；方向有意義的影像不要加翻轉 / 旋轉；全部不勾 = 完全不增強）；全參數再多 backbone_lr。微調完成後特徵、分類頭與 PatchCore 都用微調過的骨幹，新增類別（extend）也不用重訓。",
-    "怎麼選：類別會一直增加、每類只有幾張 → 不微調；類別固定、每類幾十張以上、要更準 → LoRA；自動模式會在不微調 / LoRA 之間搜尋。",
+    "怎麼選：類別會一直增加、每類只有幾張 → 不微調；類別固定、每類幾十張以上、要更準 → LoRA。自動模式不會替你決定要不要微調（那是上一步的選擇），只搜尋下游參數。",
   ]),
   h2("5.4 分類：類別固定、資料多 → YOLO 分類"),
   ...ul([

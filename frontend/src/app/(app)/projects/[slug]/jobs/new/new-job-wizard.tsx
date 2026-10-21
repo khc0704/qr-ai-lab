@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   augmentOpLabel,
   dataTypeLabel,
+  dinoBackboneLabel,
   familyLabel,
   finetuneStepCopy,
   inferenceModeLabel,
@@ -47,6 +48,7 @@ import {
 } from "@/i18n/zh-TW";
 import { createJobAction, previewPreprocessAction } from "@/lib/actions";
 import { formatMb } from "@/lib/format";
+import { aliasLocalFile, attachLocalFile, jobKey, uploadKey } from "@/lib/local-data";
 import { cn } from "@/lib/utils";
 import type {
   Catalog,
@@ -292,7 +294,7 @@ function paramVisible(family: string, key: string, params: Record<string, string
   const effective = (name: string) => params[name] || String(fam?.defaults?.[name] ?? "");
   if (key === "k" && fam?.defaults?.head !== undefined) return effective("head") === "knn";
   if (family === DINO_FAMILY) {
-    if (key === "finetune") return false; // chosen on the 骨幹微調 step
+    if (key === "finetune" || key === "backbone") return false; // chosen on the 骨幹 step
     const ft = effective("finetune");
     if (FINETUNE_PARAMS.has(key)) return ft !== "none";
     if (key === "backbone_lr") return ft === "full";
@@ -310,7 +312,7 @@ const STEP_LABELS: Record<StepKey, string> = {
   input: "輸入",
   spec: "欄位與前處理",
   mode: "模式",
-  backbone: "骨幹微調",
+  backbone: "骨幹",
   model: "模型與參數",
   resources: "資源",
   confirm: "確認",
@@ -388,10 +390,11 @@ export function NewJobWizard({
     (cloneSpec.preprocess as PreprocessStep[] | undefined) ?? [],
   );
   const [mode, setMode] = useState<"auto" | "manual">(cloneFrom?.mode ?? (auto ? "auto" : "manual"));
-  // DINO image classification gets its own "fine-tune the backbone?" step before the model / parameter step
-  const hasBackboneStep = isTrain && mode === "manual" && compatible.includes(DINO_FAMILY);
+  // DINO image classification decides the backbone (which weight, fine-tune or not) before the training mode:
+  // manual mode then sets the downstream parameters by hand, auto mode searches them with the backbone pinned
+  const hasBackboneStep = isTrain && compatible.includes(DINO_FAMILY);
   const stepKeys: StepKey[] = isTrain
-    ? ["data", "spec", "mode", ...(hasBackboneStep ? (["backbone"] as StepKey[]) : []), "model", "resources", "confirm"]
+    ? ["data", "spec", ...(hasBackboneStep ? (["backbone"] as StepKey[]) : []), "mode", "model", "resources", "confirm"]
     : ["model", "input", "resources", "confirm"];
   const steps = stepKeys.map((k) => STEP_LABELS[k]);
   const [family, setFamily] = useState<string>(cloneFrom?.modelFamily ?? compatible[0] ?? "");
@@ -407,6 +410,10 @@ export function NewJobWizard({
         .map(([k, v]) => [k, String(v)]),
     ),
   );
+  const dinoDefaults = catalog.families[DINO_FAMILY]?.defaults ?? {};
+  const finetune = params.finetune || String(dinoDefaults.finetune ?? "none");
+  const backbone = params.backbone || String(dinoDefaults.backbone ?? "dinov2-small");
+  const finetuneLabel = (v: string) => finetuneStepCopy.options.find((o) => o.value === v)?.title ?? v;
   const [modelId, setModelId] = useState<number | null>(
     cloneFrom?.artifactId ?? models.find((m) => m.isDefault)?.id ?? models[0]?.id ?? null,
   );
@@ -482,6 +489,11 @@ export function NewJobWizard({
       }
       if (isTrain && mode === "auto") {
         config.search = { candidates, max_trials: budget.trials, time_budget_minutes: budget.minutes };
+        if (hasBackboneStep && candidates.includes(DINO_FAMILY)) {
+          // decided on the 骨幹 step: pinned for every trial, the search covers only the downstream parameters
+          config.backbone = backbone;
+          config.finetune = finetune;
+        }
       }
       if (!isTrain && effectiveMode) config.mode = effectiveMode;
       if (!isTrain && effectiveMode === "retrieve") {
@@ -514,6 +526,8 @@ export function NewJobWizard({
         toast.error(r.error);
         return;
       }
+      // the result page reads samples from the browser's own copy of the upload (nothing is kept server-side)
+      if (inputKind === "upload" && upload) aliasLocalFile(uploadKey("project", upload.id), jobKey(r.data.id));
       toast.success(`任務 #${r.data.id} 已建立，進入佇列`);
       router.push(`/projects/${project.slug}/jobs/${r.data.id}`);
     });
@@ -569,7 +583,13 @@ export function NewJobWizard({
             </TabsContent>
           ) : null}
           <TabsContent value="upload" className="pt-4">
-            <Dropzone slug={project.slug} onUploaded={setUpload} />
+            <Dropzone
+              slug={project.slug}
+              onUploaded={(u, _raw, file) => {
+                setUpload(u);
+                if (u && file) attachLocalFile(uploadKey("project", u.id), file);
+              }}
+            />
           </TabsContent>
           <TabsContent value="data_source" className="grid gap-2 pt-4">
             {sources.length === 0 ? (
@@ -710,7 +730,11 @@ export function NewJobWizard({
     <Card>
       <CardHeader>
         <CardTitle>模式</CardTitle>
-        <CardDescription>自動模式會依資料類型挑多個候選模型並搜尋超參數；手動模式自己指定。</CardDescription>
+        <CardDescription>
+          {hasBackboneStep
+            ? "骨幹與微調已在上一步決定。自動模式只對下游做搜尋（特徵層、分類頭、解析度，微調時再加學習率 / rank / 增強）；手動模式自己填這些參數。"
+            : "自動模式會依資料類型挑多個候選模型並搜尋超參數；手動模式自己指定。"}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2">
         {[
@@ -745,36 +769,72 @@ export function NewJobWizard({
     </Card>
   );
 
-  const finetune = params.finetune || String(catalog.families[DINO_FAMILY]?.defaults?.finetune ?? "none");
+  const backbones = catalog.families[DINO_FAMILY]?.weights ?? [];
+  const pickDino = () => {
+    if (family !== DINO_FAMILY) setFamily(DINO_FAMILY);
+  };
   const backboneStep = (
     <Card>
       <CardHeader>
         <CardTitle>{finetuneStepCopy.title}</CardTitle>
         <CardDescription>{finetuneStepCopy.description}</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={finetuneStepCopy.title}>
-        {finetuneStepCopy.options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            role="radio"
-            aria-checked={finetune === o.value}
-            data-testid={`finetune-${o.value}`}
-            onClick={() => {
-              setParams({ ...params, finetune: o.value });
-              if (!compatible.includes(family) || family !== DINO_FAMILY) setFamily(DINO_FAMILY);
-            }}
-            className={cn(
-              "rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-              finetune === o.value
-                ? "border-primary/50 bg-primary/5 shadow-glow-sm"
-                : "border-border hover:bg-accent/40",
-            )}
-          >
-            <div className="font-medium">{o.title}</div>
-            <div className="mt-1 text-sm text-muted-foreground">{o.text}</div>
-          </button>
-        ))}
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{finetuneStepCopy.backboneTitle}</p>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={finetuneStepCopy.backboneTitle}>
+            {backbones.map((b) => (
+              <button
+                key={b}
+                type="button"
+                role="radio"
+                aria-checked={backbone === b}
+                data-testid={`backbone-${b}`}
+                onClick={() => {
+                  setParams({ ...params, backbone: b });
+                  pickDino();
+                }}
+                className={cn(
+                  "rounded-md border px-3 py-1.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  backbone === b
+                    ? "border-primary/50 bg-primary/10 text-brand-ink"
+                    : "border-border text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <span className="font-mono">{b}</span>
+                <span className="ml-2 text-xs">{dinoBackboneLabel[b] ?? ""}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{finetuneStepCopy.backboneHint}</p>
+        </div>
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{finetuneStepCopy.finetuneTitle}</p>
+          <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={finetuneStepCopy.finetuneTitle}>
+            {finetuneStepCopy.options.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={finetune === o.value}
+                data-testid={`finetune-${o.value}`}
+                onClick={() => {
+                  setParams({ ...params, finetune: o.value });
+                  pickDino();
+                }}
+                className={cn(
+                  "rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  finetune === o.value
+                    ? "border-primary/50 bg-primary/5 shadow-glow-sm"
+                    : "border-border hover:bg-accent/40",
+                )}
+              >
+                <div className="font-medium">{o.title}</div>
+                <div className="mt-1 text-sm text-muted-foreground">{o.text}</div>
+              </button>
+            ))}
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -796,6 +856,9 @@ export function NewJobWizard({
           <CardTitle>候選模型與預算</CardTitle>
           <CardDescription>
             依 {dataTypeLabel[project.dataType]} × {taskTypeLabel[project.taskType]} 自動挑選，可取消勾選。
+            {hasBackboneStep && candidates.includes(DINO_FAMILY)
+              ? ` DINO 固定用 ${backbone}（${finetuneLabel(finetune)}），只搜尋特徵層、分類頭與解析度。`
+              : ""}
             {res.gpu === 0 ? " 沒申請 GPU 時需要 GPU 的候選會被略過。" : ""}
           </CardDescription>
         </CardHeader>
@@ -1111,6 +1174,14 @@ export function NewJobWizard({
               </dd>
               <dt className="text-label">前處理</dt>
               <dd className="font-mono text-xs">{preprocess.map((s) => s.op).join(" → ") || "無"}</dd>
+              {hasBackboneStep && (mode === "auto" ? candidates.includes(DINO_FAMILY) : family === DINO_FAMILY) ? (
+                <>
+                  <dt className="text-label">骨幹</dt>
+                  <dd>
+                    <span className="font-mono text-xs">{backbone}</span> · {finetuneLabel(finetune)}
+                  </dd>
+                </>
+              ) : null}
               <dt className="text-label">模式</dt>
               <dd>
                 {mode === "auto"

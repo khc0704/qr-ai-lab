@@ -361,9 +361,13 @@ export const jobCopy = {
 
 /** The wizard's fine-tune step (DINO image classification). */
 export const finetuneStepCopy = {
-  title: "骨幹微調",
+  title: "骨幹與微調",
   description:
-    "先決定要不要訓練 DINO 骨幹；之後的特徵、分類頭與 PatchCore 都會用這裡選的骨幹。YOLO 分類器在下一步另選。",
+    "先選 DINO 骨幹、再決定要不要微調。接下來不論手動或自動模式，特徵、分類頭與 PatchCore 都用這裡的骨幹（自動模式只搜尋下游參數）。YOLO 分類器在「模型與參數」另選。",
+  backboneTitle: "骨幹權重",
+  backboneHint:
+    "權重來自模型庫。DINOv3 的 patch 較細、SEM / TEM 紋理通常較穩，但是 gated 權重，要管理員先匯入；缺的話建立任務時會提示。",
+  finetuneTitle: "要不要微調",
   options: [
     {
       value: "none",

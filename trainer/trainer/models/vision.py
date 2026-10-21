@@ -1204,8 +1204,9 @@ def _save_bank(
         "inference_modes": DinoFewShotTrainer.inference_modes,
     }
     (model_dir / "metadata.json").write_text(jsonsafe.dumps(full_meta, indent=2), encoding="utf-8")
+    finetune = str(full_meta.get("finetune") or "none")
     return ArtifactOut(
-        name="dino_fewshot",
+        name="dino" if finetune == "none" else f"dino_{finetune}",  # the model list shows what was trained
         kind="model",
         path="model",
         framework="torch",
@@ -1867,6 +1868,7 @@ class _DinoFinetuneNet:
         self.head.to(ctx.device)
         self.feature_dim = dim
         self.n_special = 1 + special_tokens(cfg)
+        self.aug_rng: np.random.Generator | None = None  # seeded by the trainer: a fine-tune is reproducible
 
     def pixels(self, paths: list[Path], augment: tuple[str, ...] = ()):
         from PIL import Image
@@ -1875,7 +1877,7 @@ class _DinoFinetuneNet:
         for p in paths:
             im = Image.open(p).convert("RGB")
             if augment:
-                im = augment_image(im, augment)
+                im = augment_image(im, augment, self.aug_rng)
             imgs.append(im)
         return self.processor(images=imgs, return_tensors="pt")["pixel_values"].to(self.ctx.device)
 
@@ -1988,6 +1990,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         self.net = _DinoFinetuneNet(
             self.ctx, self.backbone_id, self.method, len(self.classes), self.rank, self.alpha, spec=spec
         )
+        self.net.aug_rng = np.random.default_rng(int(p.get("seed", 42)))
         bb_params, _head_params = self.net.trainable_parameters()
         n_bb = sum(int(q.numel()) for q in bb_params)
         info(

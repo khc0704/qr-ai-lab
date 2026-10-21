@@ -490,7 +490,18 @@ export interface CatalogFamily {
   min_rows?: number;
   max_rows?: number;
   defaults: Record<string, unknown>;
-  search_space: Record<string, { type: string; low?: number; high?: number; log?: boolean; choices?: unknown[] }>;
+  search_space: Record<
+    string,
+    {
+      type: string;
+      low?: number;
+      high?: number;
+      log?: boolean;
+      choices?: unknown[];
+      /** only searched while these parameters hold one of the listed values (e.g. lr while finetune ≠ none) */
+      when?: Record<string, unknown[]>;
+    }
+  >;
   /** Kept in the catalog only so old artifacts still load; never offered for new training jobs. */
   deprecated?: boolean;
   /** train-time augmentation ops the wizard offers as a multi-select (defaults.augment = preselected) */

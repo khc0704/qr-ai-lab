@@ -68,11 +68,35 @@ def _release_previous_trial() -> None:
         pass
 
 
+def _when_holds(cond: dict[str, Any] | None, known: dict[str, Any]) -> bool:
+    """A search-space entry's ``when: {param: [values]}`` gate: every named parameter must currently hold one of
+    the listed values (its pinned value, the value sampled earlier in this trial, or the family default)."""
+    for key, allowed in (cond or {}).items():
+        allowed_list = allowed if isinstance(allowed, list) else [allowed]
+        if str(known.get(key)) not in {str(a) for a in allowed_list}:
+            return False
+    return True
+
+
 def _sample(
-    trial, fid: str, space: dict[str, Any], task: str | None = None, ctx: Context | None = None
+    trial,
+    fid: str,
+    space: dict[str, Any],
+    task: str | None = None,
+    ctx: Context | None = None,
+    fixed: dict[str, Any] | None = None,
+    defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """One trial's hyper-parameters. ``fixed`` are the values the user pinned (the wizard's backbone / finetune
+    choice): they are never sampled. An entry with ``when`` is only sampled while its condition holds, so a
+    frozen backbone does not burn trials on fine-tune knobs."""
     out: dict[str, Any] = {}
+    fixed = fixed or {}
     for name, d in space.items():
+        if name in fixed:
+            continue
+        if not _when_holds(d.get("when"), {**(defaults or {}), **fixed, **out}):
+            continue
         key = f"{fid}.{name}"
         t = d.get("type")
         if t == "float":
@@ -139,6 +163,8 @@ def run(
         f"automl: candidates={candidates} metric={metric} ({direction}) "
         f"max_trials={max_trials} budget={budget_s / 60:g}min deadline={(deadline - time.monotonic()) / 60:.1f}min"
     )
+    if user_overrides:
+        info(f"automl: pinned (not searched) {_short(user_overrides)}")
     outer_progress = ctx.on_progress
     best: dict[str, Any] = {"value": None}
     rows: list[dict[str, Any]] = []
@@ -154,10 +180,14 @@ def run(
             trial = study.ask()
             fid = trial.suggest_categorical("family", candidates)
             fam = families.get(fid) or {}
+            # a pinned value only applies to the families that have that parameter (the wizard's backbone /
+            # finetune choice is for vision.dino, not for a YOLO candidate in the same search)
+            defaults = fam.get("defaults") or {}
+            pinned = {k: v for k, v in user_overrides.items() if not defaults or k in defaults}
             params = {
-                **(fam.get("defaults") or {}),
-                **_sample(trial, fid, fam.get("search_space") or {}, task, ctx),
-                **user_overrides,
+                **defaults,
+                **_sample(trial, fid, fam.get("search_space") or {}, task, ctx, fixed=pinned, defaults=defaults),
+                **pinned,
             }
             _release_previous_trial()
             trainer = registry.create_trainer(fid, task, params, ctx)

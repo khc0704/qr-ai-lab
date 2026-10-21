@@ -556,3 +556,53 @@ def test_legacy_family_ids_still_resolve(tmp_path, ctx):
     assert registry.create_trainer("vision.dino_fewshot", "classification", {}, ctx).__class__ is vision.DinoTrainer
     assert registry.create_inferencer("vision.dino_fewshot", ctx).__class__ is vision.DinoInferencer
     assert registry.create_inferencer("vision.dino_finetune", ctx).__class__ is vision.DinoFinetuneInferencer
+
+
+def test_automl_pinned_values_are_not_searched_and_gate_the_finetune_knobs():
+    """The wizard decides backbone / finetune before the training mode: they arrive pinned in config and are never
+    sampled; the fine-tune knobs (lr / rank / augment) are only sampled while a fine-tune is on."""
+    from trainer.automl import _sample
+
+    class Trial:
+        def __init__(self):
+            self.asked: list[str] = []
+
+        def suggest_categorical(self, key, choices):
+            self.asked.append(key)
+            return choices[0]
+
+        def suggest_float(self, key, low, high, log=False):
+            self.asked.append(key)
+            return low
+
+        def suggest_int(self, key, low, high, log=False):
+            self.asked.append(key)
+            return low
+
+    space = {
+        "layers": {"type": "categorical", "choices": ["last", "cross"]},
+        "head": {"type": "categorical", "choices": ["prototype", "linear"]},
+        "augment": {"type": "categorical", "choices": ["default", "none"], "when": {"finetune": ["lora", "full"]}},
+        "lr": {"type": "float", "low": 0.0001, "high": 0.01, "log": True, "when": {"finetune": ["lora", "full"]}},
+        "rank": {"type": "categorical", "choices": [4, 8], "when": {"finetune": ["lora"]}},
+    }
+    defaults = {"backbone": "dinov2-small", "finetune": "none"}
+    # frozen backbone (pinned none): only the downstream grid is searched
+    t = Trial()
+    out = _sample(t, "vision.dino", space, "classification", None, fixed={"finetune": "none"}, defaults=defaults)
+    assert out == {"layers": "last", "head": "prototype"}
+    assert t.asked == ["vision.dino.layers", "vision.dino.head"]
+    # LoRA pinned: lr / rank / augment join the search, finetune itself never does
+    t = Trial()
+    out = _sample(t, "vision.dino", space, "classification", None, fixed={"finetune": "lora"}, defaults=defaults)
+    assert out == {"layers": "last", "head": "prototype", "lr": 0.0001, "rank": 4}  # augment "default" → unset
+    assert "vision.dino.finetune" not in t.asked and "vision.dino.lr" in t.asked
+    # full: rank (LoRA only) stays out
+    t = Trial()
+    out = _sample(t, "vision.dino", space, "classification", None, fixed={"finetune": "full"}, defaults=defaults)
+    assert "rank" not in out and "lr" in out
+    # nothing pinned: the family default (none) decides
+    assert _sample(Trial(), "vision.dino", space, "classification", None, defaults=defaults) == {
+        "layers": "last",
+        "head": "prototype",
+    }

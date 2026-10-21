@@ -154,6 +154,7 @@ def _tiny_dino(zoo: Path, layers: int = 1) -> None:
         image_size=56,
         patch_size=14,
     )
+    torch.manual_seed(0)  # the random "pretrained" weights are the same in every run
     Dinov2Model(cfg).save_pretrained(d)
     BitImageProcessor(size={"shortest_edge": 56}, crop_size={"height": 56, "width": 56}).save_pretrained(d)
 
@@ -275,11 +276,12 @@ def test_dino_finetune_roundtrip(tmp_path, ctx):
     )
     epochs: list[int] = []
     ctx.on_epoch = lambda e, m: epochs.append(e)
-    params = {"backbone": "dinov2-small", "method": method, "epochs": 4, "batch": 4, "lr": 5e-3, "rank": 2}
+    # a 1-layer random backbone needs a few more steps than a real one to separate dark from bright reliably
+    params = {"backbone": "dinov2-small", "method": method, "epochs": 12, "batch": 4, "lr": 5e-3, "rank": 2}
     t = registry.create_trainer("vision.dino_finetune", "classification", params, ctx)
     t.fit(ds)
-    assert epochs == [1, 2, 3, 4] and t.meta["classes"] == ["BIN_A", "BIN_B"] and t.meta["method"] == method
-    assert t.evaluate()["accuracy"] >= 0.5 and t.meta["resolved"]["epochs"] == 4
+    assert epochs == list(range(1, 13)) and t.meta["classes"] == ["BIN_A", "BIN_B"] and t.meta["method"] == method
+    assert t.evaluate()["accuracy"] >= 0.5 and t.meta["resolved"]["epochs"] == 12
     assert t.net.lora_layers == 3  # one layer × query / key / value
     assert all(".lora_" in k for k in lora_state(t.net.backbone)) and lora_state(t.net.backbone)
     # the base projections never train; only adapters and the head do
@@ -330,6 +332,7 @@ def _tiny_dino3(zoo: Path, name: str = "dinov3-vits16", layers: int = 1) -> None
         patch_size=16,
         num_register_tokens=4,
     )
+    torch.manual_seed(0)
     DINOv3ViTModel(cfg).save_pretrained(d)
     BitImageProcessor(size={"shortest_edge": 64}, crop_size={"height": 64, "width": 64}).save_pretrained(d)
 

@@ -198,6 +198,19 @@ def _check_not_deprecated(model_family: str) -> None:
         raise bad_request("MODEL_DEPRECATED", f"{model_family} 已併入其他家族，請改選目錄裡現有的模型")
 
 
+FINETUNE_MODES = ("none", "lora", "full")
+
+
+def _check_pinned_dino(task_type: str | None, config: dict[str, Any], candidates: list[str]) -> None:
+    """AutoML for images: the wizard decides the DINO backbone and whether to fine-tune before the training mode,
+    so they arrive pinned in ``config`` (never searched); check them here, not in the fifth trial."""
+    if "vision.dino" not in candidates:
+        return
+    if config.get("finetune") is not None and str(config["finetune"]) not in FINETUNE_MODES:
+        raise bad_request("BAD_FINETUNE", f"finetune 只能是 {', '.join(FINETUNE_MODES)}")
+    _check_chosen_weight("vision.dino", task_type, config)
+
+
 def _check_chosen_weight(model_family: str, task_type: str | None, config: dict[str, Any]) -> None:
     """A family is "ready" when any of its alternative weights is in the zoo; the one the config picked
     (``backbone`` for DINO, ``model`` + task suffix for YOLO) must itself be there, or the job would only fail
@@ -248,6 +261,8 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
             if not loader.supports(model_family, project.data_type, task_type):
                 raise bad_request("MODEL_NOT_SUPPORTED", f"{model_family} 不支援 {project.data_type} × {task_type}")
             _check_not_deprecated(model_family)
+            if model_family == "vision.dino" and str((body.config or {}).get("finetune", "none")) not in FINETUNE_MODES:
+                raise bad_request("BAD_FINETUNE", f"finetune 只能是 {', '.join(FINETUNE_MODES)}")
             if loader.needs_gpu(model_family) and body.requested_gpu == 0:
                 raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
             if not zoo_svc.family_ready(model_family):
@@ -273,6 +288,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 search["skipped_missing_weights"] = missing
                 if not search["candidates"]:
                     raise bad_request("WEIGHTS_MISSING", f"候選模型 {missing} 的預訓練權重都不在模型庫，請管理員先匯入")
+            _check_pinned_dino(task_type, config, list(search["candidates"]))
             config["search"] = search
             model_family = None
         if body.input.kind == "inline":
