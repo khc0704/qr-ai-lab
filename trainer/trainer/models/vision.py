@@ -540,7 +540,9 @@ class _Dino:
     to each), keeps the patch tokens only, averages them per layer for the image vector and concatenates the
     layers; optionally returns the fused, L2-normalised patch grid (with PatchCore's neighbourhood mean)."""
 
-    def __init__(self, ctx, backbone_id: str, spec: FeatureSpec | None = None) -> None:
+    def __init__(self, ctx, backbone_id: str, spec: FeatureSpec | None = None, *, model=None, processor=None) -> None:
+        """``model`` / ``processor``: an already built (e.g. LoRA- or fully fine-tuned) backbone to read features
+        from instead of the zoo weights."""
         import torch
         from transformers import AutoImageProcessor
 
@@ -549,9 +551,10 @@ class _Dino:
         self.ctx = ctx
         self.torch = torch
         self.backbone_id = backbone_id
-        self.processor = AutoImageProcessor.from_pretrained(str(path), local_files_only=True)
+        self.processor = processor or AutoImageProcessor.from_pretrained(str(path), local_files_only=True)
         _set_image_size(self.processor, spec.image_size)
-        self.model = _load_backbone(path).to(ctx.device).eval()
+        self.model = (model if model is not None else _load_backbone(path)).to(ctx.device).eval()
+        self.adapted = model is not None
         cfg = self.model.config
         self.kind = backbone_kind(backbone_id, getattr(cfg, "model_type", None))
         self.n_layers = int(cfg.num_hidden_layers)
@@ -563,8 +566,9 @@ class _Dino:
         # token layout: [CLS] [register × n (DINOv3)] [patch × L]; only the patches form the spatial grid
         self.n_special = 1 + special_tokens(cfg)
         info(
-            f"dino: loaded {backbone_id} ({self.kind}, {self.n_layers} layers, hidden={self.hidden}) from {path} "
-            f"on {ctx.device}; {self.spec.describe()} → layers {list(self.layers)}, feature dim={self.feature_dim}"
+            f"dino: {'fine-tuned ' if self.adapted else 'loaded '}{backbone_id} ({self.kind}, {self.n_layers} layers, "
+            f"hidden={self.hidden}) from {path} on {ctx.device}; {self.spec.describe()} → layers {list(self.layers)}, "
+            f"feature dim={self.feature_dim}"
         )
 
     @property
@@ -930,21 +934,52 @@ class _PatchBank:
 # --- few-shot classification (frozen features) -------------------------------------------------------------
 
 
-class DinoFewShotTrainer(BaseTrainer):
-    """Classification on frozen DINO features: no backbone training, a head on the support set.
+FINETUNE_MODES = ("none", "lora", "full")
 
-    ``layers`` (last / cross / list) and ``image_size`` decide how an image becomes a vector (patch tokens
-    only, mean per layer, layers concatenated); ``head`` (auto / prototype / knn / linear / svm) decides how
-    the vector becomes a class. With a normal class (folder good / normal / ok / pass, or ``normal_class``)
-    and ``patchcore`` on (``auto`` = on whenever such a class exists) a PatchCore bank of the normal patches
-    decides normal vs. defect first, and only the anomalous patches are classified among the defect folders."""
+
+def resolve_finetune(value: Any) -> str:
+    s = str(value if value is not None else "none").strip().lower()
+    if s in ("", "no", "false", "off", "0", "frozen"):
+        return "none"
+    if s in ("yes", "true", "on", "1"):
+        return "lora"
+    if s not in FINETUNE_MODES:
+        raise ValueError(f"finetune 必須是 {' / '.join(FINETUNE_MODES)}，不是 {value!r}")
+    return s
+
+
+class _ScaledProgress:
+    """Map a nested trainer's 0 … 1 progress into the ``lo`` … ``hi`` slice of the outer job's bar."""
+
+    def __init__(self, ctx, lo: float, hi: float) -> None:
+        self.ctx, self.lo, self.hi = ctx, lo, hi
+
+    def __enter__(self):
+        self.outer = self.ctx.on_progress
+        outer, lo, hi = self.outer, self.lo, self.hi
+        self.ctx.on_progress = (lambda f, stage: outer(lo + (hi - lo) * f, stage)) if outer else None
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.ctx.on_progress = self.outer
+
+
+class DinoTrainer(BaseTrainer):
+    """The DINO image-classification family. Steps: (1) optional backbone fine-tuning — ``finetune`` = ``none``
+    (frozen, default) / ``lora`` (adapters on the attention projections, default when fine-tuning) / ``full``
+    (every weight) trained with a linear head on the labelled folders; (2) features from the (fine-tuned)
+    backbone: ``layers`` (last / cross / list) and ``image_size``, patch tokens only, mean per layer, layers
+    concatenated; (3) a ``head`` (auto / prototype / knn / linear / svm) on those vectors. With a normal class
+    (folder good / normal / ok / pass, or ``normal_class``) and ``patchcore`` on (``auto`` = whenever such a
+    class exists) a PatchCore bank of the normal patches decides normal vs. defect first, and only the anomalous
+    patches are classified among the defect folders."""
 
     framework = "torch"
     inference_modes = ["predict", "embed", "retrieve", "extend"]
 
     def fit(self, ds: Dataset) -> None:
         if not ds.has_labels:
-            raise ValueError("few-shot 分類需要以類別（bin code）命名的資料夾")
+            raise ValueError("分類需要以類別（bin code）命名的資料夾")
         p = self.params
         self.backbone_id = str(p.get("backbone", "dinov2-small"))
         spec = FeatureSpec.from_params(p)
@@ -953,15 +988,29 @@ class DinoFewShotTrainer(BaseTrainer):
         classes = sorted(set(labels.tolist()))
         counts = Counter(labels.tolist())
         resolved: dict[str, Any] = {}
-        dino = _Dino(self.ctx, self.backbone_id, spec)
-        self.ctx.progress(0.05, "training")
+        self.finetune = resolve_finetune(p.get("finetune"))
+        self.ft: DinoFinetuneTrainer | None = None
+        resolved["finetune"] = self.finetune
+        start = 0.05
+        if self.finetune != "none":
+            self.ft = DinoFinetuneTrainer(self.family, self.task, {**p, "method": self.finetune}, self.ctx)
+            with _ScaledProgress(self.ctx, 0.02, 0.5):
+                self.ft.fit(ds)
+            self.ft.net.train_mode(False)
+            dino = _Dino(self.ctx, self.backbone_id, spec, model=self.ft.net.backbone, processor=self.ft.net.processor)
+            resolved.update({k: v for k, v in self.ft.meta.get("resolved", {}).items() if k != "layers"})
+            start = 0.5
+        else:
+            dino = _Dino(self.ctx, self.backbone_id, spec)
+        span = 0.5 if self.finetune == "none" else 0.25
+        self.ctx.progress(start, "training")
         self.layer_report = None
         if spec.layers == "auto":
             dino, emb, self.layer_report = _auto_layers(
-                dino, paths, labels, progress=lambda f: self.ctx.progress(0.05 + 0.5 * f, "training")
+                dino, paths, labels, progress=lambda f: self.ctx.progress(start + span * f, "training")
             )
         else:
-            emb = dino.embed(paths, progress=lambda f: self.ctx.progress(0.05 + 0.5 * f, "training"))
+            emb = dino.embed(paths, progress=lambda f: self.ctx.progress(start + span * f, "training"))
         self.spec = dino.spec
         resolved["layers"] = list(dino.layers)
         self.emb, self.labels, self.ids = emb, labels, np.asarray(ds.ids).astype(str)
@@ -993,11 +1042,11 @@ class DinoFewShotTrainer(BaseTrainer):
                 normal_paths,
                 p,
                 normal_class=self.normal_class,
-                progress=lambda f: self.ctx.progress(0.55 + 0.2 * f, "training"),
+                progress=lambda f: self.ctx.progress(start + span + 0.4 * span * f, "training"),
                 resolved=resolved,
             )
             self.support_scores, _, self.defect_desc = self.bank.analyse(
-                dino, paths, emb, progress=lambda f: self.ctx.progress(0.75 + 0.15 * f, "training")
+                dino, paths, emb, progress=lambda f: self.ctx.progress(start + 1.4 * span + 0.3 * span * f, "training")
             )
         resolved["patchcore"] = want_bank
         info(f"patchcore={want_bank} ({why_bank})")
@@ -1016,6 +1065,7 @@ class DinoFewShotTrainer(BaseTrainer):
             {
                 "classes": self.classes,
                 "backbone": self.backbone_id,
+                "finetune": self.finetune,
                 "features": self.spec.to_dict(),
                 "feature_dim": int(emb.shape[1]),
                 "layer_report": self.layer_report,
@@ -1025,8 +1075,19 @@ class DinoFewShotTrainer(BaseTrainer):
                 "resolved": resolved,
             }
         )
+        if self.ft is not None:
+            self.meta.update(
+                {
+                    "rank": self.ft.rank,
+                    "lora_alpha": self.ft.alpha,
+                    "finetune_metrics": self.ft.metrics,
+                    "finetune_best_epoch": self.ft.meta.get("best_epoch"),
+                    "augment": self.ft.meta.get("augment"),
+                }
+            )
         info(
-            f"{self.family}: classes={len(self.classes)} support={len(labels)} head={head_kind} ({why_head}) "
+            f"{self.family}: finetune={self.finetune} classes={len(self.classes)} support={len(labels)} "
+            f"head={head_kind} ({why_head}) "
             + (f"patchcore(threshold={self.bank.threshold:.4f}) " if self.bank else "")
             + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items())
         )
@@ -1076,20 +1137,24 @@ class DinoFewShotTrainer(BaseTrainer):
         return preds
 
     def export(self, out: Path) -> list[ArtifactOut]:
-        return [
-            _save_bank(
-                out,
-                self.head,
-                self.emb,
-                self.labels,
-                self.ids,
-                self.meta,
-                self.metrics,
-                bank=self.bank,
-                defect_head=self.defect_head,
-                defect_desc=self.defect_desc,
-            )
-        ]
+        art = _save_bank(
+            out,
+            self.head,
+            self.emb,
+            self.labels,
+            self.ids,
+            self.meta,
+            self.metrics,
+            bank=self.bank,
+            defect_head=self.defect_head,
+            defect_desc=self.defect_desc,
+        )
+        if self.ft is not None:
+            self.ft.save_backbone(out / "model")
+        return [art]
+
+
+DinoFewShotTrainer = DinoTrainer  # the family's name before fine-tuning was folded in
 
 
 def _save_bank(
@@ -1150,7 +1215,34 @@ def _save_bank(
     )
 
 
-class DinoFewShotInferencer(BaseInferencer):
+def _finetuned_backbone(ctx, backbone_id: str, model_path: Path, meta: dict[str, Any]):
+    """Rebuild the fine-tuned backbone an artifact was trained with (``lora.pt`` adapters on the zoo weights,
+    or the saved ``backbone/`` of a full fine-tune)."""
+    import torch
+
+    finetune = resolve_finetune(meta.get("finetune"))
+    if finetune == "none":
+        return None
+    if finetune == "full":
+        return _load_backbone(model_path / "backbone")
+    model = _load_backbone(ctx.weight(backbone_id))
+    inject_lora(model, int(meta.get("rank") or 8), float(meta.get("lora_alpha") or 16))
+    _missing, unexpected = model.load_state_dict(
+        torch.load(model_path / "lora.pt", map_location="cpu", weights_only=True), strict=False
+    )
+    if unexpected:
+        raise ValueError(f"LoRA 權重與骨幹不符：{unexpected[:3]}")
+    return model
+
+
+def _copy_backbone_files(src: Path, dst: Path) -> None:
+    if (src / "lora.pt").exists():
+        shutil.copy2(src / "lora.pt", dst / "lora.pt")
+    if (src / "backbone").is_dir() and not (dst / "backbone").exists():
+        shutil.copytree(src / "backbone", dst / "backbone")
+
+
+class DinoInferencer(BaseInferencer):
     def load(self, model_path: Path, metadata: dict[str, Any]) -> None:
         import joblib
 
@@ -1184,10 +1276,14 @@ class DinoFewShotInferencer(BaseInferencer):
                 )
                 if "defect_head" in heads:
                     self.defect_head.model = heads["defect_head"]
-        self.dino = _Dino(self.ctx, str(self.meta.get("backbone", "dinov2-small")), self.spec)
+        backbone_id = str(self.meta.get("backbone", "dinov2-small"))
+        self.dino = _Dino(
+            self.ctx, backbone_id, self.spec, model=_finetuned_backbone(self.ctx, backbone_id, model_path, self.meta)
+        )
         self.model_path = model_path
         info(
-            f"dino_fewshot: {len(self.classes)} classes, head={self.head.kind}, "
+            f"dino: {len(self.classes)} classes, finetune={resolve_finetune(self.meta.get('finetune'))}, "
+            f"head={self.head.kind}, "
             + (f"patchcore threshold={self.bank.threshold:.4f}" if self.bank else "no patchcore")
         )
 
@@ -1390,6 +1486,7 @@ class DinoFewShotInferencer(BaseInferencer):
             defect_desc=defect_desc,
             set_default=True,
         )
+        _copy_backbone_files(self.model_path, out.parent / "model")  # a fine-tuned backbone travels with the bank
         info(f"extend: +{len(labels)} examples, new classes={added}, total classes={len(head.classes)}")
         rows = [{"id": i, "label": lbl, "status": "added"} for i, lbl in zip(new_ids, labels, strict=True)]
         return PredictResult(
@@ -1570,13 +1667,18 @@ def _save_heatmap(heat_dir: Path, name: str, grid: np.ndarray, threshold: float)
     return f"heatmaps/{name}"
 
 
+DinoFewShotInferencer = DinoInferencer
+
+
 __all__ = [
     "DinoFewShotInferencer",
     "DinoFewShotTrainer",
     "DinoFinetuneInferencer",
     "DinoFinetuneTrainer",
+    "DinoInferencer",
     "DinoPatchCoreInferencer",
     "DinoPatchCoreTrainer",
+    "DinoTrainer",
     "YoloInferencer",
     "YoloTrainer",
     "all_images",
@@ -1864,13 +1966,14 @@ class DinoFinetuneTrainer(BaseTrainer):
         p = self.params
         self.backbone_id = str(p.get("backbone", "dinov2-small"))
         self.method = str(p.get("method", "lora"))
-        if self.method != "lora":
-            raise ValueError("微調只提供 lora（linear 分類頭請用 vision.dino_fewshot 的 head=linear，full 已取消）")
+        if self.method not in ("lora", "full"):
+            raise ValueError("微調只提供 lora / full（線性探針 = finetune=none + head=linear）")
         self.rank = int(p.get("rank", 8))
         self.alpha = float(p.get("lora_alpha", 2 * self.rank))
         spec = FeatureSpec.from_params(p)
         batch, why_batch = resolve_batch(p.get("batch", "auto"), spec.image_size)
         lr = float(p.get("lr", 1e-3))
+        self.backbone_lr = float(p.get("backbone_lr", 1e-5))  # full fine-tune: the pretrained weights move slowly
         augment = parse_augment(p.get("augment", DEFAULT_AUGMENT))
         torch.manual_seed(int(p.get("seed", 42)))
         np.random.seed(int(p.get("seed", 42)))
@@ -1888,7 +1991,8 @@ class DinoFinetuneTrainer(BaseTrainer):
         bb_params, _head_params = self.net.trainable_parameters()
         n_bb = sum(int(q.numel()) for q in bb_params)
         info(
-            f"{self.family}: backbone={self.backbone_id} lora rank={self.rank} classes={len(self.classes)} "
+            f"{self.family}: backbone={self.backbone_id} finetune={self.method} rank={self.rank} "
+            f"classes={len(self.classes)} "
             f"train={len(tr)} val={len(va)} trainable backbone params={n_bb} (lora layers={self.net.lora_layers}) "
             f"augment={list(augment) or 'none'} {self.net.spec.describe()} feature dim={self.net.feature_dim} "
             f"epochs={epochs} ({why_epochs}) batch={batch} ({why_batch}) lr={lr:g} device={self.ctx.device}"
@@ -1929,7 +2033,13 @@ class DinoFinetuneTrainer(BaseTrainer):
                 "best_epoch": best_epoch,
                 "batch": batch,
                 "train_per_class": dict(Counter(labels[tr].tolist())),
-                "resolved": {"layers": list(self.net.layers), "epochs": epochs, "batch": batch, "lr": lr},
+                "resolved": {
+                    "layers": list(self.net.layers),
+                    "epochs": epochs,
+                    "batch": batch,
+                    "lr": lr,
+                    **({"backbone_lr": self.backbone_lr} if self.method == "full" else {}),
+                },
             }
         )
         info(f"{self.family}: best epoch {best_epoch} " + ", ".join(f"{k}={v:.4f}" for k, v in self.metrics.items()))
@@ -1941,7 +2051,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         bb_params, head_params = net.trainable_parameters()
         groups = [{"params": head_params, "lr": lr}]
         if bb_params:
-            groups.append({"params": bb_params, "lr": lr})
+            groups.append({"params": bb_params, "lr": self.backbone_lr if self.method == "full" else lr})
         opt = torch.optim.AdamW(groups, weight_decay=float(self.params.get("weight_decay", 0.01)))
         steps = epochs * max(1, int(np.ceil(len(tr) / batch)))
         sched = torch.optim.lr_scheduler.LambdaLR(
@@ -1974,11 +2084,26 @@ class DinoFinetuneTrainer(BaseTrainer):
             score = self.metrics.get("f1_macro", 0.0)
             if best is None or score > best[0]:
                 head_state = {k: v.detach().cpu().clone() for k, v in net.head.state_dict().items()}
-                best = (score, head_state, lora_state(net.backbone), epoch)
+                bb_state = (
+                    lora_state(net.backbone)
+                    if self.method == "lora"
+                    else {k: v.detach().cpu().clone() for k, v in net.backbone.state_dict().items()}
+                )
+                best = (score, head_state, bb_state, epoch)
             self.ctx.epoch(epoch, ep)
         assert best is not None
         self.metrics = {k: v for k, v in self.metrics.items()}
         return best
+
+    def save_backbone(self, model_dir: Path) -> None:
+        """``lora.pt`` (adapters only, a few MB) or ``backbone/`` (a full fine-tune: the whole backbone)."""
+        import torch
+
+        model_dir.mkdir(parents=True, exist_ok=True)
+        if self.method == "lora":
+            torch.save(lora_state(self.net.backbone), model_dir / "lora.pt")
+        else:
+            self.net.backbone.save_pretrained(model_dir / "backbone")
 
     def export(self, out: Path) -> list[ArtifactOut]:
         import torch
@@ -1986,7 +2111,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         model_dir = out / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
         torch.save(self.net.head.state_dict(), model_dir / "head.pt")
-        torch.save(lora_state(self.net.backbone), model_dir / "lora.pt")
+        self.save_backbone(model_dir)
         np.savez_compressed(
             model_dir / "reference.npz",
             embeddings=self.ref_emb.astype(np.float32),
@@ -1997,7 +2122,7 @@ class DinoFinetuneTrainer(BaseTrainer):
         (model_dir / "metadata.json").write_text(jsonsafe.dumps(meta, indent=2), encoding="utf-8")
         return [
             ArtifactOut(
-                name="dino_lora",
+                name=f"dino_{self.method}",
                 kind="model",
                 path="model",
                 framework=self.framework,

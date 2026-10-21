@@ -19,7 +19,9 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
     "tabular.tabpfn": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "tabular.isolation_forest": ("trainer.models.tabular", "TabularTrainer", "TabularInferencer"),
     "vision.yolo": ("trainer.models.vision", "YoloTrainer", "YoloInferencer"),
-    "vision.dino_fewshot": ("trainer.models.vision", "DinoFewShotTrainer", "DinoFewShotInferencer"),
+    "vision.dino": ("trainer.models.vision", "DinoTrainer", "DinoInferencer"),
+    # ids from before fine-tuning was folded into vision.dino (deprecated in the catalog: inference only)
+    "vision.dino_fewshot": ("trainer.models.vision", "DinoTrainer", "DinoInferencer"),
     "vision.dino_finetune": ("trainer.models.vision", "DinoFinetuneTrainer", "DinoFinetuneInferencer"),
     "vision.dino_patchcore": (
         "trainer.models.vision",
@@ -57,6 +59,7 @@ REQUIRES: dict[str, list[str]] = {
     "tabular.catboost": ["catboost"],
     "tabular.tabpfn": ["torch", "tabpfn"],
     "vision.yolo": ["torch", "ultralytics"],
+    "vision.dino": ["torch", "transformers", "PIL"],
     "vision.dino_fewshot": ["torch", "transformers", "PIL"],
     "vision.dino_finetune": ["torch", "transformers", "PIL"],
     "vision.dino_patchcore": ["torch", "transformers", "PIL"],

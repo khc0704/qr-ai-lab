@@ -82,7 +82,7 @@ async def test_zoo_status_upload_import_delete(client, admin, user, tmp_path, mo
     assert r.status_code == 200, r.text
     assert (tmp_path / "zoo" / "dinov2-small" / "config.json").exists()
     cat = (await client.get("/api/v1/catalog", headers=user)).json()
-    assert cat["families"]["vision.dino_fewshot"]["weights_ready"]
+    assert cat["families"]["vision.dino"]["weights_ready"]
 
     # 2) import from a folder mounted on the server (only under MODEL_ZOO_IMPORT_ROOT)
     (transfer / "yolov8s.pt").write_bytes(b"s" * 5000)
@@ -156,7 +156,7 @@ async def test_job_creation_refuses_missing_weights(client, admin, user, tmp_pat
             "kind": "train",
             "name": "needs-weights",
             "mode": "manual",
-            "model_family": "vision.dino_fewshot",
+            "model_family": "vision.dino",
             "input": {"kind": "data_source", "data_source_id": ds["id"], "spec": {}},
             "requested_gpu": 1,
             "requested_cpu": 2,

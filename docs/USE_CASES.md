@@ -27,14 +27,14 @@
 | 同上 + 有量測值（CD、膜厚、側壁角） | `SPECTRUM` × `regression` | 光譜 → 量測值（快速虛擬量測） | `spectrum.pls`（PLS 迴歸，幾十筆就能用、VIP 說哪些波長重要）；資料多時 `spectrum.masked_autoencoder`（自監督 + Ridge 迴歸頭） | `predict` |
 | 光譜 + 已知類別（配方 / 材料 / 批次） | `SPECTRUM` × `classification` | 光譜分類 | `spectrum.pls`（PLS-DA） | `predict` |
 | FTIR / Raman / XRF / PL | `SPECTRUM` | 材料 / 配方 / 批次異常、污染偵測 | 同上 | `score`、`retrieve`、`embed` |
-| TEM / SEM / 光學顯微 表面影像 | `IMAGE` × `classification` | bin code 分類，類別會持續增加 | `vision.dino_fewshot`（DINOv2 或 DINOv3 骨幹；每類幾張就能用；新類別用 `extend`；結果可看模型關注的區塊） | `predict`、`retrieve`、`extend` |
-| 同上，類別固定、每類幾十張以上 | `IMAGE` × `classification` | 更準的分類，並看 Grad-CAM 知道模型看哪裡 | `vision.dino_finetune`（`linear` / `lora` / `full`） | `predict`（附 Grad-CAM）、`retrieve` |
+| TEM / SEM / 光學顯微 表面影像 | `IMAGE` × `classification` | bin code 分類，類別會持續增加 | `vision.dino`（DINOv2 或 DINOv3 骨幹；每類幾張就能用；新類別用 `extend`；結果可看模型關注的區塊） | `predict`、`retrieve`、`extend` |
+| 同上，類別固定、每類幾十張以上 | `IMAGE` × `classification` | 更準的分類，並看 Grad-CAM 知道模型看哪裡 | `vision.dino`（`finetune=lora`）（`linear` / `lora` / `full`） | `predict`（附 Grad-CAM）、`retrieve` |
 | 同上，資料量大、類別固定 | `IMAGE` × `classification` | 高準確度分類 | `vision.yolo`（`-cls` 權重微調，或 `pretrained=false` 從頭訓） | `predict` |
 | 同上，只有良品影像 | `IMAGE` × `anomaly_detection` | 找「跟正常不一樣」的影像並標出位置 | `vision.dino_patchcore` | `score`（含熱圖） |
 | SEM 線寬 / 孔洞 / 顆粒 | `IMAGE` × `segmentation` | 分割後量測幾何 | `vision.yolo`（`-seg`） | `segment`、`measure` |
 | 任何機台（SEM / TEM / 光學）的影像品質 | `IMAGE` × `anomaly_detection` | 黃金機台建立品質基準與浮動範圍；調機後驗收（含該調哪個旋鈕的建議）、日常監控、同一樣品在兩台機台的逐張比對 | `vision.image_quality`（CPU、免權重） | `compare`、`score` |
 | AOI / 外觀檢測 | `IMAGE` × `detection` | 缺陷定位、計數、分類 | `vision.yolo` | `detect` |
-| Wafer map / bin map | `IMAGE` × `classification` | 失效圖樣（環、刮痕、邊緣…）分類 | 先把 map 轉成圖片 → `vision.dino_fewshot` / `vision.yolo` | `predict` |
+| Wafer map / bin map | `IMAGE` × `classification` | 失效圖樣（環、刮痕、邊緣…）分類 | 先把 map 轉成圖片 → `vision.dino` / `vision.yolo` | `predict` |
 | FDC / 機台感測器 trace | `SEQUENCE` × `anomaly_detection` | 異常 run 偵測、找相似 run | `sequence.patch_autoencoder` | `score`、`retrieve`、`embed` |
 | FDC 摘要特徵 + 量測值 | `TABULAR` × `regression` | 虛擬量測（VM） | `tabular.xgboost`、`tabular.catboost`（AutoML 會一起試 TabPFN / RF / 線性） | `predict` |
 | WAT / PCM / 電性、良率表 | `TABULAR` × `classification` / `regression` | 良率預測、失效分類、找關鍵參數（特徵重要度） | `tabular.xgboost`、`tabular.catboost`、`tabular.random_forest`、`tabular.linear`（可解釋基準） | `predict` |
@@ -67,13 +67,13 @@
 ### 3.3 TEM / SEM 表面影像 bin code（few-shot，新類別免重訓）
 
 - **資料**：zip，`<bin_code>/*.png`，每類 ≥ 3 張即可開始（建議 10+）。
-- **訓練**：`vision.dino_fewshot`（`backbone=dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`）。凍結 DINO 讀幾層 patch 特徵（`layers=cross` 跨層 9 / 10 / 11，或 `last`）做成每張一個向量，再接分類頭；評估用分層切分或 leave-one-out。DINOv3 的 patch 更細（16 px、含 register token），SEM / TEM 紋理通常較穩；權重是 gated，管理員要先在 Hugging Face 接受授權。
+- **訓練**：`vision.dino`（`backbone=dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`；精靈第一步先選 `finetune`：`none` 凍結（預設）/ `lora` / `full`）。凍結或微調過的 DINO 讀幾層 patch 特徵（`layers=cross` 跨層 9 / 10 / 11，或 `last`）做成每張一個向量，再接分類頭；評估用分層切分或 leave-one-out。DINOv3 的 patch 更細（16 px、含 register token），SEM / TEM 紋理通常較穩；權重是 gated，管理員要先在 Hugging Face 接受授權。
 - **怎麼分類**（`head`，`docs/MODEL_CATALOG.md` §4.1b）：`auto` 預設在每類不到 10 張時用最近原型（prototype：每類一個平均向量比 cosine）、夠多時用線性分類頭；同一類有多種長相用 `knn`；也可選 `svm`。`image_size=336 / 448` 看小瑕疵。
 - **有正常類別時（good / normal / ok / pass 資料夾，或 `normal_class` 指定任何名字）** 自動走 PatchCore 兩階段：正常影像的 patch 建記憶庫先判「正常 / 異常」，異常影像只拿超過門檻的 patch（缺陷區塊）加權成描述子，再分 scratch / void … 這些缺陷資料夾；`predict` 多回 `anomaly_score`、`is_anomaly`、缺陷位置，疊圖就是 patch 異常分數；`score_agg` / `coreset_ratio` / `bank_augment` 預設 `auto`，實際選了什麼寫在 log 與 metadata 的 `resolved`。good 其實只是另一種圖樣時設 `patchcore=off`。
 - **新增 bin code**：建推論 Job，`config.mode="extend"`，輸入是新類別的資料夾 zip → 產生新版本模型並設為預設，原本的類別都保留。
 - **推論**：`predict`（`config.min_similarity` 低於門檻回 `unknown`，避免硬塞進既有類別）、`retrieve`（`order` 選只找最相似 / 只找最不相似 / 兩者，`k` 選幾個；最不相似用來找離群或挑下一批要標註的）。
 - **看模型在看哪裡**：`predict` / `retrieve` 每張影像都寫一張「模型關注的區塊」疊圖（每個 patch 與匹配到的原型 / 鄰居的相似度），結果頁點開樣本就疊在原圖上（可關、可調透明度）；紅色區域就是這張圖被判成該類別的依據，和你的直覺不合時通常是背景或資訊列在主導 → 先用 `image.crop` 前處理切掉。
-- **何時改用微調**：類別固定、每類有幾十張以上、凍結特徵不夠準 → `vision.dino_finetune`（LoRA：在 DINO 的注意力層加低秩轉接器和線性頭一起訓練，產物只有幾 MB；`epochs` / `batch` 預設 auto）。推論同樣有 `predict`（`config.min_confidence` 低於門檻回 `unknown`；附 CAM 疊圖 = 線性頭權重對每個 patch 的貢獻）、`retrieve`（同樣可選方向）、`embed`。
+- **何時微調**：類別固定、每類有幾十張以上、凍結特徵不夠準 → 同一個家族把 `finetune` 改成 `lora`（在 DINO 的注意力層加低秩轉接器和線性頭一起訓練，產物只多幾 MB；`epochs` / `batch` 預設 auto）；每類上百張、VRAM 夠再用 `full`。微調後的骨幹同時供特徵、分類頭與 PatchCore 使用；`predict` 附 CAM 疊圖（線性頭權重對每個 patch 的貢獻）。
 - **何時改用 YOLO 分類**：類別固定、每類有數百張、要更高準確度 → `vision.yolo`（`model=yolov8s`、`pretrained=true` 用模型庫的 `yolov8s-cls.pt` 微調；`pretrained=false` 從頭訓練）。
 
 ### 3.4 只有良品影像：PatchCore 異常 + 熱圖

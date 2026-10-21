@@ -11,7 +11,8 @@ export type ModelFamily =
   | "tabular.tabpfn"
   | "tabular.isolation_forest"
   | "vision.yolo"
-  | "vision.dino_fewshot"
+  | "vision.dino"
+  | "vision.dino_fewshot" // deprecated ids: jobs / artifacts from before the merge into vision.dino
   | "vision.dino_finetune"
   | "vision.dino_patchcore"
   | "vision.image_quality"
@@ -490,6 +491,8 @@ export interface CatalogFamily {
   max_rows?: number;
   defaults: Record<string, unknown>;
   search_space: Record<string, { type: string; low?: number; high?: number; log?: boolean; choices?: unknown[] }>;
+  /** Kept in the catalog only so old artifacts still load; never offered for new training jobs. */
+  deprecated?: boolean;
   /** train-time augmentation ops the wizard offers as a multi-select (defaults.augment = preselected) */
   augment_choices?: string[];
   weights: string[];

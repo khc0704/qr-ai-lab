@@ -152,31 +152,34 @@ def test_chosen_weight_must_be_in_the_zoo(monkeypatch):
 
     monkeypatch.setattr(jobs_svc.zoo_svc, "weight_present", lambda wid: wid in {"dinov2-small", "yolov8n-seg"})
     check = jobs_svc._check_chosen_weight
-    check("vision.dino_fewshot", "classification", {})
-    check("vision.dino_fewshot", "classification", {"backbone": "dinov2-small"})
+    check("vision.dino", "classification", {})
+    check("vision.dino", "classification", {"backbone": "dinov2-small"})
     check("vision.yolo", "segmentation", {"model": "yolov8n"})
     check("vision.yolo", "segmentation", {"model": "yolov8m", "pretrained": False})  # from scratch: no weight
     check("tabular.xgboost", "regression", {"max_depth": 4})
     with pytest.raises(HTTPException) as e:
-        check("vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16"})
+        check("vision.dino", "classification", {"backbone": "dinov3-vits16"})
     assert e.value.detail["code"] == "WEIGHTS_MISSING" and "dinov3-vits16" in e.value.detail["message"]
     with pytest.raises(HTTPException) as e:
         check("vision.yolo", "detection", {"model": "yolov8n"})  # only the -seg file is present
     assert e.value.detail["code"] == "WEIGHTS_MISSING"
     with pytest.raises(HTTPException) as e:
-        check("vision.dino_finetune", "classification", {"backbone": "resnet50"})
+        check("vision.dino", "classification", {"backbone": "resnet50"})
     assert e.value.detail["code"] == "WEIGHT_UNKNOWN"
 
 
-def test_training_memory_must_reach_the_catalog_minimum():
+def test_deprecated_families_cannot_be_trained_but_still_load():
     import pytest
     from fastapi import HTTPException
 
+    from app.catalog import loader
     from app.services import jobs as jobs_svc
 
-    assert jobs_svc.memory_min_mb("vision.yolo") == 8192 and jobs_svc.memory_min_mb("tabular.linear") == 1024
-    jobs_svc._check_memory_min("vision.yolo", 8192)
-    jobs_svc._check_memory_min("tabular.linear", 1024)
+    jobs_svc._check_not_deprecated("vision.dino")
+    jobs_svc._check_not_deprecated("tabular.linear")
     with pytest.raises(HTTPException) as e:
-        jobs_svc._check_memory_min("vision.dino_finetune", 4096)
-    assert e.value.detail["code"] == "MEMORY_BELOW_MIN" and "8192" in e.value.detail["message"]
+        jobs_svc._check_not_deprecated("vision.dino_fewshot")
+    assert e.value.detail["code"] == "MODEL_DEPRECATED"
+    # the legacy ids stay in the catalog (old artifacts, job rows) but the public listing marks them
+    assert loader.public_catalog()["families"]["vision.dino_finetune"]["deprecated"] is True
+    assert "deprecated" not in loader.public_catalog()["families"]["vision.dino"]

@@ -105,10 +105,11 @@ def test_fewshot_feature_options_roundtrip(tmp_path, ctx, params):
     _tiny_dino(zoo, layers=3)
     ctx.zoo = resolver(zoo, {"dinov2-small": "dinov2-small/"})
     root, a, b, ds = _bins(tmp_path)
-    t = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov2-small", **params}, ctx)
+    t = registry.create_trainer("vision.dino", "classification", {"backbone": "dinov2-small", **params}, ctx)
     t.fit(ds)
     expected_head = "prototype" if params["head"] == "auto" else params["head"]  # 6 per class < 10 → prototypes
     assert t.evaluate()["accuracy"] >= 0.5 and t.meta["resolved"]["head"] == expected_head
+    assert t.meta["finetune"] == "none" and t.meta["resolved"]["finetune"] == "none"
     feats = t.meta["features"]
     assert isinstance(feats["layers"], list) and "pool" not in feats
     if params["layers"] == "auto":
@@ -124,7 +125,7 @@ def test_fewshot_feature_options_roundtrip(tmp_path, ctx, params):
     arts = t.export(tmp_path / "out")
     model_dir = tmp_path / "out" / "model"
     assert (model_dir / "head.joblib").exists() == (expected_head in ("linear", "svm"))
-    inf = registry.create_inferencer("vision.dino_fewshot", ctx)
+    inf = registry.create_inferencer("vision.dino", ctx)
     inf.load(model_dir, arts[0].metadata)
     assert inf.dino.layers == tuple(feats["layers"]) and inf.head.kind == expected_head
     probe = Dataset("IMAGE", "classification", {}, X=a[:2] + b[:2], ids=["a0", "a1", "b0", "b1"], root=root)
@@ -178,15 +179,15 @@ def test_fewshot_patchcore_two_stage_defects(tmp_path, ctx):
     labels = ["pass_wafer"] * 10 + ["scratch"] * 5 + ["void"] * 5
     ds = Dataset("IMAGE", "classification", {}, X=paths, y=labels, ids=[p.name for p in paths], root=root)
     # no known normal folder name → patchcore=auto stays off
-    t0 = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16"}, ctx)
+    t0 = registry.create_trainer("vision.dino", "classification", {"backbone": "dinov3-vits16"}, ctx)
     t0.fit(ds)
     assert t0.bank is None and t0.meta["resolved"]["patchcore"] is False
     with pytest.raises(ValueError, match="normal_class"):
         registry.create_trainer(
-            "vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16", "patchcore": "on"}, ctx
+            "vision.dino", "classification", {"backbone": "dinov3-vits16", "patchcore": "on"}, ctx
         ).fit(ds)
     t = registry.create_trainer(
-        "vision.dino_fewshot",
+        "vision.dino",
         "classification",
         {"backbone": "dinov3-vits16", "normal_class": "pass_wafer", "neighborhood": 3, "score_agg": "top1"},
         ctx,
@@ -200,7 +201,7 @@ def test_fewshot_patchcore_two_stage_defects(tmp_path, ctx):
     arts = t.export(tmp_path / "out")
     bank = np.load(tmp_path / "out" / "model" / "prototypes.npz")
     assert "normal_bank" in bank.files and bank["defect_support"].shape[0] == 20
-    inf = registry.create_inferencer("vision.dino_fewshot", ctx)
+    inf = registry.create_inferencer("vision.dino", ctx)
     inf.load(tmp_path / "out" / "model", arts[0].metadata)
     assert inf.bank is not None and inf.defect_head is not None and inf.bank.score_agg == "top1"
     probe = Dataset("IMAGE", "classification", {}, X=good[:2] + scratch[:2] + void[:2], ids=list("gGsSvV"), root=root)
@@ -473,3 +474,85 @@ def test_automl_samples_default_or_none_augmentation():
     space = {"augment": {"type": "categorical", "choices": ["default", "none"]}}
     assert _sample(Trial("default"), "vision.yolo", space) == {}  # the family default stays
     assert _sample(Trial("none"), "vision.yolo", space) == {"augment": []}
+
+
+@pytest.mark.parametrize("finetune", ["lora", "full"])
+def test_dino_finetune_then_features_heads_and_patchcore(tmp_path, ctx, finetune):
+    """The merged family: fine-tune first (LoRA adapters or every weight), then the frozen-feature pipeline on the
+    fine-tuned backbone; the adapters / backbone travel with the artifact and survive ``extend``."""
+    zoo = tmp_path / "zoo"
+    _tiny_dino(zoo, layers=3)
+    ctx.zoo = resolver(zoo, {"dinov2-small": "dinov2-small/"})
+    root = tmp_path / "imgs"
+    good = _images(root, "good", 12, "dark", 1)
+    scratch = _images(root, "scratch", 6, "blob", 2)
+    paths = good + scratch
+    ds = Dataset(
+        "IMAGE",
+        "classification",
+        {},
+        X=paths,
+        y=["good"] * 12 + ["scratch"] * 6,
+        ids=[p.name for p in paths],
+        root=root,
+    )
+    params = {
+        "backbone": "dinov2-small",
+        "finetune": finetune,
+        "epochs": 2,
+        "batch": 6,
+        "lr": 5e-3,
+        "rank": 2,
+        "head": "linear",
+    }
+    progress: list[float] = []
+    ctx.on_progress = lambda f, stage: progress.append(f)
+    t = registry.create_trainer("vision.dino", "classification", params, ctx)
+    t.fit(ds)
+    assert t.finetune == finetune and t.ft is not None and t.meta["finetune"] == finetune
+    assert (
+        t.meta["resolved"]["finetune"] == finetune and t.meta["resolved"]["epochs"] == 2 and t.meta["finetune_metrics"]
+    )
+    assert t.bank is not None and t.normal_class == "good"  # the two-stage classifier runs on fine-tuned features
+    assert progress == sorted(progress) and max(progress) <= 1.0  # the nested fine-tune bar never runs backwards
+    arts = t.export(tmp_path / "out")
+    model_dir = tmp_path / "out" / "model"
+    assert (model_dir / "prototypes.npz").exists() and (model_dir / "head.joblib").exists()
+    assert (model_dir / "lora.pt").exists() == (finetune == "lora") and (model_dir / "backbone").is_dir() == (
+        finetune == "full"
+    )
+    inf = registry.create_inferencer("vision.dino", ctx)
+    inf.load(model_dir, arts[0].metadata)
+    assert inf.dino.adapted and inf.bank is not None
+    probe = Dataset("IMAGE", "classification", {}, X=good[:2] + scratch[:2], ids=["g0", "g1", "s0", "s1"], root=root)
+    res = inf.predict(probe, "predict", {}, tmp_path / "pred")
+    assert [r["prediction"] for r in res.rows][:2] == ["good", "good"] and res.rows[2]["is_anomaly"]
+    assert (tmp_path / "pred" / "attention" / "g0.png").exists()
+    # extend keeps the fine-tuned backbone next to the grown bank
+    more = _images(root, "void", 3, "bright", 5)
+    out2 = tmp_path / "out2" / "output"
+    out2.mkdir(parents=True)
+    res = inf.predict(
+        Dataset("IMAGE", "classification", {}, X=more, y=["void"] * 3, ids=[p.name for p in more], root=root),
+        "extend",
+        {},
+        out2,
+    )
+    assert res.summary["new_classes"] == ["void"]
+    new_dir = tmp_path / "out2" / "model"
+    assert (new_dir / "lora.pt").exists() == (finetune == "lora") and (new_dir / "backbone").is_dir() == (
+        finetune == "full"
+    )
+    inf2 = registry.create_inferencer("vision.dino", ctx)
+    inf2.load(new_dir, res.extra_artifacts[0].metadata)
+    assert inf2.dino.adapted and "void" in inf2.classes
+    with pytest.raises(ValueError, match="finetune"):
+        registry.create_trainer("vision.dino", "classification", {**params, "finetune": "adapter"}, ctx).fit(ds)
+
+
+def test_legacy_family_ids_still_resolve(tmp_path, ctx):
+    from trainer.models import vision
+
+    assert registry.create_trainer("vision.dino_fewshot", "classification", {}, ctx).__class__ is vision.DinoTrainer
+    assert registry.create_inferencer("vision.dino_fewshot", ctx).__class__ is vision.DinoInferencer
+    assert registry.create_inferencer("vision.dino_finetune", ctx).__class__ is vision.DinoFinetuneInferencer

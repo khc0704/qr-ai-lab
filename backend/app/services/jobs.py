@@ -192,20 +192,10 @@ def ephemeral_resources(project: Project, model_family: str) -> dict[str, Any]:
 YOLO_WEIGHT_SUFFIX = {"segmentation": "-seg", "classification": "-cls"}
 
 
-def memory_min_mb(model_family: str) -> int:
-    return int(loader.family(model_family)["resources"].get("memory_mb_min") or 0)
-
-
-def _check_memory_min(model_family: str, requested_mb: int) -> None:
-    """Below the catalog minimum a deep-learning job is OOM-killed by its cgroup (a CUDA-initialised torch process
-    is ~3 GB before any data, each DataLoader worker another ~0.75 GB); refuse up front instead of failing
-    minutes later."""
-    need = memory_min_mb(model_family)
-    if requested_mb < need:
-        raise bad_request(
-            "MEMORY_BELOW_MIN",
-            f"{model_family} 至少需要 {need} MB 記憶體（目前 {requested_mb} MB）；請在資源步驟調高",
-        )
+def _check_not_deprecated(model_family: str) -> None:
+    """A family kept in the catalog only so its old artifacts can still be loaded for inference."""
+    if loader.family(model_family).get("deprecated"):
+        raise bad_request("MODEL_DEPRECATED", f"{model_family} 已併入其他家族，請改選目錄裡現有的模型")
 
 
 def _check_chosen_weight(model_family: str, task_type: str | None, config: dict[str, Any]) -> None:
@@ -257,6 +247,7 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 raise bad_request("MODEL_FAMILY_REQUIRED", "手動模式需要指定 model_family")
             if not loader.supports(model_family, project.data_type, task_type):
                 raise bad_request("MODEL_NOT_SUPPORTED", f"{model_family} 不支援 {project.data_type} × {task_type}")
+            _check_not_deprecated(model_family)
             if loader.needs_gpu(model_family) and body.requested_gpu == 0:
                 raise bad_request("GPU_REQUIRED", f"{model_family} 需要至少 1 GPU")
             if not zoo_svc.family_ready(model_family):
@@ -264,7 +255,6 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                     "WEIGHTS_MISSING", f"{model_family} 需要的預訓練權重尚未匯入模型庫，請管理員在「模型庫」頁匯入"
                 )
             _check_chosen_weight(model_family, task_type, body.config or {})
-            _check_memory_min(model_family, body.requested_memory_mb)
         else:
             try:
                 search = loader.automl_search(project.data_type, task_type, body.input.spec)
@@ -283,17 +273,6 @@ async def create(session: AsyncSession, actor: User, project: Project, body: Job
                 search["skipped_missing_weights"] = missing
                 if not search["candidates"]:
                     raise bad_request("WEIGHTS_MISSING", f"候選模型 {missing} 的預訓練權重都不在模型庫，請管理員先匯入")
-            low = [c for c in search["candidates"] if memory_min_mb(c) > body.requested_memory_mb]
-            if low:
-                search["candidates"] = [c for c in search["candidates"] if c not in low]
-                search["skipped_low_memory"] = low
-                if not search["candidates"]:
-                    need = max(memory_min_mb(c) for c in low)
-                    have = body.requested_memory_mb
-                    raise bad_request(
-                        "MEMORY_BELOW_MIN",
-                        f"所有候選模型都需要至少 {need} MB 記憶體（目前 {have} MB），請在資源步驟調高",
-                    )
             config["search"] = search
             model_family = None
         if body.input.kind == "inline":
@@ -613,9 +592,7 @@ async def restart(session: AsyncSession, actor: User, job: Job) -> Job:
     if job.mode == "auto" and isinstance(config.get("search"), dict):
         # candidates / skipped weights are recomputed from the catalog and the model zoo at creation time
         config["search"] = {
-            k: v
-            for k, v in config["search"].items()
-            if k not in ("candidates", "skipped_missing_weights", "skipped_low_memory")
+            k: v for k, v in config["search"].items() if k not in ("candidates", "skipped_missing_weights")
         }
     config["restarted_from"] = job.id
     body = JobCreate(

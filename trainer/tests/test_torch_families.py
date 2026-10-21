@@ -190,12 +190,12 @@ def test_dino_fewshot_extend_and_patchcore(tmp_path, ctx):
     ds = Dataset(
         "IMAGE", "classification", {}, X=a + b, y=["BIN_A"] * 6 + ["BIN_B"] * 6, ids=[p.name for p in a + b], root=root
     )
-    t = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov2-small", "k": 3}, ctx)
+    t = registry.create_trainer("vision.dino", "classification", {"backbone": "dinov2-small", "k": 3}, ctx)
     t.fit(ds)
     assert t.evaluate()["accuracy"] >= 0.5 and t.meta["classes"] == ["BIN_A", "BIN_B"]
     assert t.meta["resolved"]["head"] == "prototype" and t.meta["resolved"]["patchcore"] is False
     arts = t.export(tmp_path / "out")
-    inf = registry.create_inferencer("vision.dino_fewshot", ctx)
+    inf = registry.create_inferencer("vision.dino", ctx)
     inf.load(tmp_path / "out" / "model", arts[0].metadata)
     res = inf.predict(
         Dataset("IMAGE", "classification", {}, X=a[:2] + b[:2], ids=["a0", "a1", "b0", "b1"], root=root),
@@ -290,10 +290,9 @@ def test_dino_finetune_roundtrip(tmp_path, ctx):
         (model_dir / "head.pt").exists() and (model_dir / "reference.npz").exists() and (model_dir / "lora.pt").exists()
     )
     assert arts[0].name == "dino_lora" and arts[0].metadata["inference_modes"] == ["predict", "embed", "retrieve"]
-    # linear / full are no longer training options (linear = the frozen family's head=linear)
-    for gone in ("linear", "full"):
-        with pytest.raises(ValueError, match="lora"):
-            registry.create_trainer("vision.dino_finetune", "classification", {**params, "method": gone}, ctx).fit(ds)
+    # linear is no longer a training option (it is vision.dino with finetune=none + head=linear)
+    with pytest.raises(ValueError, match="lora"):
+        registry.create_trainer("vision.dino_finetune", "classification", {**params, "method": "linear"}, ctx).fit(ds)
 
     inf = registry.create_inferencer("vision.dino_finetune", ctx)
     inf.load(model_dir, arts[0].metadata)
@@ -355,10 +354,10 @@ def test_dinov3_register_tokens_attention_and_retrieve_order(tmp_path, ctx):
     ds = Dataset(
         "IMAGE", "classification", {}, X=a + b, y=["BIN_A"] * 6 + ["BIN_B"] * 6, ids=[p.name for p in a + b], root=root
     )
-    t = registry.create_trainer("vision.dino_fewshot", "classification", {"backbone": "dinov3-vits16", "k": 3}, ctx)
+    t = registry.create_trainer("vision.dino", "classification", {"backbone": "dinov3-vits16", "k": 3}, ctx)
     t.fit(ds)
     arts = t.export(tmp_path / "out")
-    inf = registry.create_inferencer("vision.dino_fewshot", ctx)
+    inf = registry.create_inferencer("vision.dino", ctx)
     inf.load(tmp_path / "out" / "model", arts[0].metadata)
     probe = Dataset("IMAGE", "classification", {}, X=a[:1] + b[:1], ids=["q/a0.png", "q/b0.png"], root=root)
     out = tmp_path / "pred"

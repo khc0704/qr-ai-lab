@@ -165,54 +165,73 @@ families:
       - { id: yolov8m-cls, file: yolov8m-cls.pt, source: "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8m-cls.pt", license: AGPL-3.0, sha256: null, kind: file }
     sop: 即時物件偵測 / 分割 / 分類的標準做法；可從模型庫的預訓練權重微調，或 pretrained=false 從頭訓練。freeze=auto：影像少於 200 張時凍結骨幹只訓練頸部與頭（較穩），多的話整個網路一起訓練；augment 全部不勾時連 YOLO 內建的 mosaic / 色相 / RandAugment 也關掉；自動模式會各試「預設增強」與「完全不增強」。
 
-  vision.dino_fewshot:
-    label: DINO 特徵分類（凍結骨幹；可接 PatchCore 兩階段）
+  vision.dino:
+    label: DINO 影像分類（凍結或微調 → 特徵 → 分類頭 / PatchCore）
     group: vision
     framework: torch
     supports: { IMAGE: [classification] }
     inference_modes: [predict, embed, retrieve]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 5
-    # features: patch tokens only (no CLS), mean per layer, layers concatenated. layers: last / cross (9,10,11 of
-    # 12, scaled by depth) / a list. head: auto (prototype below 10 images per class, else linear) / prototype /
-    # knn / linear / svm. patchcore: auto (on when a normal folder good / normal / ok / pass or normal_class
-    # exists) / on / off → PatchCore bank decides normal vs defect, the anomalous patches are classified.
-    defaults: { backbone: dinov2-small, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto }
+    # step 1 finetune: none (frozen) / lora (adapters, the default when fine-tuning) / full; step 2 features:
+    # patch tokens only (no CLS), mean per layer, layers concatenated — layers last / cross (9,10,11 of 12,
+    # scaled by depth) / a list; step 3 head: auto (prototype below 10 images per class, else linear) /
+    # prototype / knn / linear / svm; patchcore: auto (on when a normal folder good / normal / ok / pass or
+    # normal_class exists) / on / off → the bank decides normal vs defect, the anomalous patches are classified.
+    defaults: { backbone: dinov2-small, finetune: none, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, backbone_lr: 0.00001, augment: [crop, hflip] }
+    augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
     search_space:
       backbone: { type: categorical, choices: [dinov2-small, dinov2-base, dinov3-vits16, dinov3-vitb16] }
+      finetune: { type: categorical, choices: [none, lora] }
       layers: { type: categorical, choices: [last, cross] }
       head: { type: categorical, choices: [prototype, knn, linear, svm] }
-      image_size: { type: categorical, choices: [224, 336, 448] }
+      image_size: { type: categorical, choices: [224, 336] }
+      augment: { type: categorical, choices: [default, none] }
+      lr: { type: float, low: 0.0001, high: 0.01, log: true }
+      rank: { type: categorical, choices: [4, 8, 16] }
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
       - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
-    sop: 凍結 DINOv2 / v3，讀幾層 patch 特徵（layers = last 或 cross 跨層）做成每張影像一個向量，再接分類：head = auto 會在每類不到 10 張時用最近原型、夠多時用線性分類頭；也可選 knn / svm。新增類別只要加幾張範例（extend），不用重訓。資料夾裡有正常類別（good / normal / ok / pass，或 normal_class 指定）時自動開 PatchCore：先用正常影像的 patch 庫判正不正常，異常的只拿異常區塊去分缺陷類別（scratch、void…），沒看過的缺陷會回 unknown。
+    sop: 一條流程三步：先決定要不要微調骨幹（finetune = none 凍結、lora 在注意力層加低秩轉接器（微調的預設）、full 全參數），再從（微調過的）骨幹讀 patch 特徵（layers = cross 跨層 9/10/11 或 last），最後接分類（head = auto 在每類不到 10 張時用最近原型、夠多用線性頭；也可選 knn / svm）。新增類別只要加幾張範例（extend），不用重訓。資料夾裡有正常類別（good / normal / ok / pass，或 normal_class 指定）時自動開 PatchCore：先用正常影像的 patch 庫判正不正常，異常的只拿異常區塊去分缺陷類別，沒看過的缺陷回 unknown。
 
-  vision.dino_finetune:
-    label: DINO LoRA 微調分類
+  # ---- deprecated ids: kept so artifacts and job rows from before the merge still resolve (not selectable) ----
+  vision.dino_fewshot:
+    label: DINO 特徵分類（舊：已併入 vision.dino）
     group: vision
     framework: torch
+    deprecated: true
+    supports: { IMAGE: [classification] }
+    inference_modes: [predict, embed, retrieve]
+    resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
+    min_rows: 5
+    defaults: {}
+    search_space: {}
+    weights:
+      - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
+      - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
+      - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
+    sop: 舊家族；新任務請用 vision.dino（finetune = none）。
+
+  vision.dino_finetune:
+    label: DINO 微調分類（舊：已併入 vision.dino）
+    group: vision
+    framework: torch
+    deprecated: true
     supports: { IMAGE: [classification] }
     inference_modes: [predict, embed, retrieve]
     resources: { gpu: required, cpu_min: 2, memory_mb_min: 8192 }
     min_rows: 20
-    defaults: { backbone: dinov2-small, image_size: 224, layers: cross, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, augment: [crop, hflip] }
-    augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
-    search_space:
-      backbone: { type: categorical, choices: [dinov2-small, dinov3-vits16] }
-      layers: { type: categorical, choices: [last, cross] }
-      lr: { type: float, low: 0.0001, high: 0.01, log: true }
-      rank: { type: categorical, choices: [4, 8, 16] }
-      augment: { type: categorical, choices: [default, none] }
-      image_size: { type: categorical, choices: [224, 336] }
+    defaults: {}
+    search_space: {}
     weights:
       - { id: dinov2-small, file: dinov2-small/, source: "https://huggingface.co/facebook/dinov2-small", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov2-base, file: dinov2-base/, source: "https://huggingface.co/facebook/dinov2-base", license: Apache-2.0, sha256: null, kind: hf_repo }
       - { id: dinov3-vits16, file: dinov3-vits16/, source: "https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
       - { id: dinov3-vitb16, file: dinov3-vitb16/, source: "https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m", license: DINOv3-License, sha256: null, kind: hf_repo }
-    sop: 真的訓練 DINOv2 / v3：在注意力層加 LoRA 低秩轉接器，和線性分類頭一起訓練（基底權重不動，產物只有幾 MB）。類別固定、每類有幾十張以上、凍結特徵不夠準時選這個；類別會一直增加仍用凍結特徵分類。epochs / batch 預設 auto（依資料量與解析度決定）；augment 預設 crop + hflip（方向有意義的影像不要加翻轉 / 旋轉；全部不勾 = 不增強），自動模式會各試「預設增強」與「完全不增強」。layers / image_size 與凍結家族相同。
+    sop: 舊家族；新任務請用 vision.dino（finetune = lora）。
 
   vision.dino_patchcore:
     label: DINO PatchCore 異常偵測
@@ -350,9 +369,8 @@ automl:
     budget: { max_trials: 10, time_budget_minutes: 20 }
   - data_type: IMAGE
     tasks: [classification]
-    candidates: [vision.dino_fewshot, vision.dino_finetune, vision.yolo]
+    candidates: [vision.dino, vision.yolo]
     rules:
-      - { if: "row_count < 20", drop: [vision.dino_finetune] }
       - { if: "row_count < 100", drop: [vision.yolo] }
     budget: { max_trials: 8, time_budget_minutes: 120 }
   - data_type: IMAGE

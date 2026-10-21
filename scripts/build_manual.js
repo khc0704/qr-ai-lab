@@ -199,7 +199,7 @@ const children = [
     "mode = auto，CPU 2、記憶體 4 GB、GPU 0。AutoML 會依序試 XGBoost、隨機森林、線性、SVM（> 5 萬列自動略過 SVM）。",
     "完成後看 leaderboard：每個 trial 的家族、參數、rmse；最佳模型自動匯出並登記，report/feature_importance.json 列出重要特徵。",
     "候選家族：XGBoost、CatBoost（另一個梯度提升樹，小資料與類別欄較穩）、TabPFN（預訓練好的表格 transformer，fit 只是把訓練列放進上下文、沒有超參數要調，幾十到幾千列常常直接最準；權重來自模型庫，> 1 萬列自動跳過）、隨機森林、線性、SVM。",
-    "記憶體怎麼填：表格任務 2–4 GB 夠；GPU 影像 / 深度學習任務主程序就要約 3 GB，每個資料載入 worker 再 0.75 GB，請給 8 GB 以上。精靈的資源步驟會顯示所選模型的最低需求，低於它不能送出；自動模式會跳過記憶體不夠的候選模型（結果摘要的 skipped_low_memory）。",
+    "記憶體怎麼填（沒有硬性下限）：表格任務 2–4 GB 夠；GPU 影像 / 深度學習任務主程序就要約 3 GB，每個資料載入 worker 再 0.75 GB，請給 8 GB 以上。精靈的資源步驟會顯示所選模型的最低需求，低於它不能送出；自動模式會跳過記憶體不夠的候選模型（結果摘要的 skipped_low_memory）。",
   ]),
   h2("4.4 推論"),
   ...ul([
@@ -222,9 +222,9 @@ const children = [
     ["detection / segmentation", "zip：YOLO 格式 images/、labels/、data.yaml", "分割用多邊形標註"],
     ["anomaly_detection", "zip：good/（或 normal/、ok/）為正常；其他資料夾視為異常（只用於評估）", "PatchCore 與影像品質基準都用這個格式"],
   ], [26, 40, 34]),
-  h2("5.2 分類：bin code 會一直增加 → DINO few-shot"),
+  h2("5.2 影像分類 → DINO（先決定要不要微調骨幹）"),
   ...ul([
-    "家族 vision.dino_fewshot：凍結 DINOv2 或 DINOv3（config.backbone = dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16，權重來自模型庫）取特徵，每類存一個原型；每類幾張範例就能用。需要 GPU 1。DINOv3 的 patch 較細、SEM / TEM 紋理通常較穩，但權重是 gated（管理員要先在 Hugging Face 接受授權）。",
+    "家族 vision.dino：精靈會先問「要不要微調骨幹」（不微調 = 凍結預訓練 DINOv2 / DINOv3，每類幾張就能用、幾分鐘完成；LoRA = 在注意力層加低秩轉接器一起訓練，每類幾十張以上、影像和自然影像差很多時用；全參數 = 每類上百張、VRAM 夠時），再選特徵與分類方式（config.backbone = dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16，權重來自模型庫）。需要 GPU 1。DINOv3 的 patch 較細、SEM / TEM 紋理通常較穩，但權重是 gated（管理員要先在 Hugging Face 接受授權）。",
     "推論 predict：回最近的類別與相似度；config.min_similarity 可讓低相似度的回 unknown。retrieve：找最相似 / 最不相似的範例影像，表單可選方向（只找最相似、只找最不相似、兩者都列）與每筆回幾個；最不相似用來找離群或挑下一批要標註的。",
     "看模型在看哪裡：predict / retrieve 每張影像都會多一張「模型關注的區塊」疊圖；在結果列點開樣本，疊圖會以可調透明度覆蓋在你瀏覽器裡的原圖上（紅 = 影響判斷最多的位置；只覆蓋模型實際看到的中央區域）。紅色落在背景或資訊列時，先用前處理 image.crop 切掉再訓練。",
     "新增 bin code 不用重訓：建立推論任務，config.mode = extend，輸入新類別的資料夾 zip，平台產生新版本模型並設為預設（分類頭也在快取特徵上重新 fit）。",
@@ -232,11 +232,10 @@ const children = [
     "怎麼分類（head）：auto（預設）在每類不到 10 張時用 prototype（每類一個平均向量比 cosine 相似度），夠多時用 linear（線性分類頭）；同一類有多種長相用 knn；也可選 svm。auto 選了什麼會印在任務 log 與結果頁的 resolved。",
     "有正常類別時的兩階段缺陷分類（patchcore）：資料夾裡有 good / normal / ok / pass（或在 normal_class 填正常資料夾的名字，任何名字都行）就自動啟用：先用正常影像的 patch 庫判這張正不正常，異常的只拿超過門檻的區塊去分 scratch / void 這些缺陷資料夾；predict 多回 anomaly_score、is_anomaly 與缺陷位置，疊圖就是異常分數。score_agg / coreset_ratio / bank_augment 都預設 auto。good 其實只是另一種圖樣時把 patchcore 設 off。",
   ]),
-  h2("5.3 分類：類別固定、每類幾十張以上 → DINO 微調"),
+  h2("5.3 微調的參數"),
   ...ul([
-    "家族 vision.dino_finetune：LoRA 微調 DINOv2 / DINOv3，在注意力層加低秩轉接器和線性分類頭一起訓練（基底權重不動，產物只有幾 MB）。需要 GPU 1。",
-    "參數：epochs 與 batch 預設 auto（依資料量與解析度決定）、lr、rank（LoRA 秩）、augment（訓練時的隨機增強，預設 crop + hflip，自己挑：hflip、vflip、rotate90、crop、brightness、contrast；方向有意義的影像不要加翻轉 / 旋轉；全部不勾 = 完全不增強）、layers / image_size（與凍結特徵分類相同）；自動模式會在各種層與「預設增強 / 不增強」之間搜尋。推論 predict 回 prediction、confidence、top3（config.min_confidence 可讓低信心的回 unknown），並附 CAM 疊圖（線性頭權重對每個區塊的貢獻）；retrieve 找最像 / 最不像的訓練影像；embed 輸出特徵向量。",
-    "few-shot 與微調怎麼選：類別會一直增加、每類只有幾張 → few-shot；類別固定、每類幾十張以上、要更準 → 微調。",
+    "選了 LoRA 或全參數之後，模型與參數步驟多出 epochs 與 batch（預設 auto，依資料量與解析度決定）、lr、rank（LoRA 秩）、augment（訓練時的隨機增強，預設 crop + hflip；方向有意義的影像不要加翻轉 / 旋轉；全部不勾 = 完全不增強）；全參數再多 backbone_lr。微調完成後特徵、分類頭與 PatchCore 都用微調過的骨幹，新增類別（extend）也不用重訓。",
+    "怎麼選：類別會一直增加、每類只有幾張 → 不微調；類別固定、每類幾十張以上、要更準 → LoRA；自動模式會在不微調 / LoRA 之間搜尋。",
   ]),
   h2("5.4 分類：類別固定、資料多 → YOLO 分類"),
   ...ul([

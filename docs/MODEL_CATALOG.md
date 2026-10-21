@@ -68,8 +68,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.tabpfn` | TABULAR × cls / reg | predict | TabPFN v2.5 表格基礎模型：免訓練、免調參，把訓練列放進上下文直接預測；幾十到幾千列最準，≤ 5 萬列 | CPU（GPU 快很多） | `tabpfn-v2.5-classifier-v2.5_default.ckpt`、`tabpfn-v2.5-regressor-v2.5_default.ckpt` | `.joblib` |
 | `tabular.isolation_forest` | TABULAR × anomaly | score | 多參數離群 | CPU | 無 | `.joblib`（含門檻） |
 | `vision.yolo` | IMAGE × detection / segmentation / classification | detect / segment / measure / predict | Ultralytics YOLOv8（ultralytics 8.1），微調或從頭；`freeze=auto` 影像少時凍結骨幹 | GPU | `yolov8n/s/m[-seg|-cls].pt`（Hugging Face `Ultralytics/YOLOv8`） | `model/best.pt` + `report/training_curve.csv` |
-| `vision.dino_fewshot` | IMAGE × classification | predict / embed / retrieve / extend | 凍結 DINOv2 / DINOv3 的 patch 特徵（`layers` last / cross）+ 分類頭（auto / prototype / knn / linear / svm）；有正常資料夾時可開 PatchCore 兩階段（先判異常、再分缺陷類別）；新類別免重訓；predict / retrieve 附疊圖（原型相似度或線性頭的 CAM） | GPU | `dinov2-small/`、`dinov2-base/`、`dinov3-vits16/`、`dinov3-vitb16/` | `model/prototypes.npz` + `head.joblib` + `output/attention/*.png` |
-| `vision.dino_finetune` | IMAGE × classification | predict / embed / retrieve | LoRA 微調 DINOv2 / v3（注意力層低秩轉接器 + 線性頭，同一套 `layers` / `image_size`）；predict 附 CAM 疊圖 | GPU | `dinov2-small/`、`dinov2-base/`、`dinov3-vits16/`、`dinov3-vitb16/` | `model/head.pt` + `lora.pt` + `reference.npz` |
+| `vision.dino` | IMAGE × classification | predict / embed / retrieve / extend | 一條流程：`finetune`（none 凍結 / lora / full）→ 骨幹的 patch 特徵（`layers` last / cross）→ 分類頭（auto / prototype / knn / linear / svm）；有正常資料夾時可開 PatchCore 兩階段（先判異常、再分缺陷類別）；新類別免重訓；predict / retrieve 附疊圖（原型相似度或線性頭的 CAM） | GPU | `dinov2-small/`、`dinov2-base/`、`dinov3-vits16/`、`dinov3-vitb16/` | `model/prototypes.npz` + `head.joblib`（+ `lora.pt` 或 `backbone/`）+ `output/attention/*.png` |
 | `vision.dino_patchcore` | IMAGE × anomaly | score（熱圖）/ embed | 正常影像 patch 記憶庫（PatchCore）；`layers` cross / last、`score_agg` max / top1、`coreset_ratio` / `bank_augment` 自動 | GPU | `dinov2-small/`、`dinov3-vits16/` | `model/memory_bank.npz` |
 | `vision.image_quality` | IMAGE × anomaly | compare / score / embed | 17 個無參考影像品質指標的黃金機台基準與浮動範圍；compare 產出機台比對報告 + 逐面向的調整建議；有 `golden/` 參考資料夾時逐張算全參考指標（PSNR / SSIM / MS-SSIM / GMSD）；每張影像附「偏離基準最多的區塊」疊圖 | CPU | 無 | `model/baseline.json` + `report/baseline_ranges.csv`；`output/maps/*.png`、`paired.csv` |
 | `sequence.patch_autoencoder` | SEQUENCE / SPECTRUM × anomaly | score / embed / retrieve | patch 嵌入 + 位置編碼 + 視窗 latent；score 回每個 patch 的分數與最偏離的區段；`score_method=patch_bank` 改用正常 patch 庫最近鄰 | CPU / GPU | 無 | `model/model.pt` + `reference.npz` |
@@ -90,8 +89,7 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 | `tabular.tabpfn` | `n_estimators=auto` | `n_estimators: 1 / 4 / 8`（上下文集成數；越多越準越慢）。`ignore_pretraining_limits=true` 可超過預訓練上限（不建議） |
 | `tabular.isolation_forest` | `n_estimators=200, contamination=auto` | `n_estimators: 100 … 500`；`max_samples: 0.2 … 1.0` |
 | `vision.yolo` | `model=yolov8s, imgsz=640, epochs=100, lr0=0.01, batch=-1, pretrained=true, freeze=auto, augment=[hflip, crop, brightness]` | `model: yolov8n / s / m`；`imgsz: 512 / 640 / 800`；`lr0: log 1e-3 … 2e-2`；`epochs: 50 … 150`；`freeze: auto / 0 / 10`（auto：影像少於 200 張凍結前 10 層 = 骨幹）；`augment: default / none`（自動模式各試「預設增強」與「完全不增強」；全部不勾時連 ultralytics 內建的 mosaic / mixup / 色相 / 飽和 / RandAugment / 隨機擦除也關）。`augment` 自選：`hflip / vflip / rotate90 / crop / brightness` |
-| `vision.dino_fewshot` | `backbone=dinov2-small, image_size=224, layers=cross, head=auto, k=auto, patchcore=auto, normal_class="", neighborhood=1, score_agg=auto, coreset_ratio=auto, bank_augment=auto` | `backbone: dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`；`layers: last / cross`；`head: prototype / knn / linear / svm`；`image_size: 224 / 336 / 448`（見 §4.1b；`auto` 的規則也在那裡） |
-| `vision.dino_finetune` | `backbone=dinov2-small, image_size=224, layers=cross, epochs=auto, batch=auto, lr=1e-3, rank=8, lora_alpha=16, augment=[crop, hflip]` | `backbone: dinov2-small / dinov3-vits16`；`layers: last / cross`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`；`augment: default / none`；`image_size: 224 / 336`。`epochs=auto` ≈ 400 步（5 … 40）、`batch=auto` 依解析度（224 → 16、336 → 8、448 → 4）。`augment` 自選：`hflip / vflip / rotate90 / crop / brightness / contrast`（`false` / `none` 關閉；`true` / `default` = crop + hflip），每個 op 各以 0.5 機率套用 |
+| `vision.dino` | `backbone=dinov2-small, finetune=none, image_size=224, layers=cross, head=auto, k=auto, patchcore=auto, normal_class="", neighborhood=1, score_agg=auto, coreset_ratio=auto, bank_augment=auto, epochs=auto, batch=auto, lr=1e-3, rank=8, lora_alpha=16, backbone_lr=1e-5, augment=[crop, hflip]` | `backbone: dinov2-small / dinov2-base / dinov3-vits16 / dinov3-vitb16`；`finetune: none / lora`（full 只在手動）；`layers: last / cross`；`head: prototype / knn / linear / svm`；`image_size: 224 / 336`；`augment: default / none`；`lr: log 1e-4 … 1e-2`；`rank: 4 / 8 / 16`（見 §4.1b；`auto` 的規則也在那裡）。`vision.dino_fewshot` / `vision.dino_finetune` 是併入前的舊 id（目錄標 `deprecated`，只能推論舊產物） |
 | `vision.dino_patchcore` | `backbone=dinov2-small, image_size=224, layers=cross, neighborhood=1, score_agg=auto, coreset_ratio=auto, bank_augment=auto, k=3` | `backbone: dinov2-small / dinov3-vits16`；`layers: last / cross`；`image_size: 224 / 336 / 448`；`neighborhood: 1 / 3`；`k: 1 … 9`（最近鄰數） |
 | `vision.image_quality` | `z_threshold=3.0, distance_percentile=99` | （無；推論 config：compare 的 `effect_warn / effect_fail / alpha`、全參考的 `paired`（預設自動）/ `reference_folder` / `ssim_warn=0.9` / `ssim_fail=0.7`、疊圖的 `maps=true` / `tiles=8`） |
 | `sequence.patch_autoencoder` | `patch_size=16, latent=32, layers=3, lr=1e-3, epochs=50, score_method=recon, coreset_ratio=0.1, bank_k=3` | `patch_size: 8 / 16 / 32`；`latent: 8 … 128`；`layers: 2 … 4`；`lr: log 1e-4 … 1e-2`；`score_method: recon / patch_bank`（patch_bank = 正常視窗的 patch token 建記憶庫，分數 = patch 到庫的 k 近鄰距離，視窗分數 = 最大值） |
@@ -105,10 +103,13 @@ zip 會在 Job 的工作目錄解壓，上傳檔本身在 Job 結束時刪除（
 共通：驗證集 = 20% 分層切分（分類）或隨機；異常偵測只用正常樣本訓練、異常樣本進驗證集；手動 Job 的 `config` 會覆蓋預設；
 AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial 抽到的參數（例如固定 `epochs`）。
 
-### 4.1b DINO 家族：特徵怎麼產生、怎麼分類（`jobs.config`）
+### 4.1b DINO 家族（`vision.dino`）：微調 → 特徵 → 分類（`jobs.config`）
 
-訓練一個影像模型拆成六步：**前處理**（§4.2）→ **資料增強**（`augment`，只在 LoRA 微調時有意義）→ **骨幹**（凍結 = `vision.dino_fewshot`；LoRA 微調 = `vision.dino_finetune`）→ **特徵** → **評分 / 分類** → **結果圖**。後三步的參數（實作在 `trainer/trainer/models/dino_features.py`）：
+訓練一個影像模型拆成六步：**前處理**（§4.2）→ **資料增強**（`augment`，只在微調時有意義）→ **骨幹要不要微調**（精靈獨立一步：`finetune` = `none` 凍結、`lora`、`full`）→ **特徵**（從凍結或微調過的骨幹讀）→ **評分 / 分類** → **結果圖**。所有參數（實作在 `trainer/trainer/models/dino_features.py` 與 `vision.py`）：
 
+| 參數 | 選項 | 意義與使用時機 |
+|---|---|---|
+| `finetune` | `none`（預設）/ `lora` / `full` | 要不要先訓練骨幹。`none`：凍結，直接用預訓練特徵（每類幾張就能用、幾分鐘、新類別免重訓）；`lora`：在注意力層的 q / k / v 加低秩轉接器（`rank`、`lora_alpha`）和線性頭一起訓練，基底權重不動、產物多一個幾 MB 的 `lora.pt`（影像和自然影像差很多、每類幾十張以上）；`full`：每個權重都訓練（`backbone_lr` 給預訓練權重、`lr` 給頭），產物包含整個 `backbone/`（每類上百張、VRAM 夠）。微調用類別資料夾當標籤、`epochs=auto`（約 400 步、5 … 40）、`batch=auto`（依解析度）、`augment` 預設 crop + hflip。微調完成後，下面的特徵、分類頭與 PatchCore **都改用微調過的骨幹**，推論與 `extend` 也一樣（轉接器 / 骨幹跟著產物走） |
 | 參數 | 選項 | 意義與使用時機 |
 |---|---|---|
 | `layers` | `cross`（預設）/ `last` / 層數列表（`9,10,11,12`，負數從後數） | 讀哪些 transformer 層的 **patch token**（CLS 一律不用）；每層都套最後的 LayerNorm，patch 平均成一個向量，再把各層沿特徵維度拼接（兩層 (N,384) → (N,768)）。`cross` = 第 9 / 10 / 11 層（12 層的 ViT-S / B；其他深度按比例：ViT-L 18 / 20 / 22），紋理、局部缺陷、PatchCore 都用它；`last` = 只讀最後一層，類別差異是整體長相時夠用、也最省。資料分析報告的「各層特徵代表什麼」會告訴你在你的資料上哪幾層最可分，直接填列表 |
@@ -133,7 +134,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 
 **結果圖**（`output/attention/<id>.png`，結果頁點開樣本就疊在原圖上）：prototype / knn 畫「每個 patch 與匹配原型 / 鄰居的相似度」；linear / svm 與 LoRA 微調畫 **CAM**（logit = patch 平均 · w，所以每個 patch 的 w · patch 就是它的貢獻，不需要 Grad-CAM）；PatchCore / 兩階段畫 patch 異常分數。
 
-**LoRA 微調（`vision.dino_finetune`）**：同一套 `layers` / `image_size`，在注意力層的 q / k / v 加 LoRA（`rank`、`lora_alpha`）和線性頭一起訓練；`epochs=auto`（約 400 步、5 … 40）、`batch=auto`（依解析度）、`lr` 1e-3；`augment` 預設 crop + hflip，自動模式各試「預設」與「不增強」。linear / full 兩個舊方法已取消：線性探針就是凍結家族的 `head=linear`，全參數微調資料量與 VRAM 需求太高。LoRA 微調後接 PatchCore 的組合第一版沒有做（ROADMAP）。
+**舊家族**：`vision.dino_fewshot`（= `finetune=none`）與 `vision.dino_finetune`（= `finetune=lora`，當年還有 linear / full）已併入 `vision.dino`；目錄裡標 `deprecated`，精靈不再列出、`POST /jobs` 用它們訓練會回 400 `MODEL_DEPRECATED`，舊產物仍可推論。
 
 **同樣思路的其他家族**：光譜 MAE 的 `embed_layers`（last / all）、`embed_pool`（mean / meanmax）與 `score_method=patch_bank`（一維 PatchCore，對局部波段異常敏感）、Patch AE 的 `score_method`；兩者的 `score` 都回每個 patch 的分數與最偏離的區段（`hot_patch`、`hot_band_start/end` = 視窗內的樣本點範圍，`summary.hot_bands` 統計異常最常落在哪個波段）。Qwen 的 `pool=last_token / mean`。YOLO 的 `freeze=auto`（影像少於 200 張凍結骨幹）。
 
@@ -152,7 +153,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 | `paired`、`reference_folder`、`ssim_warn`、`ssim_fail` | 影像品質基準 `compare` | 輸入 zip 有 `golden/`（或 `reference/`、`ref/`、`baseline/`）且其他資料夾有同檔名影像時自動逐張比對；`paired=false` 關閉 |
 | `min_similarity` / `min_confidence` | few-shot / 微調 / Qwen | 低於門檻的 `prediction` 回 `unknown` |
 | `threshold` | 所有 `score`；分類家族的 PatchCore 兩階段 | 覆寫模型存的異常門檻 |
-| `patchcore` | `vision.dino_fewshot` `predict` | `off` = 這次不走兩階段，直接用分類頭 |
+| `patchcore` | `vision.dino` `predict` | `off` = 這次不走兩階段，直接用分類頭 |
 | `instruction` | Qwen `retrieve` | 查詢端指令（非對稱檢索：用問題找答案）；同類文字互比時留空 |
 
 解釋圖只在伺服器放 PNG 疊圖（不含原圖）；原圖仍只在使用者的瀏覽器（`SampleViewer` 把疊圖以可調透明度覆蓋在本地讀出的影像上）。畫面見 `docs/screenshots/features/`（retrieve 選項、疊圖、建議調整、全參考比對、模型庫）。
@@ -179,7 +180,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 |---|---|---|---|---|
 | TABULAR | classification / regression | `tabular.xgboost`、`tabular.catboost`、`tabular.tabpfn`、`tabular.random_forest`、`tabular.linear`、`tabular.svm` | `row_count > 50000` 剔除 svm；`row_count > 10000` 剔除 tabpfn；`row_count < 1000` 優先 tabpfn、random_forest；模型庫沒有 TabPFN 權重時自動跳過 | 20 trials / 60 min |
 | TABULAR | anomaly_detection | `tabular.isolation_forest` | | 10 / 20 |
-| IMAGE | classification | `vision.dino_fewshot`、`vision.dino_finetune`、`vision.yolo` | `row_count < 20` 剔除 dino_finetune；`row_count < 100` 剔除 yolo | 8 / 120 |
+| IMAGE | classification | `vision.dino`（搜尋 `finetune: none / lora`）、`vision.yolo` | `row_count < 100` 剔除 yolo | 8 / 120 |
 | IMAGE | detection / segmentation | `vision.yolo` | | 8 / 120 |
 | IMAGE | anomaly_detection | `vision.dino_patchcore`、`vision.image_quality` | 沒申請 GPU 時只剩 image_quality | 6 / 60 |
 | SEQUENCE | anomaly_detection | `sequence.patch_autoencoder` | | 10 / 60 |
@@ -191,7 +192,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 
 Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 400 `GPU_REQUIRED`）。
 
-**記憶體**：GPU 任務的主程序光是 torch + CUDA 函式庫 + cuDNN 就約 3 GB（CPU 任務約 1.5 GB），每個 DataLoader worker 再各約 0.75 GB（CPU 任務 0.5 GB）；trainer 依任務的記憶體配額自動縮減 worker 數（GPU：`(記憶體 − 3072) / 768`，CPU：`(記憶體 − 1536) / 512`，再受 CPU 數與 `MAX_DATALOADER_WORKERS` 限制，實際數字印在 log 的 `limits:` 行），AutoML 每個 trial 之間也會釋放上一個模型。但 4 GB 對 GPU 任務本來就不夠：手動模式給少於家族 `memory_mb_min`（DINO / YOLO 為 8192）會被拒絕（400 `MEMORY_BELOW_MIN`，精靈在資源步驟直接顯示最低需求並擋住送出），自動模式會把記憶體不夠的候選跳過（`search.skipped_low_memory`），全部不夠才拒絕。log 出現 `DataLoader worker … killed by signal: Killed` 或 `process exited (-9)` 就是 cgroup OOM kill。
+**記憶體**：GPU 任務的主程序光是 torch + CUDA 函式庫 + cuDNN 就約 3 GB（CPU 任務約 1.5 GB），每個 DataLoader worker 再約 0.5–0.75 GB；目錄的 `memory_mb_min` 只是參考值（精靈預設 GPU 任務 8 GB、CPU 任務 4 GB），不再擋任務：給太少會被 cgroup OOM-kill，log 會寫明。runner 依 `JOB_MEMORY_MB` 縮減 DataLoader worker 數。
 
 ## 6. AutoML 流程（trainer 實作）
 
@@ -237,7 +238,7 @@ Job 沒申請 GPU 時，需要 GPU 的候選會被拿掉（全部都需要 → 4
   Job 子程序以 `MODEL_ZOO_ROOT` 直接讀取，runner 設定 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`YOLO_OFFLINE=1`。
 - `GET /api/v1/admin/model-zoo`、`.venv/bin/python -m app.cli model-zoo [--verify]` 顯示每個權重是否存在；`GET /api/v1/catalog` 的 `weights_ready` 讓精靈標示缺權重的家族，建立任務時缺權重會被拒絕（`WEIGHTS_MISSING`）。
 - 新增需要權重的家族：先在 yaml 的 `weights` 登記，再實作 trainer（透過 `ctx.weight(id)` 取路徑，絕不自行下載）。
-- 微調家族（`vision.dino_finetune`）的產物不含骨幹：`linear` / `lora` 只存分類頭與轉接器（幾 MB），推論時再從模型庫載入同一個骨幹；只有 `full` 會把整個骨幹存進產物。
+- `vision.dino` 的產物：`finetune=none` / `lora` 不含骨幹（lora 只多一個幾 MB 的 `lora.pt`），推論時再從模型庫載入同一個骨幹；只有 `finetune=full` 會把整個骨幹存進產物。
 
 ## 10. `model_catalog.yaml` 結構（version 2）
 

@@ -45,7 +45,7 @@
 6. **校正與門檻**：異常門檻用 P99 經驗值；可加依驗證集最佳化 F1 的門檻與 OOD 拒答（few-shot 的 `min_similarity` 已有雛形）。
 7. **模型解釋**：表格有特徵重要度、PLS 有 VIP；DINO 已有 patch 相似度 / Grad-CAM 疊圖、影像品質基準有偏離方格圖；光譜 MAE 可再加 patch 貢獻圖。
 8. **評估的可信度**：小資料下驗證集只有幾筆，指標波動大；建議顯示信賴區間或用 repeated CV（表格家族容易做）。
-9. **DINO 流程的下一步**：LoRA 微調後接 PatchCore（有標註缺陷時適應過的 patch 特徵對記憶庫有幫助）；載台上的物件需要前景遮罩（AnomalyDINO 用 patch 特徵第一主成分切）；訓練式的異常評分（SimpleNet 的特徵適配器、student-teacher）作為 PatchCore 的替代；greedy k-center coreset。
+9. **DINO 流程的下一步**：載台上的物件需要前景遮罩（AnomalyDINO 用 patch 特徵第一主成分切）；訓練式的異常評分（SimpleNet 的特徵適配器、student-teacher）作為 PatchCore 的替代；greedy k-center coreset。
 10. **原本的特徵選項備忘**：`layers=auto` 目前只看留一法準確率（支援集很小時會過擬合層的選擇，可改 repeated split）；`cls+attn` 用的是最後一層的 CLS 注意力，DuoAD 式的多層 / 多 head 加權還沒做；雙曲度量只在推論時映射（沒有訓練雙曲原型）；正常 patch 庫的 coreset 仍是隨機抽樣；PatchCore / 正常庫在 448 px + 多層拼接時記憶體成長快，分塊已做但沒有估算上限。
 
 ## E. 這一輪串接測試發現並修掉的問題
@@ -104,4 +104,5 @@
 - ✅ **第六批回饋**：精靈參數依型別呈現（下拉 / 布林 / `augment` 多選，DINOv3 終於看得到）、YOLO 也接 `augment`、申請表單的任務依資料類型過濾（後端 `TASK_NOT_SUPPORTED`）、建任務時檢查選到的 backbone / model 權重在模型庫、表格格子可個別展開（在欄寬內換行、最多 N 行後捲動）；AutoML 只抽模型庫有的 backbone / model、DataLoader worker 數依記憶體配額縮減（4 GB 配額跑影像 AutoML 被 OOM kill 的修正）；新增 `client-boundary` 靜態測試。
 - ✅ **第七批（特徵產生與分類方式）**：DINO 家族共用 `FeatureSpec`（`layers` 預設依骨幹換算：DINOv2 `mid` = 6/8/10/12、DINOv3 `mid` = 8/10/12，`auto` 以支援集留一法挑層；`pool` cls+mean / cls / mean / cls+gem / cls+attn；`center`、`background=project_out_cls`、`metric=hyperbolic`、`image_size`）；few-shot 的 `head`（prototype / knn / logistic / svm / prototype+logistic，`extend` 只重 fit 頭）與「正常 patch 庫」兩階段缺陷分類（good / normal 資料夾 → 先判異常、再只拿異常 patch 分缺陷類別）；PatchCore 多層拼接 + 隨機投影；微調預設增強 crop + hflip、AutoML 各試「預設 / 不增強」（YOLO 也是，並加 `freeze`）；光譜 MAE / Patch AE 的 `embed_layers` / `embed_pool` / `score_method=patch_bank` 與逐 patch 波段定位；Qwen 的 `pool` / `layers`；影像品質分析可選 DINOv3，並加標籤一致性檢查與各層特徵解讀。
 - ✅ **第八批（收斂選項）**：DINO 家族改成一條固定流程：`layers` 只剩 `cross`（9 / 10 / 11）/ `last` / 列表、特徵只用 patch token（不用 CLS，拿掉 pool / center / background / metric / layer_fusion）、`head=auto | prototype | knn | linear | svm`（拿掉 logistic 別名與 prototype+logistic）、PatchCore 成為凍結家族與異常偵測家族共用的 `_PatchBank`（`patchcore=auto | on | off`、`normal_class` 可以是任何資料夾名）、Grad-CAM 改成免梯度的 CAM、微調只留 LoRA；`auto` 參數（head、k、patchcore、score_agg、coreset_ratio、bank_augment、epochs、batch、YOLO freeze）由資料決定並寫進 `resolved`；精靈依設定隱藏無關欄位；光譜 MAE 的 `embed_layers` / `embed_pool` 與 Qwen 的 `layers` 一併精簡。
+- ✅ **第九批**：`vision.dino_fewshot` + `vision.dino_finetune` 合併成 `vision.dino`，精靈多一個獨立的「骨幹微調」步驟（none / lora / full），微調後的骨幹直接供特徵、分類頭、PatchCore 與 `extend` 使用（舊 id 標 `deprecated` 只能推論）；移除記憶體下限的硬性檢查；stepper 改成換行不再溢出。
 - 仍待做：SPC chart（`sequence.spc` 控制界限 + Western Electric / Nelson 規則；合成 pattern 預訓練的 1-D CNN few-shot 分類與相似搜尋）；資料來源任務的樣本顯示（需經後端暫時代理讀取）；工具池的 GPU 共用策略（目前與專案相同）；申請分頁的留言也支援編輯；前處理編輯器的欄位重新命名與型別轉換（datetime）；專案「已結束」後的產物保留期限；微調家族 `full` 的分層學習率；資料增強目前是固定機率 0.5、幅度固定（可改成可調）。

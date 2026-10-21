@@ -37,6 +37,7 @@ import {
   augmentOpLabel,
   dataTypeLabel,
   familyLabel,
+  finetuneStepCopy,
   inferenceModeLabel,
   jobCopy,
   paramChoiceLabel,
@@ -121,7 +122,7 @@ const specFields: Record<DataType, SpecField[]> = {
 
 function familiesFor(catalog: Catalog, dataType: DataType, task: TaskType): string[] {
   return Object.entries(catalog.families)
-    .filter(([, f]) => (f.supports[dataType] ?? []).includes(task))
+    .filter(([, f]) => !f.deprecated && (f.supports[dataType] ?? []).includes(task))
     .map(([id]) => id);
 }
 
@@ -186,7 +187,7 @@ function ParamField({
       onChange(next.length ? next.join(",") : AUGMENT_NONE);
     };
     return (
-      <div className="grid gap-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <Label htmlFor={id}>{name}</Label>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -239,7 +240,7 @@ function ParamField({
       : null;
   if (options) {
     return (
-      <div className="grid gap-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <Label htmlFor={id}>{name}</Label>
         <Select value={value || DEFAULT_SENTINEL} onValueChange={(v) => onChange(v === DEFAULT_SENTINEL ? "" : v)}>
           <SelectTrigger id={id} className="w-full font-mono" data-testid={`param-${name}`}>
@@ -248,7 +249,7 @@ function ParamField({
           <SelectContent>
             <SelectItem value={DEFAULT_SENTINEL}>
               <span className="font-mono">{def}</span>
-              <span className="ml-2 text-xs text-muted-foreground">
+              <span className="ml-2 truncate text-xs text-muted-foreground">
                 預設{choiceLabel(def) ? `・${choiceLabel(def)}` : ""}
               </span>
             </SelectItem>
@@ -258,7 +259,7 @@ function ParamField({
                 <SelectItem key={o.value} value={o.value}>
                   <span className="font-mono">{o.label}</span>
                   {choiceLabel(o.value) ? (
-                    <span className="ml-2 text-xs text-muted-foreground">{choiceLabel(o.value)}</span>
+                    <span className="ml-2 truncate text-xs text-muted-foreground">{choiceLabel(o.value)}</span>
                   ) : null}
                 </SelectItem>
               ))}
@@ -269,7 +270,7 @@ function ParamField({
     );
   }
   return (
-    <div className="grid gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
       <Label htmlFor={id}>{name}</Label>
       <Input
         id={id}
@@ -285,15 +286,35 @@ function ParamField({
 }
 
 /** Hyper-parameters that only matter together with another setting are hidden until that setting is chosen:
- *  `k` with `head = knn`; the PatchCore knobs of the frozen DINO family only while `patchcore` is not off. */
+ *  `k` with `head = knn`; for the DINO family the fine-tune knobs only when a fine-tune was chosen (on its own
+ *  step), `backbone_lr` only for a full fine-tune, the PatchCore knobs only while `patchcore` is not off. */
 function paramVisible(family: string, key: string, params: Record<string, string>, fam?: CatalogFamily): boolean {
   const effective = (name: string) => params[name] || String(fam?.defaults?.[name] ?? "");
   if (key === "k" && fam?.defaults?.head !== undefined) return effective("head") === "knn";
-  if (family === "vision.dino_fewshot" && PATCHCORE_PARAMS.has(key)) return effective("patchcore") !== "off";
+  if (family === DINO_FAMILY) {
+    if (key === "finetune") return false; // chosen on the 骨幹微調 step
+    const ft = effective("finetune");
+    if (FINETUNE_PARAMS.has(key)) return ft !== "none";
+    if (key === "backbone_lr") return ft === "full";
+    if (PATCHCORE_PARAMS.has(key)) return effective("patchcore") !== "off";
+  }
   return true;
 }
 
+const DINO_FAMILY = "vision.dino";
+const FINETUNE_PARAMS = new Set(["epochs", "batch", "lr", "rank", "lora_alpha", "augment"]);
 const PATCHCORE_PARAMS = new Set(["normal_class", "neighborhood", "score_agg", "coreset_ratio", "bank_augment"]);
+type StepKey = "data" | "input" | "spec" | "mode" | "backbone" | "model" | "resources" | "confirm";
+const STEP_LABELS: Record<StepKey, string> = {
+  data: "資料",
+  input: "輸入",
+  spec: "欄位與前處理",
+  mode: "模式",
+  backbone: "骨幹微調",
+  model: "模型與參數",
+  resources: "資源",
+  confirm: "確認",
+};
 const NORMAL_FOLDERS = new Set(["good", "normal", "ok", "pass"]); // what the trainer treats as "no defect"
 
 /** What type a hyper-parameter has: the search space's declared type first, then the default value's type. */
@@ -332,9 +353,6 @@ export function NewJobWizard({
 }) {
   const router = useRouter();
   const isTrain = kind === "train";
-  const steps = isTrain
-    ? ["資料", "欄位與前處理", "模式", "模型與參數", "資源", "確認"]
-    : ["模型", "輸入", "資源", "確認"];
   const compatible = familiesFor(catalog, project.dataType, project.taskType);
   const auto = automlCandidates(catalog, project.dataType, project.taskType);
   const cloneSpec = (cloneFrom?.input.spec ?? {}) as Record<string, unknown>;
@@ -370,6 +388,12 @@ export function NewJobWizard({
     (cloneSpec.preprocess as PreprocessStep[] | undefined) ?? [],
   );
   const [mode, setMode] = useState<"auto" | "manual">(cloneFrom?.mode ?? (auto ? "auto" : "manual"));
+  // DINO image classification gets its own "fine-tune the backbone?" step before the model / parameter step
+  const hasBackboneStep = isTrain && mode === "manual" && compatible.includes(DINO_FAMILY);
+  const stepKeys: StepKey[] = isTrain
+    ? ["data", "spec", "mode", ...(hasBackboneStep ? (["backbone"] as StepKey[]) : []), "model", "resources", "confirm"]
+    : ["model", "input", "resources", "confirm"];
+  const steps = stepKeys.map((k) => STEP_LABELS[k]);
   const [family, setFamily] = useState<string>(cloneFrom?.modelFamily ?? compatible[0] ?? "");
   const [candidates, setCandidates] = useState<string[]>(cloneSearch?.candidates ?? auto?.candidates ?? compatible);
   const [budget, setBudget] = useState({
@@ -408,24 +432,16 @@ export function NewJobWizard({
       ? candidates.some(gpuOf)
       : gpuOf(family)
     : gpuOf(selectedModel?.family ?? "");
-  // the catalog minimum of the family (manual) or of every remaining candidate (auto): below it a deep-learning
-  // job is OOM-killed by its cgroup, and the backend refuses it (MEMORY_BELOW_MIN)
-  const memoryMin = Math.max(
-    0,
-    ...(isTrain
-      ? (mode === "auto" ? candidates : [family]).map((f) => catalog.families[f]?.resources.memory_mb_min ?? 0)
-      : [0]),
-  );
   const [res, setRes] = useState({
     gpu: cloneFrom?.requestedGpu ?? Math.min(needsGpu ? 1 : 0, project.gpuLimit),
     cpu: cloneFrom?.requestedCpu ?? Math.min(2, project.cpuLimit),
-    memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(Math.max(4096, memoryMin), project.memoryLimitMb),
+    memoryMb: cloneFrom?.requestedMemoryMb ?? Math.min(needsGpu ? 8192 : 4096, project.memoryLimitMb),
     // VRAM-shared placement is the norm: a declared amount lets the scheduler pack jobs by measured free memory
     gpuMemoryMb: cloneFrom?.requestedGpuMemoryMb ?? 8192,
     timeout: cloneFrom?.timeoutMinutes ?? project.defaultTimeout,
   });
   const overQuota = res.gpu > project.gpuLimit || res.cpu > project.cpuLimit || res.memoryMb > project.memoryLimitMb;
-  const belowMemoryMin = isTrain && mode === "manual" && res.memoryMb < memoryMin;
+  const stepKey = stepKeys[Math.min(step, stepKeys.length - 1)];
   const last = step === steps.length - 1;
   const geometricBlocked = project.taskType === "detection" || project.taskType === "segmentation";
 
@@ -510,11 +526,11 @@ export function NewJobWizard({
           ? Boolean(sourceId)
           : inlineText.trim().length > 0;
     if (isTrain) {
-      if (step === 0) return dataOk;
-      if (step === 3) return mode === "auto" ? candidates.length > 0 : Boolean(family);
+      if (stepKey === "data") return dataOk;
+      if (stepKey === "model") return mode === "auto" ? candidates.length > 0 : Boolean(family);
     } else {
-      if (step === 0) return Boolean(modelId);
-      if (step === 1) return dataOk;
+      if (stepKey === "model") return Boolean(modelId);
+      if (stepKey === "input") return dataOk;
     }
     return true;
   };
@@ -729,6 +745,40 @@ export function NewJobWizard({
     </Card>
   );
 
+  const finetune = params.finetune || String(catalog.families[DINO_FAMILY]?.defaults?.finetune ?? "none");
+  const backboneStep = (
+    <Card>
+      <CardHeader>
+        <CardTitle>{finetuneStepCopy.title}</CardTitle>
+        <CardDescription>{finetuneStepCopy.description}</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={finetuneStepCopy.title}>
+        {finetuneStepCopy.options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={finetune === o.value}
+            data-testid={`finetune-${o.value}`}
+            onClick={() => {
+              setParams({ ...params, finetune: o.value });
+              if (!compatible.includes(family) || family !== DINO_FAMILY) setFamily(DINO_FAMILY);
+            }}
+            className={cn(
+              "rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+              finetune === o.value
+                ? "border-primary/50 bg-primary/5 shadow-glow-sm"
+                : "border-border hover:bg-accent/40",
+            )}
+          >
+            <div className="font-medium">{o.title}</div>
+            <div className="mt-1 text-sm text-muted-foreground">{o.text}</div>
+          </button>
+        ))}
+      </CardContent>
+    </Card>
+  );
+
   const familyParams = (f: string) =>
     Object.entries(catalog.families[f]?.defaults ?? {})
       .map(([key, def]) => ({ key, def: def === null ? "" : String(def) }))
@@ -839,7 +889,7 @@ export function NewJobWizard({
               />
             ))}
           </div>
-          {family === "vision.dino_fewshot" && uploadClasses.length ? (
+          {family === DINO_FAMILY && uploadClasses.length ? (
             <p className="text-xs text-muted-foreground" data-testid="normal-folder-hint">
               上傳的 zip 有 {uploadClasses.length} 個類別資料夾
               {normalFolder
@@ -977,18 +1027,8 @@ export function NewJobWizard({
             className="text-right font-mono"
             value={res.memoryMb}
             onChange={(e) => setRes({ ...res, memoryMb: Number(e.target.value) })}
-            aria-invalid={res.memoryMb > project.memoryLimitMb || belowMemoryMin}
+            aria-invalid={res.memoryMb > project.memoryLimitMb}
           />
-          {memoryMin > 0 ? (
-            <p
-              className={cn("text-xs", belowMemoryMin ? "text-destructive" : "text-muted-foreground")}
-              data-testid="memory-min-hint"
-            >
-              {mode === "auto" && isTrain
-                ? `候選模型最少需要 ${memoryMin} MB；給少於某個候選最低需求的話，該候選會被跳過`
-                : `${familyLabel(family)} 至少需要 ${memoryMin} MB（torch + CUDA 約 3 GB，每個資料載入 worker 再約 0.75 GB）`}
-            </p>
-          ) : null}
           <p
             className={cn(
               "text-xs",
@@ -1103,9 +1143,16 @@ export function NewJobWizard({
     </Card>
   );
 
-  const content = isTrain
-    ? [dataStep, specStep, modeStep, modelStep, resourceStep, confirmStep][step]
-    : [pickModelStep, dataStep, resourceStep, confirmStep][step];
+  const content = {
+    data: dataStep,
+    input: dataStep,
+    spec: specStep,
+    mode: modeStep,
+    backbone: backboneStep,
+    model: isTrain ? modelStep : pickModelStep,
+    resources: resourceStep,
+    confirm: confirmStep,
+  }[stepKey];
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">
@@ -1117,11 +1164,7 @@ export function NewJobWizard({
           {step === 0 ? "取消" : "上一步"}
         </Button>
         {last ? (
-          <Button
-            type="button"
-            onClick={submit}
-            disabled={pending || overQuota || belowMemoryMin || (needsGpu && res.gpu === 0)}
-          >
+          <Button type="button" onClick={submit} disabled={pending || overQuota || (needsGpu && res.gpu === 0)}>
             {pending ? <LoaderCircle className="animate-spin" /> : <Rocket />}
             建立任務
           </Button>

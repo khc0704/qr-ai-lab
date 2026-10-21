@@ -47,8 +47,9 @@ export const modelFamilyLabel: Record<ModelFamily, string> = {
   "tabular.tabpfn": "TabPFN",
   "tabular.isolation_forest": "Isolation Forest",
   "vision.yolo": "YOLO",
-  "vision.dino_fewshot": "DINO few-shot",
-  "vision.dino_finetune": "DINO 微調",
+  "vision.dino": "DINO 影像分類",
+  "vision.dino_fewshot": "DINO few-shot（舊）",
+  "vision.dino_finetune": "DINO 微調（舊）",
   "vision.dino_patchcore": "DINO PatchCore",
   "vision.image_quality": "影像品質基準",
   "sequence.patch_autoencoder": "Patch Autoencoder",
@@ -92,6 +93,7 @@ export const dinoBackboneLabel: Record<string, string> = {
 
 /** Choices the wizard offers for a parameter that has no (or a narrower) AutoML search space. */
 export const paramChoices: Record<string, string[]> = {
+  finetune: ["none", "lora", "full"],
   head: ["auto", "prototype", "knn", "linear", "svm"],
   layers: ["last", "cross"],
   patchcore: ["auto", "on", "off"],
@@ -107,6 +109,11 @@ export const paramChoices: Record<string, string[]> = {
 
 /** Secondary label for a categorical hyper-parameter's choice (the wizard shows the raw value first). */
 export const paramChoiceLabel: Record<string, Record<string, string>> = {
+  finetune: {
+    none: "不微調：凍結骨幹，直接用預訓練特徵",
+    lora: "LoRA：注意力層加低秩轉接器（微調的預設）",
+    full: "全參數：每個權重都訓練（資料多、VRAM 夠時）",
+  },
   layers: {
     last: "只讀最後一層",
     cross: "跨層：第 9 / 10 / 11 層拼接（依骨幹深度換算）",
@@ -145,7 +152,12 @@ export const paramChoiceLabel: Record<string, Record<string, string>> = {
 
 /** One-line help under a hyper-parameter field. */
 export const paramHint: Record<string, string> = {
+  finetune: "要不要先訓練骨幹；微調後下游的特徵、分類頭、PatchCore 都改用微調過的骨幹",
   layers: "讀哪些 transformer 層的 patch 特徵（不用 CLS）；想自訂直接填層數列表，例如 9,10,11,12",
+  rank: "LoRA 的秩：越大能學越多、越容易過擬合",
+  lora_alpha: "LoRA 的縮放（通常 = 2 × rank）",
+  lr: "分類頭與 LoRA 轉接器的學習率",
+  backbone_lr: "全參數微調時預訓練權重的學習率（要比 lr 小很多）",
   head: "特徵直接比對（prototype / knn）或接分類器（linear / svm）；extend 新類別時都免重訓",
   k: "只有 head = knn 用到；auto = min(5, 最小類別張數)",
   patchcore: "兩階段：正常影像的 patch 庫先判正常 / 異常，異常的只拿異常區塊分缺陷類別",
@@ -345,6 +357,30 @@ export const jobCopy = {
   /** AutoML runs that exported the best-so-far model before finishing (`result.stopped`). */
   stoppedDeadline: "搜尋因逾時提前結束，已匯出目前最佳模型",
   stoppedCancelled: "取消時已匯出目前最佳模型",
+} as const;
+
+/** The wizard's fine-tune step (DINO image classification). */
+export const finetuneStepCopy = {
+  title: "骨幹微調",
+  description:
+    "先決定要不要訓練 DINO 骨幹；之後的特徵、分類頭與 PatchCore 都會用這裡選的骨幹。YOLO 分類器在下一步另選。",
+  options: [
+    {
+      value: "none",
+      title: "不微調（預設）",
+      text: "凍結預訓練骨幹，直接用它的 patch 特徵。每類幾張就能用、幾分鐘完成，新增類別免重訓。",
+    },
+    {
+      value: "lora",
+      title: "LoRA 微調",
+      text: "在注意力層加低秩轉接器和線性頭一起訓練，基底權重不動、產物只有幾 MB。影像和自然影像差很多（SEM / TEM 紋理）、每類幾十張以上時用。",
+    },
+    {
+      value: "full",
+      title: "全參數微調",
+      text: "每個權重都訓練。每類上百張、VRAM 夠時才值得；產物包含整個骨幹（幾百 MB）。",
+    },
+  ],
 } as const;
 
 export const analysisCopy = {
