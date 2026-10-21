@@ -57,8 +57,8 @@ docker compose -f infra/docker-compose.yml exec mariadb mariadb -uqr -p qr_ai_la
 docker compose -f infra/docker-compose.yml exec redis redis-cli ping
 ```
 
-- 資料存在 docker volume（`qr-ai-lab_mariadb-data`、`qr-ai-lab_redis-data`）。
-- 停止：`docker compose -f infra/docker-compose.yml down`；連資料一起刪：加 `-v`。
+- 資料存在**主機目錄**（bind mount，不是 docker volume）：`infra/.env` 的 `MARIADB_DATA_DIR` / `REDIS_DATA_DIR`，預設 `infra/data/mariadb`、`infra/data/redis`（已在 `.gitignore`；相對路徑以 `infra/` 為基準，正式環境建議寫絕對路徑如 `/srv/qr-ai-lab/mariadb`）。備份就是備份這兩個目錄。
+- 停止：`docker compose -f infra/docker-compose.yml down`（資料留在目錄裡）；要清掉資料就刪那個目錄。舊版用的 named volume（`qr-ai-lab_mariadb-data`）：`install-01-docker.sh` 會在目錄還是空的時候自動把內容複製過來，之後再自行 `docker volume rm`。
 - 第一次啟動會執行 `infra/mariadb/init/01_create.sql`（字集與測試用資料庫）。
 
 ## 4. 後端（FastAPI）+ 排程器
@@ -237,7 +237,7 @@ cd frontend && npm run dev                           # 終端 2：http://localho
 - 容器 port 綁在 `127.0.0.1:3307` / `127.0.0.1:6380`；有 WSL integration 的 distro 用 `localhost:3307` 就連得到，backend `.env` 寫 `DATABASE_URL=mariadb+asyncmy://qr:<密碼>@localhost:3307/qr_ai_lab`、`REDIS_URL=redis://localhost:6380/0`。
 - Docker Desktop 必須先在 Windows 端開著（WSL 的 `systemctl` 管不到它）；開機自動啟動在 Docker Desktop 的 General 設定，容器本身是 `restart: unless-stopped`，Desktop 一起來就會回來。
 - 公司 image mirror / proxy：設在 Docker Desktop → Settings → Docker Engine（`registry-mirrors`）或 Resources → Proxies，不是 WSL 的 `/etc/docker/daemon.json`；`infra/.env` 的 `DOCKER_REGISTRY` 仍可用來指定完整的 mirror 前綴。
-- 資料存在 Docker Desktop 的 volume（`qr-ai-lab_mariadb-data`），不在 WSL distro 內；`docker compose … down -v` 才會刪。
+- 資料在 bind mount 的主機目錄（預設 `infra/data/*`，在 WSL 的檔案系統裡；`MARIADB_DATA_DIR` 可改成絕對路徑）。不要把它指到 `/mnt/c/...`：MariaDB 在 NTFS 上的檔案鎖與權限會出問題。
 - 開 `systemd=true` 之後 Docker Desktop 的 WSL integration 照常運作，排程器就能用 systemd cgroup；GPU 走 Windows 端的 NVIDIA driver，Docker 完全不碰 GPU。
 
 ### 7.1a 開發模式 + MariaDB + Redis +（假或真的）Keycloak（WSL2 或 Ubuntu 都一樣）

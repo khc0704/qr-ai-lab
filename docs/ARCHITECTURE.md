@@ -257,7 +257,7 @@ DATA_ROOT/
 - 下載：`GET /artifacts/{id}/download` 以 `FileResponse` 串流；大檔可改 nginx `X-Accel-Redirect`（`internal` location 指向 DATA_ROOT）。
 - 清理任務（scheduler 每小時）：過期 uploads、孤兒 `jobs/{id}/input`、已刪 Job 的目錄。
 - 介面：`backend/app/storage/base.py` 定義 `Storage`（`open_write`、`open_read`、`stat`、`delete`、`usage(prefix)`、`mount_spec(job)`），v1 只有 `LocalStorage`；未來自有 MinIO 時加 `ObjectStorage` 並改用 presigned URL 給 trainer。
-- 備份：`DATA_ROOT` 由主機排程備份；MariaDB 每日 `mariadb-dump` 到 `DATA_ROOT/../backups/`。
+- 備份：`DATA_ROOT` 由主機排程備份；MariaDB 每日 `mariadb-dump` 到 `DATA_ROOT/../backups/`。MariaDB / Redis 容器的資料本身也在主機目錄（`infra/.env` 的 `MARIADB_DATA_DIR` / `REDIS_DATA_DIR`，bind mount，不用 docker volume），冷備份直接複製目錄。
 
 ## 11. 即時事件
 

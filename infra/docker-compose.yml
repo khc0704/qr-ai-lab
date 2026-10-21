@@ -5,6 +5,9 @@
 #   docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
 # Images come from the company's registry mirror: set DOCKER_REGISTRY in infra/.env (e.g. mirror.example.com/).
 # Pin the tags to what the mirror holds (or to a digest, mariadb:11.4@sha256:…) so a re-pull never drifts.
+# Data lives in host directories (bind mounts), not in named docker volumes: MARIADB_DATA_DIR / REDIS_DATA_DIR in
+# infra/.env (relative paths resolve against this infra/ directory; defaults infra/data/mariadb, infra/data/redis —
+# git-ignored). Back them up like any directory; `docker compose down` never touches them (there is no -v to forget).
 name: qr-ai-lab
 
 services:
@@ -20,7 +23,7 @@ services:
     ports:
       - "127.0.0.1:${MARIADB_PORT:-3307}:3306"
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - ${MARIADB_DATA_DIR:-./data/mariadb}:/var/lib/mysql
       - ./mariadb/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
@@ -35,13 +38,9 @@ services:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     volumes:
-      - redis-data:/data
+      - ${REDIS_DATA_DIR:-./data/redis}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 10
-
-volumes:
-  mariadb-data:
-  redis-data:

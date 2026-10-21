@@ -94,6 +94,7 @@
 | `DOCKER_REGISTRY` | 公司 image 鏡像前綴（含結尾斜線）；空 = Docker Hub |
 | `MARIADB_ROOT_PASSWORD` / `MARIADB_DATABASE` / `MARIADB_USER` / `MARIADB_PASSWORD` / `MARIADB_PORT` | MariaDB 容器；主機 port 預設 **3307**（3306 已被占用）；`DATABASE_URL` 要用同一組帳密與 port |
 | `REDIS_PORT` | Redis 容器；主機 port 預設 **6380** |
+| `MARIADB_DATA_DIR` / `REDIS_DATA_DIR` | 容器資料放在主機的哪個目錄（bind mount，不用 docker volume）；預設 `./data/mariadb`、`./data/redis`（相對 `infra/`，已 git-ignore），正式環境建議絕對路徑；`install-01-docker.sh` 會建目錄並把舊的 named volume 複製過來一次 |
 
 ## 套件來源（伺服器不連外）
 
