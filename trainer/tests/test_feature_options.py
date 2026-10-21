@@ -15,6 +15,8 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("PIL")
 
+from pathlib import Path  # noqa: E402
+
 from tests.test_torch_families import _images, _tiny_dino, _tiny_dino3, _tiny_qwen, spectra  # noqa: E402
 from trainer.dataset import Dataset  # noqa: E402
 from trainer.models import registry  # noqa: E402
@@ -606,3 +608,52 @@ def test_automl_pinned_values_are_not_searched_and_gate_the_finetune_knobs():
         "layers": "last",
         "head": "prototype",
     }
+
+
+def test_catalog_defaults_with_auto_values_train_and_predict(tmp_path, ctx):
+    """Family defaults are merged into every job's params (manual mode too), and several are the string "auto":
+    k for the knn head, epochs / batch, patchcore ... A normal folder turns PatchCore on, whose bank must not
+    try int("auto"); knn resolves k; predict accepts k=auto in its options."""
+    import yaml
+
+    catalog = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "backend/app/catalog/model_catalog.yaml").read_text(encoding="utf-8")
+    )
+    defaults = dict(catalog["families"]["vision.dino"]["defaults"])
+    assert defaults["k"] == "auto" and defaults["patchcore"] == "auto"
+    zoo = tmp_path / "zoo"
+    _tiny_dino(zoo, layers=3)
+    ctx.zoo = resolver(zoo, {"dinov2-small": "dinov2-small/"})
+    root = tmp_path / "imgs"
+    good = _images(root, "good", 12, "dark", 1)
+    scratch = _images(root, "scratch", 6, "blob", 2)
+    paths = good + scratch
+    ds = Dataset(
+        "IMAGE",
+        "classification",
+        {},
+        X=paths,
+        y=["good"] * 12 + ["scratch"] * 6,
+        ids=[p.name for p in paths],
+        root=root,
+    )
+    t = registry.create_trainer("vision.dino", "classification", {**defaults, "head": "knn"}, ctx)
+    t.fit(ds)
+    assert t.bank is not None and t.bank.k == 3  # the bank's k is bank_k (3), never the knn "auto"
+    assert t.head.kind == "knn" and isinstance(t.head.k, int) and t.meta["resolved"]["k"] == t.head.k
+    arts = t.export(tmp_path / "out")
+    inf = registry.create_inferencer("vision.dino", ctx)
+    inf.load(tmp_path / "out" / "model", arts[0].metadata)
+    probe = Dataset("IMAGE", "classification", {}, X=good[:1] + scratch[:1], ids=["g", "s"], root=root)
+    res = inf.predict(probe, "predict", {"k": "auto"}, tmp_path / "pred")
+    assert len(res.rows) == 2 and "anomaly_score" in res.rows[0]
+    res = inf.predict(probe, "retrieve", {"k": "auto"}, tmp_path / "pred2")
+    assert len(res.rows) == 2
+
+
+def test_int_or_tolerates_auto_and_strings():
+    from trainer.models.vision import int_or
+
+    assert int_or("auto", 3) == 3 and int_or(None, 5) == 5 and int_or("", 1) == 1
+    assert int_or("7", 3) == 7 and int_or(7.0, 3) == 7 and int_or(2, 3) == 2
+    assert int_or("abc", 4) == 4 and int_or(True, 9) == 9

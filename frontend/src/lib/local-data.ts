@@ -4,6 +4,7 @@
 // anywhere and nothing is persisted: the store lives in this tab's memory and is gone on reload (the viewer
 // then offers to re-attach the same file, verified by size and sha256).
 import { useSyncExternalStore } from "react";
+import { decodeToPng, needsDecode } from "@/lib/image-decode";
 import { findZipEntry, listZipEntries, readZipEntry, type ZipEntry } from "@/lib/zip-reader";
 import { LineIndex, parseCsvLine } from "@/lib/line-index";
 
@@ -146,10 +147,14 @@ export async function readSample(local: LocalFile, ref: SampleRef): Promise<Samp
       const entry = findZipEntry(await entries, ref.id);
       if (!entry) return { kind: "missing", reason: `zip 裡找不到 ${ref.id}` };
       const blob = await readZipEntry(file, entry);
+      // TIFF (what SEM / TEM tools export) is not an <img> format: decode it to PNG in the browser first
+      if (needsDecode(entry.name))
+        return { kind: "image", blob: await decodeToPng(blob, entry.name), name: entry.name };
       if (IMAGE_EXT.test(entry.name)) return { kind: "image", blob, name: entry.name };
       if (entry.size <= 512 * 1024) return { kind: "text", text: await blob.text(), name: entry.name };
       return { kind: "missing", reason: `${entry.name} 不是影像，也太大無法顯示` };
     }
+    if (needsDecode(file.name)) return { kind: "image", blob: await decodeToPng(file, file.name), name: file.name };
     if (IMAGE_EXT.test(file.name)) return { kind: "image", blob: file, name: file.name };
     if (e === "csv") return readCsvRow(file, ref);
     if (e === "jsonl") {

@@ -690,6 +690,22 @@ def resolve_coreset_ratio(value: Any, total_patches: int) -> tuple[float, str]:
     return float(value), "chosen by the user"
 
 
+def int_or(value: Any, default: int | None) -> int | None:
+    """``value`` as an int, or ``default`` when it is unset / ``auto`` / not a number (family defaults such as
+    ``k: auto`` are merged into every job's params, so a numeric knob can arrive as that string)."""
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    text = str(value).strip().lower()
+    if text in ("", "auto", "none", "null"):
+        return default
+    try:
+        return int(float(text))
+    except ValueError:
+        return default
+
+
 def resolve_flag(value: Any, auto_value: bool, reason: str) -> tuple[bool, str]:
     s = str(value if value is not None else "auto").lower()
     if s in ("auto", ""):
@@ -835,7 +851,8 @@ class _PatchBank:
         n_hold = max(1, round(len(perm) * 0.2))
         hold = [normal_paths[i] for i in perm[:n_hold]]
         train = [normal_paths[i] for i in perm[n_hold:]]
-        k = int(params.get("bank_k", params.get("k", 3)) or 3)
+        # bank_k first (the classification family's ``k`` belongs to its knn head), else a numeric ``k``, else 3
+        k = int_or(params.get("bank_k"), None) or int_or(params.get("k"), 3) or 3
         pct = float(params.get("patch_percentile", 99))
         augment, why_aug = resolve_flag(
             params.get("bank_augment", "auto"),
@@ -1040,7 +1057,7 @@ class DinoTrainer(BaseTrainer):
             self.bank = _PatchBank.fit(
                 dino,
                 normal_paths,
-                p,
+                {**p, "bank_k": int_or(p.get("bank_k"), 3)},
                 normal_class=self.normal_class,
                 progress=lambda f: self.ctx.progress(start + span + 0.4 * span * f, "training"),
                 resolved=resolved,
@@ -1298,7 +1315,7 @@ class DinoInferencer(BaseInferencer):
             emb, patches = self.dino.embed(paths, patches=True, progress=lambda f: self.ctx.progress(0.6 * f))
         else:
             emb, patches = self.dino.embed(paths, progress=lambda f: self.ctx.progress(0.6 * f)), None
-        k = int(options.get("k", self.head.k))
+        k = int_or(options.get("k"), self.head.k) or self.head.k
         if mode == "extend":
             return self._extend(ds, emb, paths, out)
         if mode == "embed":

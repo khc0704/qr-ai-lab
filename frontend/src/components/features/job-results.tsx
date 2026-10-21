@@ -139,8 +139,8 @@ export function JobResults({ result, job }: { result: Record<string, unknown>; j
           </CardHeader>
           <CardContent>
             <ul className="space-y-3 text-sm">
-              {advice.map((a) => (
-                <li key={String(a.aspect)} className="space-y-1">
+              {advice.map((a, i) => (
+                <li key={`${String(a.aspect)}-${i}`} className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{cell(a.label)}</span>
                     <span className="rounded-sm bg-warning/10 px-1.5 text-xs text-warning">

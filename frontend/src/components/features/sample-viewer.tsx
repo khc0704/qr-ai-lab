@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ExpandableValue } from "@/components/features/expandable-value";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -146,9 +147,16 @@ function ImageView({
   overlayUrl?: string;
   overlayLabel?: string;
 }) {
-  // Mounted with key={name}, so one object URL per image; revoked when the view unmounts.
-  const [url] = useState(() => URL.createObjectURL(blob));
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  // The object URL is created inside the effect and written straight to the element, and the cleanup revokes
+  // exactly the URL that run created: a URL kept in state would be revoked by StrictMode's dev-only
+  // mount → unmount → mount and then reused, which shows a broken image (ERR_FILE_NOT_FOUND).
+  const imgRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const url = URL.createObjectURL(blob);
+    if (imgRef.current) imgRef.current.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [blob]);
+  const [failed, setFailed] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
   const [opacity, setOpacity] = useState(70);
   const [overlayFailed, setOverlayFailed] = useState(false);
@@ -157,7 +165,19 @@ function ImageView({
     <figure className="space-y-2">
       <div className="relative w-full overflow-hidden rounded-md border border-border bg-muted">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt={name} className="block max-h-[70vh] w-full object-contain" />
+        <img
+          ref={imgRef}
+          alt={name}
+          onError={() => setFailed(true)}
+          className={cn("block max-h-[70vh] w-full object-contain", failed && "hidden")}
+          data-testid="sample-image"
+        />
+        {failed ? (
+          <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground" data-testid="sample-image-failed">
+            <ImageOff className="size-4" /> 瀏覽器無法顯示這個影像（{name}）：格式可能不是 PNG / JPEG / BMP / WebP /
+            TIFF，或檔案已損壞。
+          </p>
+        ) : null}
         {overlay && showOverlay ? (
           // the overlay is rendered at the image's own size, so stretching it over the same box lines up
           // eslint-disable-next-line @next/next/no-img-element

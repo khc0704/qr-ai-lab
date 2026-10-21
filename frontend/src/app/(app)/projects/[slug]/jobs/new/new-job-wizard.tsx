@@ -305,7 +305,14 @@ function paramVisible(family: string, key: string, params: Record<string, string
 
 const DINO_FAMILY = "vision.dino";
 const FINETUNE_PARAMS = new Set(["epochs", "batch", "lr", "rank", "lora_alpha", "augment"]);
-const PATCHCORE_PARAMS = new Set(["normal_class", "neighborhood", "score_agg", "coreset_ratio", "bank_augment"]);
+const PATCHCORE_PARAMS = new Set([
+  "normal_class",
+  "neighborhood",
+  "score_agg",
+  "coreset_ratio",
+  "bank_augment",
+  "bank_k",
+]);
 type StepKey = "data" | "input" | "spec" | "mode" | "backbone" | "model" | "resources" | "confirm";
 const STEP_LABELS: Record<StepKey, string> = {
   data: "資料",

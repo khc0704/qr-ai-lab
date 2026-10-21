@@ -152,6 +152,7 @@ export const paramChoiceLabel: Record<string, Record<string, string>> = {
 
 /** One-line help under a hyper-parameter field. */
 export const paramHint: Record<string, string> = {
+  bank_k: "PatchCore 每個 patch 取記憶庫最近的幾個 patch 的平均距離；預設 3（k 是 knn 分類頭用的，兩者分開）",
   finetune: "要不要先訓練骨幹；微調後下游的特徵、分類頭、PatchCore 都改用微調過的骨幹",
   layers: "讀哪些 transformer 層的 patch 特徵（不用 CLS）；想自訂直接填層數列表，例如 9,10,11,12",
   rank: "LoRA 的秩：越大能學越多、越容易過擬合",

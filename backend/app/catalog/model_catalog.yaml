@@ -178,7 +178,7 @@ families:
     # scaled by depth) / a list; step 3 head: auto (prototype below 10 images per class, else linear) /
     # prototype / knn / linear / svm; patchcore: auto (on when a normal folder good / normal / ok / pass or
     # normal_class exists) / on / off → the bank decides normal vs defect, the anomalous patches are classified.
-    defaults: { backbone: dinov2-small, finetune: none, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, backbone_lr: 0.00001, augment: [crop, hflip] }
+    defaults: { backbone: dinov2-small, finetune: none, image_size: 224, layers: cross, head: auto, k: auto, patchcore: auto, normal_class: "", neighborhood: 1, score_agg: auto, coreset_ratio: auto, bank_augment: auto, bank_k: 3, epochs: auto, batch: auto, lr: 0.001, rank: 8, lora_alpha: 16, backbone_lr: 0.00001, augment: [crop, hflip] }
     augment_choices: [hflip, vflip, rotate90, crop, brightness, contrast]
     # backbone and finetune are decided on the wizard's 骨幹 step before the training mode and arrive pinned in
     # config (never searched); the fine-tune knobs are only sampled while a fine-tune is on (`when`)

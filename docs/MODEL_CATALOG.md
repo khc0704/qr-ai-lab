@@ -112,7 +112,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 | `finetune` | `none`（預設）/ `lora` / `full` | 要不要先訓練骨幹。`none`：凍結，直接用預訓練特徵（每類幾張就能用、幾分鐘、新類別免重訓）；`lora`：在注意力層的 q / k / v 加低秩轉接器（`rank`、`lora_alpha`）和線性頭一起訓練，基底權重不動、產物多一個幾 MB 的 `lora.pt`（影像和自然影像差很多、每類幾十張以上）；`full`：每個權重都訓練（`backbone_lr` 給預訓練權重、`lr` 給頭），產物包含整個 `backbone/`（每類上百張、VRAM 夠）。微調用類別資料夾當標籤、`epochs=auto`（約 400 步、5 … 40）、`batch=auto`（依解析度）、`augment` 預設 crop + hflip。微調完成後，下面的特徵、分類頭與 PatchCore **都改用微調過的骨幹**，推論與 `extend` 也一樣（轉接器 / 骨幹跟著產物走） |
 | 參數 | 選項 | 意義與使用時機 |
 |---|---|---|
-| `layers` | `cross`（預設）/ `last` / 層數列表（`9,10,11,12`，負數從後數） | 讀哪些 transformer 層的 **patch token**（CLS 一律不用）；每層都套最後的 LayerNorm，patch 平均成一個向量，再把各層沿特徵維度拼接（兩層 (N,384) → (N,768)）。`cross` = 第 9 / 10 / 11 層（12 層的 ViT-S / B；其他深度按比例：ViT-L 18 / 20 / 22），紋理、局部缺陷、PatchCore 都用它；`last` = 只讀最後一層，類別差異是整體長相時夠用、也最省。資料分析報告的「各層特徵代表什麼」會告訴你在你的資料上哪幾層最可分，直接填列表 |
+| `layers` | `cross`（預設）/ `last` / 層數列表（`9,10,11,12`，負數從後數） | 讀哪些 transformer 層的 **patch token**（CLS / register 一律不用）；每層都套最後的 LayerNorm，**先在層內對所有 patch 做 global mean pooling**成一個向量、L2 正規化，再把各層沿特徵維度拼接（兩層 (N,384) → (N,768)）。所有分類頭（prototype / knn / linear / svm）與微調時的線性頭吃的都是這個池化後的向量，不看單一 patch；patch 層級的特徵只給 PatchCore 與結果圖用。`cross` = 第 9 / 10 / 11 層（12 層的 ViT-S / B；其他深度按比例：ViT-L 18 / 20 / 22），紋理、局部缺陷、PatchCore 都用它；`last` = 只讀最後一層，類別差異是整體長相時夠用、也最省。資料分析報告的「各層特徵代表什麼」會告訴你在你的資料上哪幾層最可分，直接填列表 |
 | `image_size` | `224`（預設）/ `336` / `448` | 短邊縮到此尺寸再中央裁切成正方形（HF 的 DINOv2 processor 預設是短邊 256 再裁 224，會切掉邊緣；這裡的 224 不切邊）；patch 數 2.25× / 4×，小瑕疵更清楚、計算也成比例變慢。舊產物沒有 `features` 時沿用 processor 預設 |
 | `head`（分類） | `auto`（預設）/ `prototype` / `knn` / `linear` / `svm` | 向量怎麼變類別。`prototype` = 最近原型：每類把支援影像的向量平均成一個「原型」，新影像比 cosine 相似度（每類只有幾張時最穩，confidence = 相似度）；`knn` = 和每張支援影像逐一比再投票（`k`，同一類有多種長相時）；`linear` = 線性分類頭（邏輯迴歸 / 線性探針，每類 10 張以上）；`svm` = 線性 SVM。`auto`：最小類別不到 10 張用 prototype，否則 linear。prototype / knn 會先減去支援集平均再正規化（SimpleShot）。`extend` 加新類別時只在快取特徵上重新 fit 頭，不碰骨幹 |
 | `patchcore` / `normal_class`（分類） | `auto`（預設）/ `on` / `off`；資料夾名稱 | 兩階段缺陷分類。`auto` = 資料夾裡有 good / normal / ok / pass（不分大小寫）就啟用，或用 `normal_class` 指定正常資料夾的名字（任何名字都可以）。第一階段：正常影像的 patch 建 PatchCore 記憶庫，影像任何 patch 超過門檻就是異常；第二階段：超過門檻的 patch 以分數加權平均成「缺陷描述子」（再接上整張圖的向量），用同一種 `head` 在缺陷資料夾（scratch、void …）之間分類；沒看過的缺陷在信心不足時回 unknown。`off` = 把正常資料夾當普通類別做純分類（good 其實只是另一種圖樣時）。推論 `config.patchcore=off` 可暫時關閉、`config.threshold` 覆寫門檻 |
@@ -120,7 +120,7 @@ AutoML 的 `config` 其他鍵（`search` 以外）同樣會覆蓋每個 trial �
 | `score_agg` | `auto`（預設）/ `max` / `top1` | 影像異常分數怎麼從 patch 分數彙整：`max` 一個 patch 超標就算異常（PatchCore 原始做法）；`top1` 前 1% patch 的平均（抗單一雜訊 patch；AnomalyDINO 式）。`auto`：每張 ≤ 256 個 patch 用 max，更細的格用 top1 |
 | `coreset_ratio` | `auto`（預設）/ 0 … 1 | 記憶庫保留的 patch 比例（隨機抽樣）。`auto` 讓記憶庫不超過 10 萬個 patch；正常影像很少時就是 1.0 |
 | `bank_augment` | `auto`（預設）/ `on` / `off` | 正常影像翻轉 / 旋轉後也放進記憶庫（參考集增強）。`auto`：正常影像少於 20 張時開 |
-| `k`（PatchCore）| 1 … 9，預設 3 | 每個 patch 取記憶庫最近的 k 個平均距離 |
+| `k`（PatchCore；`vision.dino` 裡叫 `bank_k`，`k` 留給 knn）| 1 … 9，預設 3 | 每個 patch 取記憶庫最近的 k 個平均距離。目錄預設會整包併進任務參數（手動模式也是），所以 `k: auto` 這類字串值到了數值欄位一律當成「用預設」（`int_or`），不會再讓記憶庫或推論的 `k` 因 `auto` 出錯 |
 
 **自動建議的值都會印進任務 log 並寫到產物 metadata 的 `resolved`**（例如 `head=prototype (smallest class has 4 images (< 10) → prototypes)`、`coreset_ratio=0.21 (480,000 normal patches → keep 21% (bank ≤ 100,000))`），結果頁看得到。
 
